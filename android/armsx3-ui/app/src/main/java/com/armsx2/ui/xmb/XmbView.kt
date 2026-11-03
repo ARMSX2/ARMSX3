@@ -856,6 +856,12 @@ private fun OptionsPanel(o: XmbController.Options, m: Metrics, font: FontFamily)
 private fun PanelHost(controller: XmbController, panel: XmbNode.Panel, m: Metrics, font: FontFamily) {
     val appear = remember(panel) { Animatable(0f) }
     LaunchedEffect(panel) { appear.animateTo(1f, tween(200, easing = FastOutSlowInEasing)) }
+    if (panel.fullscreen) {
+        Box(Modifier.fillMaxSize().graphicsLayer { alpha = appear.value }.background(Color.Black)) {
+            panel.content { controller.back() }
+        }
+        return
+    }
     Box(
         Modifier
             .fillMaxSize()

@@ -36,12 +36,44 @@ object LibraryMusic {
     private const val CustomNameKey = "ui.libraryMusic.customName"
     private const val QueueKey = "ui.libraryMusic.queue"
     private const val QueueIndexKey = "ui.libraryMusic.queueIndex"
+    private const val RepeatKey = "ui.libraryMusic.repeat"
+    private const val ShuffleKey = "ui.libraryMusic.shuffle"
+    private const val PlayerVolumeKey = "ui.libraryMusic.playerVolume"
     private const val DefaultVolumePercent = 15
 
     val enabled = mutableStateOf(true)
 
     /** 0..100, backs the App-settings slider. Applied live to the running player. */
     val volumePercent = mutableStateOf(DefaultVolumePercent)
+
+    /**
+     * The XMB's music player (its Music column and Now Playing). [repeat] is how a playlist goes on
+     * at its last song: stops, goes round, or plays the one song again. [shuffle] plays the
+     * playlist in a random order, the song playing first.
+     */
+    enum class Repeat { Off, All, One }
+    val repeat = mutableStateOf(Repeat.All)
+    val shuffle = mutableStateOf(false)
+
+    /**
+     * Paused with the player's own Pause: the song keeps its place, and nothing that starts the
+     * library's music by itself (onResume, a game's music ending, the boot music's fade-in, focus
+     * coming back) plays it again. Only the player's Play does.
+     */
+    val userPaused = mutableStateOf(false)
+
+    /**
+     * True once a song was picked in the Music column this run: the user's music rather than the
+     * library's background. It plays at [playerVolumePercent], and a game's own music (SND0) leaves
+     * it alone. Not kept: next time the app opens, the playlist is background music again.
+     */
+    val chosen = mutableStateOf(false)
+
+    /** 0..100, the player's volume: the user's own songs, as against the background's [volumePercent]. */
+    val playerVolumePercent = mutableStateOf(100)
+
+    /** Goes up with each song that starts, for a screen following the song. */
+    val trackSerial = androidx.compose.runtime.mutableIntStateOf(0)
 
     /** How much of the set volume plays, 0..1. Below 1 while a screen with music of its own takes
      *  over (AvatarMusic); at 0 the track waits paused where it was, and nothing else starts it. */
@@ -50,7 +82,8 @@ object LibraryMusic {
     private fun gain(): Float = volume() * share
 
     /** The set volume, 0..1, without [share]: what a track taking over from this one plays at. */
-    fun volume(): Float = (volumePercent.value.coerceIn(0, 100)) / 100f
+    fun volume(): Float =
+        (if (chosen.value) playerVolumePercent.value else volumePercent.value).coerceIn(0, 100) / 100f
 
     /** Turn the track down to [value] of its set volume, for AvatarMusic's handover. */
     fun setShare(value: Float) {
@@ -60,7 +93,7 @@ object LibraryMusic {
             p.setVolume(gain(), gain())
             if (share <= 0f) {
                 if (p.isPlaying) p.pause()
-            } else if (foreground && !previewing && !p.isPlaying && !pausedForFocus && enabled.value &&
+            } else if (foreground && !previewing && !userPaused.value && !p.isPlaying && !pausedForFocus && enabled.value &&
                 MainActivityRuntime.eState.value == EmuState.STOPPED
             ) {
                 p.start()
@@ -129,6 +162,10 @@ object LibraryMusic {
             (0 until list.length()).map { File(list.getString(it)) }.filter { it.isFile }
         }.getOrDefault(emptyList())
         queueIndex.intValue = MainActivityRuntime.prefs.getInt(QueueIndexKey, 0).coerceIn(0, (queue.value.size - 1).coerceAtLeast(0))
+        repeat.value = Repeat.entries.getOrNull(MainActivityRuntime.prefs.getInt(RepeatKey, Repeat.All.ordinal)) ?: Repeat.All
+        shuffle.value = MainActivityRuntime.prefs.getBoolean(ShuffleKey, false)
+        playerVolumePercent.value = MainActivityRuntime.prefs.getInt(PlayerVolumeKey, 100).coerceIn(0, 100)
+        reorder()
     }
 
     /** Play [files] in order from [start], round again after the last: a playlist. */
@@ -137,29 +174,145 @@ object LibraryMusic {
         queue.value = files
         queueIndex.intValue = start.coerceIn(0, files.lastIndex)
         customName.value = files[queueIndex.intValue].name
+        chosen.value = true
+        userPaused.value = false
+        reorder()
         MainActivityRuntime.prefs.edit {
             putString(QueueKey, org.json.JSONArray(files.map { it.absolutePath }).toString())
             putInt(QueueIndexKey, queueIndex.intValue)
             putString(CustomNameKey, customName.value)
         }
+        trackSerial.intValue++
         if (enabled.value) restart(context) else set(context, true)
     }
 
-    /** The next song of the playlist, when one ends. */
-    private fun next(context: Context) {
+    // The order the playlist plays in, as queue indices: the queue's own, or shuffled with the song
+    // playing first, so turning Shuffle on never changes the song.
+    private var order: List<Int> = emptyList()
+
+    private fun reorder() {
+        val n = queue.value.size
+        val current = queueIndex.intValue.coerceIn(0, (n - 1).coerceAtLeast(0))
+        order = if (shuffle.value && n > 1) listOf(current) + (0 until n).filter { it != current }.shuffled() else (0 until n).toList()
+    }
+
+    /**
+     * Next ([step] 1) or Previous (-1) in the playing order. Previous more than three seconds into
+     * a song starts it again, as players do. False when there is no song that way: either end of
+     * the playlist with Repeat off.
+     */
+    fun skip(context: Context, step: Int): Boolean {
         val list = queue.value
-        if (list.isEmpty()) return
-        queueIndex.intValue = (queueIndex.intValue + 1) % list.size
+        if (list.isEmpty()) return false
+        if (step < 0 && positionMs() > 3_000) {
+            seekTo(0)
+            return true
+        }
+        if (order.size != list.size) reorder()
+        var at = order.indexOf(queueIndex.intValue).coerceAtLeast(0) + step
+        if (at !in order.indices) {
+            if (repeat.value == Repeat.Off) return false
+            // Round again; a shuffled playlist is shuffled afresh for its next time through.
+            if (shuffle.value && step > 0) order = (0 until list.size).shuffled()
+            at = (at + order.size) % order.size
+        }
+        go(context, order[at])
+        return true
+    }
+
+    /** A song ended: the next one, or at the end with Repeat off, back to the first and paused there. */
+    private fun ended(context: Context) {
+        if (skip(context, 1)) return
+        userPaused.value = true
+        go(context, order.firstOrNull() ?: 0)
+    }
+
+    private fun go(context: Context, index: Int) {
+        val list = queue.value
+        queueIndex.intValue = index.coerceIn(0, list.lastIndex)
         customName.value = list[queueIndex.intValue].name
         MainActivityRuntime.prefs.edit {
             putInt(QueueIndexKey, queueIndex.intValue)
             putString(CustomNameKey, customName.value)
         }
+        trackSerial.intValue++
         restart(context)
     }
 
+    /** The song playing from the playlist, or null for the bundled track or a single imported one. */
+    fun current(): File? = queue.value.getOrNull(queueIndex.intValue)
+
+    /** True while the user's own music plays (or is paused) in the player. */
+    fun listening(): Boolean = chosen.value && enabled.value && queue.value.isNotEmpty()
+
+    /** The player's Play and Pause: held where it is, then on from there. */
+    fun playPause(context: Context) {
+        if (!userPaused.value && isPlaying()) {
+            userPaused.value = true
+            pause()
+            return
+        }
+        userPaused.value = false
+        when {
+            !enabled.value -> set(context, true)
+            player == null -> start(context, force = true)
+            else -> resume()
+        }
+    }
+
+    /** The player's Stop: back to the start of the song, paused. */
+    fun stopSong() {
+        userPaused.value = true
+        pause()
+        seekTo(0)
+    }
+
+    fun setRepeat(value: Repeat) {
+        repeat.value = value
+        MainActivityRuntime.prefs.edit { putInt(RepeatKey, value.ordinal) }
+        // One song on a loop, or on to the next when it ends: set on the player that is going now.
+        runCatching { player?.let { applyLooping(it) } }
+    }
+
+    fun setShuffle(value: Boolean) {
+        shuffle.value = value
+        MainActivityRuntime.prefs.edit { putBoolean(ShuffleKey, value) }
+        reorder()
+    }
+
+    fun setPlayerVolume(percent: Int) {
+        val p = percent.coerceIn(0, 100)
+        playerVolumePercent.value = p
+        MainActivityRuntime.prefs.edit { putInt(PlayerVolumeKey, p) }
+        runCatching { player?.setVolume(gain(), gain()) }
+    }
+
+    /** Where the song is and how long it is, in ms; 0 with nothing loaded. */
+    fun positionMs(): Int = runCatching { player?.currentPosition ?: 0 }.getOrDefault(0).coerceAtLeast(0)
+
+    fun durationMs(): Int = runCatching { player?.duration ?: 0 }.getOrDefault(0).coerceAtLeast(0)
+
+    fun seekTo(ms: Int) {
+        runCatching { player?.seekTo(ms.coerceAtLeast(0)) }
+    }
+
+    // A playlist goes on to its next song (or stops at its end); the bundled or imported track, a
+    // one-song playlist on Repeat and Repeat One go round.
+    private fun applyLooping(p: MediaPlayer) {
+        val n = queue.value.size
+        val looping = n == 0 || repeat.value == Repeat.One || (n == 1 && repeat.value == Repeat.All)
+        p.isLooping = looping
+        p.setOnCompletionListener(if (looping) null else MediaPlayer.OnCompletionListener { app?.let { ended(it) } })
+    }
+
+    // The application context the player was last started with, for a song ending on its own.
+    private var app: Context? = null
+
     private fun clearQueue() {
         queue.value = emptyList()
+        chosen.value = false
+        userPaused.value = false
+        reorder()
         MainActivityRuntime.prefs.edit {
             remove(QueueKey)
             remove(QueueIndexKey)
@@ -219,6 +372,7 @@ object LibraryMusic {
     fun set(context: Context, value: Boolean) {
         enabled.value = value
         MainActivityRuntime.prefs.edit { putBoolean(EnabledKey, value) }
+        if (value) userPaused.value = false
         if (value) start(context) else stop(context)
     }
 
@@ -269,6 +423,7 @@ object LibraryMusic {
      * — the user can still toggle it on explicitly.
      */
     fun start(context: Context, force: Boolean = false) {
+        app = context.applicationContext
         if (!enabled.value) return
         if (!foreground) return
         if (MainActivityRuntime.eState.value != EmuState.STOPPED) return
@@ -307,13 +462,12 @@ object LibraryMusic {
                         android.net.Uri.parse("android.resource://${context.packageName}/${R.raw.library_music}"),
                     )
                 }
-                // A playlist goes on to its next song; a single track goes round.
-                isLooping = list.size <= 1
-                if (list.size > 1) setOnCompletionListener { next(context) }
+                applyLooping(this)
                 setVolume(gain(), gain())
                 prepare()
-                // Handed over to another screen's music: ready, but quiet until it hands back
-                if (share > 0f && !previewing) start()
+                // Handed over to another screen's music, or paused in the player: ready, but quiet
+                // until it is handed back or played
+                if (share > 0f && !previewing && !userPaused.value) start()
                 player = this
             }
         }.onFailure { Log.w(TAG, "start failed", it) }
@@ -339,7 +493,7 @@ object LibraryMusic {
         if (!enabled.value) return
         if (!foreground) return
         if (MainActivityRuntime.eState.value != EmuState.STOPPED) return
-        if (share <= 0f || previewing) return
+        if (share <= 0f || previewing || userPaused.value) return
         runCatching { player?.takeIf { !it.isPlaying }?.start() }
     }
 

@@ -1,0 +1,756 @@
+package com.armsx2.ui.xmb
+
+import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
+import android.media.MediaPlayer
+import android.net.Uri
+import android.os.storage.StorageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.edit
+import androidx.documentfile.provider.DocumentFile
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import com.armsx2.LibraryMusic
+import com.armsx2.i18n.str
+import com.armsx2.runtime.MainActivityRuntime
+import com.armsx2.ui.settings.SettingsControllerNav
+import com.armsx2.ui.settings.controllerFocusable
+import com.armsx3.core.ARMSX3
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+import java.security.MessageDigest
+
+/**
+ * What the XMB's players play: the files each one lists, by extension. These are what Android's own
+ * player plays (MediaPlayer and the device's decoders); a file the device still cannot decode (an
+ * unusual codec inside a familiar container) gets the console's own "The data type is not supported."
+ */
+object XmbMediaFormats {
+    val AUDIO = setOf(
+        "mp3", "m4a", "m4b", "aac", "3gp", "flac", "ogg", "oga", "opus", "wav", "amr", "awb",
+        "mka", "weba", "mid", "midi", "xmf", "mxmf", "rtttl", "rtx", "ota", "imy",
+    )
+    val VIDEO = setOf("mp4", "m4v", "mov", "mkv", "webm", "3gp", "3g2", "ts", "m2ts", "mts", "mpg", "mpeg")
+
+    fun isAudio(name: String) = name.substringAfterLast('.', "").lowercase() in AUDIO
+    fun isVideo(name: String) = name.substringAfterLast('.', "").lowercase() in VIDEO
+}
+
+/**
+ * The Video column's videos: where they are, their first frames, lengths, and where each was left.
+ *
+ * They come from ARMSX3's video folder (the data folder's video/, filled by Import Video), from each
+ * removable storage device that is in (a USB drive or an SD card, as the console lists a USB device),
+ * and from folders added with Add Folder (the phone's Movies or Downloads, say). A device is read
+ * directly where the app may (the GitHub build with all-files access); otherwise, and for an added
+ * folder, through the system's folder picker, whose grant is kept, so no permission is asked for.
+ */
+object XmbVideos {
+    private const val FoldersKey = "xmb.video.folders"
+    private const val ResumeKey = "xmb.video.resume"
+
+    /**
+     * A file or a folder: on disk ([file]), or in a granted folder ([tree] and its [docId]). [key]
+     * identifies it everywhere.
+     */
+    class Entry(val name: String, val uri: Uri, val file: File?, val tree: Uri?, val docId: String?, val dir: Boolean, val modified: Long) {
+        val key: String get() = uri.toString()
+        val title: String get() = if (dir) name else name.substringBeforeLast('.')
+    }
+
+    /** A removable device in now: read [directory] as files, or through a grant in [folders]. */
+    class Volume(val title: String, val usb: Boolean, val directory: File?, val readable: Boolean, val intent: Intent?)
+
+    /** A folder added with Add Folder, or a device granted through the picker. */
+    class Folder(val uri: Uri, val name: String)
+
+    class Meta(val durationMs: Long, val thumb: ImageBitmap?)
+
+    val folders = mutableStateOf<List<Folder>>(emptyList())
+    private val listings = mutableStateMapOf<String, List<Entry>>()
+    private val metas = mutableStateMapOf<String, Meta>()
+    private val loading = HashSet<String>()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    fun folder(): File = File(ARMSX3.rootDirectory, "video").apply { mkdirs() }
+
+    fun load() {
+        folders.value = runCatching {
+            val a = JSONArray(MainActivityRuntime.prefs.getString(FoldersKey, "[]"))
+            (0 until a.length()).map { a.getJSONObject(it).let { o -> Folder(Uri.parse(o.getString("uri")), o.optString("name")) } }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun saveFolders() {
+        MainActivityRuntime.prefs.edit {
+            putString(FoldersKey, JSONArray(folders.value.map { JSONObject().put("uri", it.uri.toString()).put("name", it.name) }).toString())
+        }
+    }
+
+    /** Keep the grant for a picked folder and list it. */
+    fun addFolder(context: Context, uri: Uri) {
+        runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        if (folders.value.any { it.uri == uri }) return
+        val name = DocumentFile.fromTreeUri(context, uri)?.name ?: uri.lastPathSegment.orEmpty()
+        folders.value = folders.value + Folder(uri, name)
+        saveFolders()
+    }
+
+    fun removeFolder(context: Context, uri: Uri) {
+        runCatching { context.contentResolver.releasePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        folders.value = folders.value.filter { it.uri != uri }
+        saveFolders()
+        listings.remove("tree:$uri")
+    }
+
+    /** The removable devices in now, USB drives and SD cards. */
+    fun volumes(context: Context): List<Volume> {
+        val sm = context.getSystemService(StorageManager::class.java) ?: return emptyList()
+        return sm.storageVolumes.filter { it.isRemovable && it.state == android.os.Environment.MEDIA_MOUNTED }.map { v ->
+            val dir = v.directory
+            val description = v.getDescription(context)
+            Volume(
+                title = description,
+                usb = description.contains("USB", ignoreCase = true),
+                directory = dir,
+                readable = dir?.let { runCatching { it.canRead() && it.list() != null }.getOrDefault(false) } == true,
+                intent = runCatching { v.createOpenDocumentTreeIntent() }.getOrNull(),
+            )
+        }
+    }
+
+    // Folders read before the column was last shown: read again the next time they are, the old
+    // list standing until the new one is in, so nothing blinks out.
+    private val stale = HashSet<String>()
+
+    /** A folder's videos and the folders in it, when read; null until then (reading starts here). */
+    fun listing(context: Context, key: String, read: () -> List<Entry>): List<Entry>? {
+        val known = listings[key]
+        val again = known != null && synchronized(loading) { stale.remove(key) }
+        if (known != null && !again) return known
+        synchronized(loading) { if (!loading.add(key)) return known }
+        scope.launch {
+            val entries = runCatching(read).getOrDefault(emptyList())
+            listings[key] = entries
+            synchronized(loading) { loading.remove(key) }
+            // Each video's first frame and length, one at a time, as the console fills its icons in.
+            entries.filter { !it.dir && metas[it.key] == null }.forEach { e -> metas[e.key] = readMeta(context, e) }
+        }
+        return known
+    }
+
+    /** Read a folder again, next time it is shown. */
+    fun forget(key: String) {
+        listings.remove(key)
+    }
+
+    /** Every folder read so far is read again as it is next shown: the column has come into view. */
+    fun refreshAll() {
+        synchronized(loading) { stale.addAll(listings.keys) }
+    }
+
+    fun meta(entry: Entry): Meta? = metas[entry.key]
+
+    fun localEntries(dir: File): List<Entry> =
+        (dir.listFiles() ?: emptyArray())
+            .filter { !it.name.startsWith(".") && (it.isDirectory || XmbMediaFormats.isVideo(it.name)) }
+            .map { Entry(it.name, Uri.fromFile(it), it, null, null, it.isDirectory, it.lastModified()) }
+            .sortedWith(compareBy<Entry>({ !it.dir }, { it.name.lowercase() }))
+
+    /**
+     * A granted folder's contents, [docId] in [tree] (its top when null), in one query: DocumentFile
+     * asks the provider again for each name, type and date, which takes seconds over a big folder.
+     */
+    fun treeEntries(context: Context, tree: Uri, docId: String? = null): List<Entry> {
+        val parent = docId ?: runCatching { android.provider.DocumentsContract.getTreeDocumentId(tree) }.getOrNull() ?: return emptyList()
+        val children = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(tree, parent)
+        val columns = arrayOf(
+            android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE,
+            android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+        )
+        val out = ArrayList<Entry>()
+        runCatching {
+            context.contentResolver.query(children, columns, null, null, null)?.use { c ->
+                while (c.moveToNext()) {
+                    val id = c.getString(0) ?: continue
+                    val name = c.getString(1) ?: continue
+                    val dir = c.getString(2) == android.provider.DocumentsContract.Document.MIME_TYPE_DIR
+                    if (name.startsWith(".") || !(dir || XmbMediaFormats.isVideo(name))) continue
+                    val uri = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, id)
+                    out += Entry(name, uri, null, tree, id, dir, c.getLong(3))
+                }
+            }
+        }
+        return out.sortedWith(compareBy<Entry>({ !it.dir }, { it.name.lowercase() }))
+    }
+
+    private fun readMeta(context: Context, entry: Entry): Meta {
+        val cache = File(File(context.cacheDir, "xmb-video").apply { mkdirs() }, sha1("${entry.key}|${entry.modified}") + ".jpg")
+        val r = MediaMetadataRetriever()
+        return try {
+            r.setDataSource(context, entry.uri)
+            val duration = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            val thumb = if (cache.length() > 0) {
+                android.graphics.BitmapFactory.decodeFile(cache.path)
+            } else {
+                // A frame a tenth of the way in, past a black opening, at the size of an icon.
+                val at = (duration * 100L).coerceIn(0L, 30_000_000L)
+                r.getScaledFrameAtTime(at, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 320, 180)?.also { b ->
+                    runCatching { cache.outputStream().use { b.compress(Bitmap.CompressFormat.JPEG, 85, it) } }
+                }
+            }
+            Meta(duration, thumb?.asImageBitmap())
+        } catch (_: Exception) {
+            Meta(0L, null)
+        } finally {
+            runCatching { r.release() }
+        }
+    }
+
+    /** Where [entry] was left, in ms; 0 for the start. */
+    fun resumeAt(entry: Entry): Long =
+        runCatching { JSONObject(MainActivityRuntime.prefs.getString(ResumeKey, "{}")).optLong(entry.key) }.getOrDefault(0L)
+
+    /** Remember where [key] was left; near either end it starts from the beginning next time. */
+    fun saveResume(key: String, positionMs: Long, durationMs: Long) {
+        val o = runCatching { JSONObject(MainActivityRuntime.prefs.getString(ResumeKey, "{}")) }.getOrDefault(JSONObject())
+        if (positionMs < 10_000 || (durationMs > 0 && positionMs > durationMs - 15_000)) o.remove(key) else o.put(key, positionMs)
+        // The last 200 only, as the console keeps a few.
+        val keys = o.keys().asSequence().toList()
+        if (keys.size > 200) keys.take(keys.size - 200).forEach { o.remove(it) }
+        MainActivityRuntime.prefs.edit { putString(ResumeKey, o.toString()) }
+    }
+
+    /** Copy picked videos into the video folder; how many came in. IO thread. */
+    fun import(context: Context, uris: List<Uri>): Int = uris.count { uri ->
+        runCatching {
+            val name = DocumentFile.fromSingleUri(context, uri)?.name?.replace('/', '_')?.takeIf { it.isNotBlank() }
+                ?: "video-${System.currentTimeMillis()}.mp4"
+            var target = File(folder(), name)
+            var n = 1
+            while (target.exists()) target = File(folder(), "${name.substringBeforeLast('.')} (${n++}).${name.substringAfterLast('.', "mp4")}")
+            context.contentResolver.openInputStream(uri)?.use { ins -> target.outputStream().use { ins.copyTo(it) } } != null &&
+                target.length() > 0
+        }.getOrDefault(false)
+    }
+
+    private fun sha1(s: String): String =
+        MessageDigest.getInstance("SHA-1").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }.take(24)
+}
+
+/**
+ * The Video column, where the console had it, after Music: Import Video and Add Folder, then the
+ * videos in ARMSX3's video folder, each device that is in, and each added folder, as folders to
+ * open. A video shows its first frame and its length (and where it was left); Cross plays it full
+ * screen from there, and Triangle has Play from Beginning, and Delete for one in ARMSX3's folder.
+ */
+@Composable
+fun xmbVideoColumn(controller: XmbController, shown: Boolean = false): XmbColumn {
+    val context = LocalContext.current.applicationContext
+    val scope = rememberCoroutineScope()
+    val full = "explore_plugin_full"
+    val video = "explore_category_video"
+    val ok = fw(full, "msg_ok", "xmb.ok")
+    val yes = fw(full, "msg_yes", "xmb.yes")
+    val no = fw(full, "msg_no", "xmb.no")
+    var refresh by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) { withContext(Dispatchers.IO) { XmbVideos.load() } }
+    // Coming into view, the column reads its folders again: videos copied in from elsewhere show.
+    LaunchedEffect(shown) {
+        if (shown) {
+            XmbVideos.refreshAll()
+            refresh++
+        }
+    }
+    // A USB drive or a card going in or out shows at once, as the console's USB device does.
+    DisposableEffect(Unit) {
+        val sm = context.getSystemService(StorageManager::class.java)
+        val callback = object : StorageManager.StorageVolumeCallback() {
+            override fun onStateChanged(volume: android.os.storage.StorageVolume) {
+                refresh++
+            }
+        }
+        runCatching { sm?.registerStorageVolumeCallback(context.mainExecutor, callback) }
+        onDispose { runCatching { sm?.unregisterStorageVolumeCallback(callback) } }
+    }
+    val volumes by produceState(emptyList<XmbVideos.Volume>(), refresh) { value = withContext(Dispatchers.IO) { XmbVideos.volumes(context) } }
+    val importTitle = str("xmb.video.import")
+    val importDesc = str("xmb.video.import.desc")
+    val imported = str("xmb.video.imported")
+    val addTitle = str("xmb.video.addFolder")
+    val addDesc = str("xmb.video.addFolder.desc")
+    val removeTitle = str("xmb.video.removeFolder")
+    val grantDesc = str("xmb.video.grant.desc")
+    val usbWord = fw(full, "msg_usb", "xmb.video.usb")
+    val none = fw(full, "msg_error_no_title", "xmb.video.none")
+    val loadingWord = str("xmb.video.loading")
+    val resumeWord = fw(full, "msg_resume", "xmb.video.resume")
+    val beginWord = fw(full, "msg_play_begin", "xmb.video.playBegin")
+    val deleteTitle = str("action.delete")
+    val deleteAsk = str("xmb.music.delete.ask")
+    val videoIcon = XmbIcon(video, "video_tex_default", "🎞")
+    val folderIcon = XmbIcon(video, "item_tex_plain_folder", "📁")
+    val albumIcon = XmbIcon(video, "video_tex_album_default", "📁")
+    val loadIcon = XmbIcon(video, "tex_loading_icon", "…")
+    val usbIcon = XmbIcon(video, "item_tex_usb_connection", "🔌")
+    val sdIcon = XmbIcon(video, "item_tex_sd_icon", "💾")
+
+    fun play(list: List<XmbVideos.Entry>, i: Int, fromBeginning: Boolean) {
+        val e = list[i]
+        controller.panel = XmbNode.Panel("video.play.${e.key}", e.title, videoIcon, fullscreen = true) { close ->
+            XmbVideoPlayer(list, i, fromBeginning, close)
+        }
+    }
+
+    // One video: its first frame for an icon once read, its length, and where it was left.
+    fun videoNode(list: List<XmbVideos.Entry>, i: Int, deletable: Boolean): XmbNode.Action {
+        val e = list[i]
+        val meta = XmbVideos.meta(e)
+        val left = XmbVideos.resumeAt(e)
+        val sub = listOfNotNull(
+            meta?.durationMs?.let { xmbLength(it) }?.ifEmpty { null },
+            if (left > 0) "$resumeWord ${xmbClockTime(left)}" else null,
+        ).joinToString("   ")
+        val options = buildList {
+            if (left > 0) add(XmbOption(beginWord) { play(list, i, fromBeginning = true) })
+            if (deletable && e.file != null) {
+                add(XmbOption(deleteTitle) {
+                    controller.ask(deleteAsk.format(e.title), yes, no, focusNo = true) {
+                        e.file.delete()
+                        e.file.parentFile?.let { XmbVideos.forget("file:" + it.absolutePath) }
+                        refresh++
+                    }
+                })
+            }
+        }
+        val icon = meta?.thumb?.let { XmbIcon(bitmap = it, glyph = "🎞") } ?: videoIcon
+        return XmbNode.Action("video.${e.key}", e.title, icon, sub.ifEmpty { null }, options) { play(list, i, fromBeginning = false) }
+    }
+
+    // A folder, read when it is opened: its folders, then its videos.
+    fun folderNode(key: String, title: String, icon: XmbIcon, sub: String?, deletable: Boolean, extra: List<XmbNode> = emptyList(), read: () -> List<XmbVideos.Entry>): XmbNode.Folder =
+        XmbNode.Folder("video.dir.$key", title, icon, sub, live = true) {
+            val entries = XmbVideos.listing(context, key, read)
+            val videos = entries.orEmpty().filter { !it.dir }
+            val nodes: List<XmbNode> = when {
+                entries == null -> listOf(XmbNode.Action("video.dir.$key.loading", loadingWord, loadIcon) {})
+                entries.isEmpty() -> listOf(XmbNode.Action("video.dir.$key.none", none, videoIcon) {})
+                else -> entries.map { e ->
+                    if (e.dir) {
+                        val f = e.file
+                        val tree = e.tree
+                        if (f != null) folderNode("file:" + f.absolutePath, e.name, folderIcon, null, deletable) { XmbVideos.localEntries(f) }
+                        else folderNode("tree:" + e.uri, e.name, folderIcon, null, deletable) { tree?.let { XmbVideos.treeEntries(context, it, e.docId) }.orEmpty() }
+                    } else {
+                        videoNode(videos, videos.indexOf(e), deletable)
+                    }
+                }
+            }
+            nodes + extra
+        }
+
+    val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        scope.launch {
+            val n = withContext(Dispatchers.IO) { XmbVideos.import(context, uris) }
+            XmbVideos.forget("file:" + XmbVideos.folder().absolutePath)
+            refresh++
+            controller.tell(imported.format(n), ok, error = n == 0)
+        }
+    }
+    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            XmbVideos.addFolder(context, uri)
+            refresh++
+        }
+    }
+    val volumeGrant = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        result.data?.data?.let { uri ->
+            XmbVideos.addFolder(context, uri)
+            refresh++
+        }
+    }
+
+    val own = XmbVideos.folder()
+    val ownEntries = XmbVideos.listing(context, "file:" + own.absolutePath) { XmbVideos.localEntries(own) }
+    val ownVideos = ownEntries.orEmpty().filter { !it.dir }
+    val items = buildList {
+        add(XmbNode.Action("video.import", importTitle, videoIcon, importDesc) { importer.launch(arrayOf("video/*")) })
+        add(XmbNode.Action("video.addFolder", addTitle, folderIcon, addDesc) { folderPicker.launch(null) })
+        // The devices that are in, as the console lists a USB device.
+        volumes.forEach { v ->
+            val icon = if (v.usb) usbIcon else sdIcon
+            val dir = v.directory
+            if (v.readable && dir != null) {
+                add(folderNode("file:" + dir.absolutePath, v.title, icon, if (v.usb) usbWord else null, deletable = false) { XmbVideos.localEntries(dir) })
+            } else if (v.intent != null && XmbVideos.folders.value.none { it.name == v.title }) {
+                add(XmbNode.Action("video.grant.${v.title}", v.title, icon, grantDesc) { volumeGrant.launch(v.intent) })
+            }
+        }
+        // Added folders, each ending in Remove from Video.
+        XmbVideos.folders.value.forEach { f ->
+            val remove = XmbNode.Action("video.remove.${f.uri}", removeTitle, folderIcon) {
+                XmbVideos.removeFolder(context, f.uri)
+                controller.back()
+                refresh++
+            }
+            add(folderNode("tree:" + f.uri, f.name, albumIcon, null, deletable = false, extra = listOf(remove)) { XmbVideos.treeEntries(context, f.uri) })
+        }
+        // ARMSX3's own folder: its folders, then its videos, straight in the column.
+        ownEntries.orEmpty().forEach { e ->
+            val f = e.file ?: return@forEach
+            if (e.dir) {
+                add(folderNode("file:" + f.absolutePath, e.name, folderIcon, null, deletable = true) { XmbVideos.localEntries(f) })
+            } else {
+                add(videoNode(ownVideos, ownVideos.indexOf(e), deletable = true))
+            }
+        }
+        if (ownEntries != null && ownEntries.isEmpty() && volumes.isEmpty() && XmbVideos.folders.value.isEmpty()) {
+            add(XmbNode.Action("video.none", none, videoIcon) {})
+        }
+    }
+    return XmbColumn(
+        key = "video",
+        title = fw("xmb_ingame", "msg_video", "xmb.cat.video"),
+        icon = XmbIcon("xmb_ingame", "tex_video", "🎞"),
+        items = items,
+        defaultFocus = if (ownVideos.isNotEmpty()) 2 + volumes.size + XmbVideos.folders.value.size else 0,
+    )
+}
+
+/**
+ * A video full screen. Cross plays and pauses; Left and Right go back and on ten seconds; L1 and R1
+ * the previous and next video in its folder; Square fits the picture to the screen or fills it;
+ * Circle stops, and the video starts where it was left next time. The title and the time bar show
+ * on any press and go after three seconds of playing. The music behind the XMB waits meanwhile.
+ */
+@Composable
+internal fun XmbVideoPlayer(list: List<XmbVideos.Entry>, start: Int, fromBeginning: Boolean, @Suppress("UNUSED_PARAMETER") close: () -> Unit) {
+    val context = LocalContext.current
+    val font = rememberXmbFont()
+    val full = "explore_plugin_full"
+    val unsupported = fw(full, "msg_error_unsupported_data", "xmb.media.unsupported")
+    val noTitle = fw(full, "msg_error_no_title", "xmb.video.none")
+    val zoomWord = str("xmb.video.zoom")
+    var index by remember { mutableIntStateOf(start) }
+    var first by remember { mutableStateOf(fromBeginning) }
+    val entry = list[index]
+    var videoW by remember { mutableIntStateOf(16) }
+    var videoH by remember { mutableIntStateOf(9) }
+    var playing by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var zoom by remember { mutableStateOf(false) }
+    var position by remember { mutableLongStateOf(0L) }
+    var duration by remember { mutableLongStateOf(0L) }
+    var shown by remember { mutableLongStateOf(android.os.SystemClock.uptimeMillis()) }
+    var message by remember { mutableStateOf<String?>(null) }
+    fun poke() {
+        shown = android.os.SystemClock.uptimeMillis()
+    }
+
+    val player = remember(entry.key) { MediaPlayer() }
+    val holder = remember { mutableStateOf<android.view.Surface?>(null) }
+    // The player of the video on now, for the surface's callbacks, made once for the first video.
+    val active = remember { arrayOfNulls<MediaPlayer>(1) }
+    active[0] = player
+    // The music behind the XMB waits while a video plays, as a game's music does.
+    DisposableEffect(Unit) {
+        LibraryMusic.startPreview()
+        onDispose { LibraryMusic.endPreview() }
+    }
+    DisposableEffect(entry.key) {
+        error = null
+        position = 0L
+        duration = 0L
+        runCatching {
+            player.setAudioAttributes(
+                android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MOVIE)
+                    .build(),
+            )
+            player.setDataSource(context, entry.uri)
+            player.setOnVideoSizeChangedListener { _, w, h -> if (w > 0 && h > 0) { videoW = w; videoH = h } }
+            player.setOnErrorListener { _, _, _ ->
+                error = unsupported
+                playing = false
+                true
+            }
+            player.setOnCompletionListener {
+                playing = false
+                XmbVideos.saveResume(entry.key, 0, 0)
+                poke()
+            }
+            player.setOnPreparedListener { p ->
+                duration = p.duration.toLong().coerceAtLeast(0)
+                val at = if (first) 0L else XmbVideos.resumeAt(entry)
+                first = false
+                if (at > 0) p.seekTo(at, MediaPlayer.SEEK_CLOSEST_SYNC)
+                holder.value?.let { runCatching { p.setSurface(it) } }
+                p.start()
+                playing = true
+                poke()
+            }
+            player.prepareAsync()
+        }.onFailure { error = unsupported }
+        onDispose {
+            runCatching { if (duration > 0) XmbVideos.saveResume(entry.key, player.currentPosition.toLong(), duration) }
+            runCatching { player.stop() }
+            player.release()
+        }
+    }
+    // The position for the time bar, and, while it plays, no screensaver over the film.
+    LaunchedEffect(entry.key) {
+        var n = 0
+        while (true) {
+            runCatching { if (playing) position = player.currentPosition.toLong() }
+            if (playing && ++n % 4 == 0) com.armsx2.ui.home.LibraryScreensaver.reset()
+            delay(250)
+        }
+    }
+    // Leaving the app pauses it; coming back, it stays paused until Cross.
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle, entry.key) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE && playing) {
+                runCatching { player.pause() }
+                playing = false
+            }
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
+    LaunchedEffect(message) {
+        if (message != null) {
+            delay(2_500)
+            message = null
+        }
+    }
+
+    fun toggle() {
+        poke()
+        if (error != null || duration <= 0) return
+        runCatching {
+            if (player.isPlaying) {
+                player.pause()
+                playing = false
+            } else {
+                player.start()
+                playing = true
+            }
+        }
+    }
+    fun seekBy(ms: Long) {
+        poke()
+        if (duration <= 0) return
+        val to = (runCatching { player.currentPosition.toLong() }.getOrDefault(position) + ms).coerceIn(0, duration - 500)
+        runCatching { player.seekTo(to, MediaPlayer.SEEK_CLOSEST_SYNC) }
+        position = to
+    }
+    fun seekTo(fraction: Float) {
+        poke()
+        if (duration <= 0) return
+        val to = (duration * fraction.coerceIn(0f, 1f)).toLong().coerceAtMost(duration - 500)
+        runCatching { player.seekTo(to, MediaPlayer.SEEK_CLOSEST_SYNC) }
+        position = to
+    }
+    fun go(step: Int) {
+        val next = index + step
+        if (next !in list.indices) {
+            XmbSounds.play(XmbSounds.Sfx.ERROR)
+            message = noTitle
+            return
+        }
+        XmbSounds.play(XmbSounds.Sfx.CURSOR)
+        index = next
+        playing = false
+    }
+
+    XmbPanelKeysEffect { key ->
+        when (key) {
+            XmbPanelKeys.Key.L1 -> go(-1)
+            XmbPanelKeys.Key.R1 -> go(1)
+            XmbPanelKeys.Key.Square -> {
+                zoom = !zoom
+                poke()
+            }
+        }
+        true
+    }
+    LaunchedEffect(Unit) {
+        var tries = 0
+        while (!SettingsControllerNav.selectById("xmb.video.player") && tries++ < 10) withFrameNanos {}
+    }
+    // The bar hides three seconds into playing without a press; paused, it stays.
+    val now by produceState(0L) { while (true) { value = android.os.SystemClock.uptimeMillis(); delay(250) } }
+    val barShown = !playing || error != null || now - shown < 3_000
+
+    BoxWithConstraints(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .controllerFocusable(
+                "xmb.video.player",
+                ring = false,
+                onConfirm = ::toggle,
+                onLeft = { seekBy(-10_000) },
+                onRight = { seekBy(10_000) },
+                onSecondary = { poke() },
+            )
+            .pointerInput(entry.key) {
+                detectTapGestures(onTap = { if (barShown) toggle() else poke() })
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        val u = minOf(maxWidth.value / 1280f, maxHeight.value / 720f)
+        val aspect = videoW.toFloat() / videoH
+        val screen = maxWidth.value / maxHeight.value
+        // Fit: the whole picture, bars where it is narrower or wider. Zoom: the screen filled.
+        val fitByWidth = (aspect >= screen) != zoom
+        // A TextureView rather than a SurfaceView: a SurfaceView's picture is a window of its own,
+        // placed apart from Compose's layout, and inside the panel's fade it sat at the screen's left
+        // edge. The decoding is the device's hardware either way, 4K included.
+        AndroidView(
+            factory = { ctx ->
+                android.view.TextureView(ctx).apply {
+                    keepScreenOn = true
+                    surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
+                        override fun onSurfaceTextureAvailable(texture: android.graphics.SurfaceTexture, width: Int, height: Int) {
+                            val s = android.view.Surface(texture)
+                            holder.value = s
+                            runCatching { active[0]?.setSurface(s) }
+                        }
+                        override fun onSurfaceTextureSizeChanged(texture: android.graphics.SurfaceTexture, width: Int, height: Int) {}
+                        override fun onSurfaceTextureDestroyed(texture: android.graphics.SurfaceTexture): Boolean {
+                            runCatching { active[0]?.setSurface(null) }
+                            holder.value?.release()
+                            holder.value = null
+                            return true
+                        }
+                        override fun onSurfaceTextureUpdated(texture: android.graphics.SurfaceTexture) {}
+                    }
+                }
+            },
+            modifier = if (fitByWidth) Modifier.fillMaxWidth().aspectRatio(aspect) else Modifier.fillMaxHeight().aspectRatio(aspect),
+        )
+
+        error?.let {
+            Text(it, style = xmbText(font, 22f * u), modifier = Modifier.align(Alignment.Center).padding((24f * u).dp))
+        }
+        message?.let {
+            Text(it, style = xmbText(font, 20f * u), modifier = Modifier.align(Alignment.Center).padding((24f * u).dp))
+        }
+        AnimatedVisibility(barShown, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxSize()) {
+                // The title over a shade at the top, the time bar over one at the bottom.
+                Box(
+                    Modifier.fillMaxWidth().height((110f * u).dp).align(Alignment.TopCenter)
+                        .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.65f), Color.Transparent))),
+                ) {
+                    Text(
+                        entry.title,
+                        style = xmbText(font, 24f * u),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = (40f * u).dp, top = (22f * u).dp, end = (40f * u).dp),
+                    )
+                }
+                Column(
+                    Modifier.fillMaxWidth().align(Alignment.BottomCenter)
+                        .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.7f))))
+                        .padding(horizontal = (40f * u).dp, vertical = (22f * u).dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy((14f * u).dp)) {
+                        XmbIconView(
+                            XmbIcon("explore_category_music", if (playing) "tex_play_status" else "tex_pause_status", if (playing) "▶" else "⏸", shadow = false),
+                            (28f * u).dp,
+                        )
+                        Text(xmbClockTime(position), style = xmbText(font, 17f * u, 0.95f))
+                        Box(
+                            Modifier.weight(1f).height((26f * u).dp)
+                                .pointerInput(entry.key) { detectTapGestures { seekTo(it.x / size.width) } }
+                                .pointerInput(entry.key) { detectHorizontalDragGestures { change, _ -> seekTo(change.position.x / size.width) } },
+                        ) {
+                            val fraction = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
+                            Canvas(Modifier.fillMaxSize()) {
+                                val h = 4f * u * density
+                                val y = size.height / 2f - h / 2f
+                                drawRoundRect(Color.White.copy(alpha = 0.25f), Offset(0f, y), Size(size.width, h), CornerRadius(h / 2))
+                                drawRoundRect(Color.White, Offset(0f, y), Size(size.width * fraction, h), CornerRadius(h / 2))
+                            }
+                            Box(Modifier.fillMaxWidth(fraction.coerceAtLeast(0.001f)).fillMaxHeight(), contentAlignment = Alignment.CenterEnd) {
+                                XmbIconView(XmbIcon("explore_category_video", "tex_sb_slider", "", shadow = false), (12f * u).dp, width = (34f * u).dp)
+                            }
+                        }
+                        Text(xmbClockTime(duration), style = xmbText(font, 17f * u, 0.95f))
+                    }
+                    Row(Modifier.padding(top = (10f * u).dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (list.size > 1) Text("${index + 1} / ${list.size}", style = xmbText(font, 15f * u, 0.7f), modifier = Modifier.weight(1f))
+                        else Box(Modifier.weight(1f))
+                        Text("□", style = xmbText(font, 15f * u).copy(color = Color(0xFFE48BD6)))
+                        Text(" $zoomWord", style = xmbText(font, 15f * u, 0.9f))
+                    }
+                }
+            }
+        }
+    }
+}

@@ -97,12 +97,16 @@ sealed class XmbNode(val key: String, val title: String, val icon: XmbIcon) {
         override val subtitle: String? get() = sub
     }
 
-    /** Opens a full panel over the XMB, for a screen with more to it than a list. */
+    /**
+     * Opens a full panel over the XMB, for a screen with more to it than a list. A [fullscreen]
+     * one (the video player) has the whole screen, black, with no title row.
+     */
     class Panel(
         key: String,
         title: String,
         icon: XmbIcon,
         private val sub: String? = null,
+        val fullscreen: Boolean = false,
         val content: @Composable (close: () -> Unit) -> Unit,
     ) : XmbNode(key, title, icon) {
         override val subtitle: String? get() = sub
@@ -141,7 +145,7 @@ sealed class XmbNode(val key: String, val title: String, val icon: XmbIcon) {
 internal fun XmbNode.withIcon(icon: XmbIcon): XmbNode = when (this) {
     is XmbNode.Action -> XmbNode.Action(key, title, icon, subtitle, options, meter, onConfirm)
     is XmbNode.Folder -> XmbNode.Folder(key, title, icon, subtitle, live, host, aside, children)
-    is XmbNode.Panel -> XmbNode.Panel(key, title, icon, subtitle, content)
+    is XmbNode.Panel -> XmbNode.Panel(key, title, icon, subtitle, fullscreen, content)
     is XmbNode.Setting -> XmbNode.Setting(key, title, icon, editor, value, description, changed, options)
     is XmbNode.Game -> this
 }
@@ -238,6 +242,13 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
     /** Circle with nothing open: the library ignores it, the in-game menu closes. */
     var onBackAtRoot: () -> Unit = {}
 
+    // The item the cursor is on in each column, by key, and the column's items as they were: when
+    // an item appears or goes above it (Now Playing heading the Music column, a friend coming
+    // online), the cursor stays on that item rather than on the place it was. Only a change in
+    // the items moves it; the cursor moving is the user's.
+    private val focusedKeys = HashMap<String, String>()
+    private val shownItems = HashMap<String, List<XmbNode>>()
+
     internal fun attach(columns: List<XmbColumn>) {
         this.columns = columns
         wantedColumn?.let { key ->
@@ -245,6 +256,18 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
             wantedColumn = null
         }
         if (columns.isNotEmpty() && column > columns.lastIndex) column = columns.lastIndex
+        for (c in columns) {
+            val before = shownItems.put(c.key, c.items)
+            val at = focus[c.key] ?: continue
+            val was = focusedKeys[c.key]
+            if (before != null && before !== c.items && was != null && c.items.getOrNull(at)?.key != was &&
+                before.map { it.key } != c.items.map { it.key }
+            ) {
+                val moved = c.items.indexOfFirst { it.key == was }
+                if (moved >= 0) focus[c.key] = moved
+            }
+            c.items.getOrNull(focus[c.key] ?: at)?.let { focusedKeys[c.key] = it.key }
+        }
     }
 
     fun currentColumn(): XmbColumn? = columns.getOrNull(column)
@@ -550,6 +573,42 @@ object XmbInput {
         val c = controller ?: return false
         if (!blocked && !c.busy) repeat(5) { c.move(0, dir) }
         return true
+    }
+}
+
+/**
+ * L1, R1 and Square for a panel that has a use for them: the music player's previous and next song
+ * and its visualizer, the video player's previous and next video. A panel takes the pad through the
+ * settings registry (as every app screen in a panel does), which has no use for those buttons.
+ * MainActivityRuntime hands them here while a panel is open; [handler] is set by the panel while it
+ * shows and says whether it used the press.
+ */
+object XmbPanelKeys {
+    enum class Key { L1, R1, Square }
+
+    @Volatile var handler: ((Key) -> Boolean)? = null
+
+    /** An Android key code; true when the panel used it. */
+    fun press(keyCode: Int): Boolean {
+        val key = when (keyCode) {
+            android.view.KeyEvent.KEYCODE_BUTTON_L1 -> Key.L1
+            android.view.KeyEvent.KEYCODE_BUTTON_R1 -> Key.R1
+            android.view.KeyEvent.KEYCODE_BUTTON_X -> Key.Square
+            else -> return false
+        }
+        if (XmbInput.controller?.panel == null) return false
+        return handler?.invoke(key) ?: false
+    }
+}
+
+/** While shown, the panel's own use for L1, R1 and Square ([XmbPanelKeys]). */
+@Composable
+internal fun XmbPanelKeysEffect(handler: (XmbPanelKeys.Key) -> Boolean) {
+    val current = androidx.compose.runtime.rememberUpdatedState(handler)
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        val h: (XmbPanelKeys.Key) -> Boolean = { current.value(it) }
+        XmbPanelKeys.handler = h
+        onDispose { if (XmbPanelKeys.handler === h) XmbPanelKeys.handler = null }
     }
 }
 

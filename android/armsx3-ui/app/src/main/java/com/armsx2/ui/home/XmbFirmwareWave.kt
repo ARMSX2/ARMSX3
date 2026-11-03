@@ -33,6 +33,11 @@ internal class XmbFirmwareWave(context: Context) {
     private var floatTarget = false
     private var lastSec = -1f
 
+    /** How hard the music pushes the wave (the Waves visualizer); 0 for the XMB's own. */
+    var drive: Float
+        get() = model.drive
+        set(value) { model.drive = value }
+
     fun init() {
         lineProg = link(LINE_VS, LINE_FS)
         compProg = link(COMP_VS, COMP_FS)

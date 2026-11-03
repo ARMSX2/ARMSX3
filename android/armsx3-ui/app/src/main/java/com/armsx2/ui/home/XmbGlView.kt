@@ -44,6 +44,12 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
      *  Always delivered on the main thread. */
     var onGlStatus: ((Boolean) -> Unit)? = null
 
+    /**
+     * The music player's Waves visualizer: how hard the song pushes XMB mode's wave now (0 at rest),
+     * read on the render thread every frame. Unset for the XMB's own background.
+     */
+    @Volatile var drive: (() -> Float)? = null
+
     init {
         surfaceTextureListener = this
         // Non-opaque so that if EGL/GLES3 init ever fails and nothing renders, the layer behind
@@ -53,7 +59,7 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
     }
 
     override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
-        thread = RenderThread(st, w, h, context.applicationContext) { ok -> post { onGlStatus?.invoke(ok) } }.also {
+        thread = RenderThread(st, w, h, context.applicationContext, drive = { drive?.invoke() ?: 0f }) { ok -> post { onGlStatus?.invoke(ok) } }.also {
             it.paused = windowVisibility != VISIBLE
             it.start()
         }
@@ -86,6 +92,7 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
         private var width: Int,
         private var height: Int,
         private val appContext: Context,
+        private val drive: () -> Float,
         private val onStatus: (Boolean) -> Unit,
     ) : Thread("xmb-gl") {
         @Volatile private var running = true
@@ -215,7 +222,10 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
                     .onFailure { Log.w(TAG, "XMB wave init failed", it); firmwareWaveFailed = true }
                     .getOrNull()?.also { firmwareWave = it }
                 if (wave != null) {
-                    wave.draw(timeSec, width, height, com.armsx2.ui.xmb.XmbOriginalColors.bootWave)
+                    // A song pushing it (the Waves visualizer) also brightens it a little on the beat.
+                    val push = drive()
+                    wave.drive = push
+                    wave.draw(timeSec, width, height, com.armsx2.ui.xmb.XmbOriginalColors.bootWave * (1f + push * 0.35f))
                     drawSparks(timeSec)
                     return
                 }

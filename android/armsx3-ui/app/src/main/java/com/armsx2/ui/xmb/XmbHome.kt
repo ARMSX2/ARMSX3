@@ -49,9 +49,9 @@ import java.io.File
  * XMB mode's home: the app laid out as the console's XMB, with the boot animation when it comes up.
  *
  * The columns are the console's, left to right, with its words and icons from the firmware: Users,
- * Settings, Photo, Music, Game and Network. ARMSX3 stands where PlayStation Network was, with
- * ARMSX3's mark for the console's blue logo, and RPCN where Friends was. Video and TV/Video
- * Services have nothing of ARMSX3's to show and are left out.
+ * Settings, Photo, Music, Video, Game and Network. ARMSX3 stands where PlayStation Network was, with
+ * ARMSX3's mark for the console's blue logo, and RPCN where Friends was. TV/Video Services has
+ * nothing of ARMSX3's to show and is left out.
  */
 object XmbHomeState {
     private const val ColumnKey = "xmb.home.column"
@@ -166,7 +166,11 @@ private fun xmbHomeColumns(
     )
 
     val photo = xmbPhotoColumn(controller)
-    val music = xmbMusicColumn(controller)
+    // Music and Video read their folders again each time they come into view.
+    val musicShown by remember(controller) { derivedStateOf { controller.currentColumn()?.key == "music" } }
+    val videoShown by remember(controller) { derivedStateOf { controller.currentColumn()?.key == "video" } }
+    val music = xmbMusicColumn(controller, shown = musicShown)
+    val video = xmbVideoColumn(controller, shown = videoShown)
 
     val utilities = listOf(
         // The PKG/Data Manager as XMB lists: packages and licences from storage, game updates and DLC.
@@ -340,7 +344,7 @@ private fun xmbHomeColumns(
     }
     val rpcn = xmbRpcnColumn(controller, rpcnShown, inGame = false)
 
-    return listOf(users, settings, photo, music, tools, game, network, armsx3, rpcn)
+    return listOf(users, settings, photo, music, video, tools, game, network, armsx3, rpcn)
 }
 
 /** The console's date and time for "last played": the locale's day, month and year, and the time. */

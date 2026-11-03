@@ -204,7 +204,10 @@ fun XmbSnd0Preview(controller: XmbController) {
     val lifecycleState by lifecycle.currentStateAsState()
     val resumed = lifecycleState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
     val node = controller.rootNode() as? XmbNode.Game
-    val quiet = controller.busy || controller.levels.isNotEmpty() || XmbMode.booting.value || !resumed || !XmbMode.gameMusic.value
+    // Songs picked in the Music column are the user's music: a game's preview does not cut in on them
+    // (once they are paused, it may).
+    val listening = com.armsx2.LibraryMusic.listening() && !com.armsx2.LibraryMusic.userPaused.value
+    val quiet = controller.busy || controller.levels.isNotEmpty() || XmbMode.booting.value || !resumed || !XmbMode.gameMusic.value || listening
     androidx.compose.runtime.LaunchedEffect(node?.key, quiet) {
         if (node == null || quiet) return@LaunchedEffect
         // SND0, or failing that the animated icon's own sound, which starts with the icon.

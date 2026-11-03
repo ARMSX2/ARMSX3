@@ -3641,6 +3641,12 @@ open class MainActivityRuntime : ComponentActivity() {
                 KeyEvent.KEYCODE_BUTTON_Y -> {
                     if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && nav.secondary()) return true
                 }
+                // L1, R1 and Square, for an XMB panel with a use for them (the music and video players)
+                KeyEvent.KEYCODE_BUTTON_L1, KeyEvent.KEYCODE_BUTTON_R1, KeyEvent.KEYCODE_BUTTON_X -> {
+                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 &&
+                        com.armsx2.ui.xmb.XmbPanelKeys.press(kc)
+                    ) return true
+                }
             }
         }
         // Runtime: bound system hotkeys. Caught here so back-button bindings work

@@ -54,6 +54,13 @@ class XmbWaveModel(initialState: FloatArray?) {
 
     val line: Line = XmbWaveFirmware.line
 
+    /**
+     * Set by the music player's Waves visualizer: how hard the song pushes the wave now, 0 at rest
+     * (the XMB itself) and about 1 at its loudest. The springs are shaken harder and stepped faster,
+     * so the wave billows with the music and settles as it goes quiet.
+     */
+    @Volatile var drive = 0f
+
     // ---- the spring grid (rows are lines, column 18 their roots) ----
     private val pos = FloatArray(N * 3)
     private val vel = FloatArray(N * 3)
@@ -96,7 +103,7 @@ class XmbWaveModel(initialState: FloatArray?) {
             if (c > 1) spring(i, i - 2, 2f * l, k * 10f)
             if (r > 0) spring(i, i - R, l, k)
             if (r > 1) spring(i, i - 2 * R, 2f * l, k * 10f)
-            val p = line.perturbation
+            val p = line.perturbation * (1f + drive * 7f)
             vel[i * 3] += noise(++counter) * p
             vel[i * 3 + 1] += noise(++counter) * p
             vel[i * 3 + 2] += noise(++counter) * p
@@ -178,7 +185,7 @@ class XmbWaveModel(initialState: FloatArray?) {
      * shows more or less to the sides.
      */
     fun update(dtSec: Float, aspect: Float, out: FloatArray) {
-        acc += dtSec.coerceIn(0f, 0.25f) * 60f
+        acc += dtSec.coerceIn(0f, 0.25f) * 60f * (1f + drive * 1.6f)
         var steps = 0
         while (acc > 1f && steps < 8) { step(); acc -= 1f; steps++ }
         if (acc > 1f) acc = 1f
