@@ -3351,6 +3351,18 @@ open class MainActivityRuntime : ComponentActivity() {
         if (com.armsx2.ui.home.LibraryKeyboard.visible.value) {
             // The phone's volume keys stay the system's, as they are with any modal up.
             if (isVolumeKey(kc)) return false
+            // Typing in XMB mode's field, on the phone's keyboard (after a touch on the field) or a
+            // real one: those keys are the field's. The pad keeps the key grid, and Back still closes.
+            val keyboard = com.armsx2.ui.home.LibraryKeyboard
+            if (keyboard.fieldShown.value && kc != KeyEvent.KEYCODE_BACK &&
+                !event.isFromSource(InputDevice.SOURCE_GAMEPAD) &&
+                !event.isFromSource(InputDevice.SOURCE_JOYSTICK) &&
+                (keyboard.typing.value ||
+                    (event.isPrintingKey && event.device?.keyboardType == InputDevice.KEYBOARD_TYPE_ALPHABETIC))
+            ) {
+                keyboard.typing.value = true
+                return super.dispatchKeyEvent(event)
+            }
             if (event.action == KeyEvent.ACTION_DOWN) {
                 when (kc) {
                     KeyEvent.KEYCODE_DPAD_UP -> com.armsx2.ui.home.LibraryKeyboard.move(0, -1)
@@ -3366,6 +3378,8 @@ open class MainActivityRuntime : ComponentActivity() {
                         if (event.repeatCount == 0) com.armsx2.ui.home.LibraryKeyboard.pressKey(com.armsx2.ui.home.LibraryKeyboard.SPACE)
                     KeyEvent.KEYCODE_BUTTON_START ->
                         if (event.repeatCount == 0) com.armsx2.ui.home.LibraryKeyboard.pressKey(com.armsx2.ui.home.LibraryKeyboard.DONE)
+                    KeyEvent.KEYCODE_BUTTON_SELECT ->
+                        if (event.repeatCount == 0) com.armsx2.ui.home.LibraryKeyboard.pressKey(com.armsx2.ui.home.LibraryKeyboard.PASTE)
                     KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BACK ->
                         if (event.repeatCount == 0) com.armsx2.ui.home.LibraryKeyboard.close()
                 }

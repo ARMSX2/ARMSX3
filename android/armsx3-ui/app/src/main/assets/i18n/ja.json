@@ -1530,5 +1530,6 @@
  "xmb.video.normal": "ノーマル",
  "xmb.video.fullScreen": "フルスクリーン",
  "xmb.video.original": "オリジナル",
- "xmb.video.aspect": "アスペクト比"
+ "xmb.video.aspect": "アスペクト比",
+ "xmb.keyboard.paste": "貼り付け"
 }

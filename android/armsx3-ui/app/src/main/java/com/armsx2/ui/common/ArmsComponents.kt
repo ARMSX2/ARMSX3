@@ -34,6 +34,8 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -77,6 +79,9 @@ import com.armsx2.ui.settings.controllerFocusable
 @Composable
 fun ArmsBackdrop(
     backgroundLayer: (@Composable BoxScope.() -> Unit)? = null,
+    // Lays out as if the phone's keyboard were down: XMB mode's keyboard floats over the XMB,
+    // which keeps its size behind it.
+    ignoreIme: Boolean = false,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -106,7 +111,8 @@ fun ArmsBackdrop(
                 modifier = Modifier
                     .fillMaxSize()
                     .windowInsetsPadding(
-                        WindowInsets.safeDrawing.only(safeSides),
+                        (if (ignoreIme) WindowInsets.systemBars.union(WindowInsets.displayCutout) else WindowInsets.safeDrawing)
+                            .only(safeSides),
                     ),
                 content = content,
             )

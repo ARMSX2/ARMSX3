@@ -1530,5 +1530,6 @@
  "xmb.video.normal": "一般",
  "xmb.video.fullScreen": "全螢幕",
  "xmb.video.original": "原始",
- "xmb.video.aspect": "長寬比"
+ "xmb.video.aspect": "長寬比",
+ "xmb.keyboard.paste": "貼上"
 }

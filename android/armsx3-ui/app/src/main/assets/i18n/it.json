@@ -1530,5 +1530,6 @@
  "xmb.video.normal": "Normale",
  "xmb.video.fullScreen": "Schermo intero",
  "xmb.video.original": "Originale",
- "xmb.video.aspect": "Proporzioni"
+ "xmb.video.aspect": "Proporzioni",
+ "xmb.keyboard.paste": "Incolla"
 }

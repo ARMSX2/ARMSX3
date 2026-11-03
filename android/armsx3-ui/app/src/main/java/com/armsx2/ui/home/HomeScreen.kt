@@ -267,6 +267,7 @@ fun HomeScreen(
 
     CompositionLocalProvider(LocalCustomCoverMap provides customCoverMap) {
     ArmsBackdrop(
+        ignoreIme = com.armsx2.ui.xmb.XmbMode.active.value,
         // Full-bleed wallpaper: the library image + readability scrim, drawn edge-to-edge
         // (behind the gesture bar) so it never leaves an exposed strip at the bottom —
         // that strip was the "blue bar" in landscape.

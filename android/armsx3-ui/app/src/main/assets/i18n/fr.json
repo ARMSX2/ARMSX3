@@ -1530,5 +1530,6 @@
  "xmb.video.normal": "Normal",
  "xmb.video.fullScreen": "Plein écran",
  "xmb.video.original": "Original",
- "xmb.video.aspect": "Format d'image"
+ "xmb.video.aspect": "Format d'image",
+ "xmb.keyboard.paste": "Coller"
 }

@@ -1,9 +1,9 @@
 package com.armsx2.ui.home
 
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.border
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.MaterialTheme
@@ -37,6 +38,12 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -63,6 +70,17 @@ object LibraryKeyboard {
     /** Live buffer, seeded from the current query on open; every edit pushes to onChange. */
     val text = mutableStateOf("")
     private var onChange: (String) -> Unit = {}
+
+    /** [text] with its caret and the IME's composing span, for XMB mode's field, which the phone's
+     *  own keyboard can type in too. Kept in step with [text] by every edit. */
+    private val field = mutableStateOf(TextFieldValue(""))
+
+    /** XMB mode's field is up. It holds the caret, so it can take typing as well as the keys. */
+    val fieldShown = mutableStateOf(false)
+
+    /** Someone is typing in XMB mode's field (the phone's keyboard, after a touch on the field, or a
+     *  real keyboard): keys that aren't the pad's are the field's. */
+    val typing = mutableStateOf(false)
     /** Empty-buffer hint; caller-set so the same keyboard serves library + settings search. */
     private val placeholder = mutableStateOf("Search games…")
 
@@ -75,6 +93,7 @@ object LibraryKeyboard {
     const val CLEAR = "clear"
     const val DONE = "done"
     const val SHIFT = "shift"
+    const val PASTE = "paste"
 
     // It also takes remote play's join address, so it carries the symbols an address and a host
     // name need: "." and ":" (a port), plus "/" "-" "_". They sit where a physical keyboard puts
@@ -129,6 +148,8 @@ object LibraryKeyboard {
 
     fun open(initial: String, onChange: (String) -> Unit, placeholder: String = "Search games…", masked: Boolean = false) {
         text.value = initial
+        field.value = TextFieldValue(initial, TextRange(initial.length))
+        typing.value = false
         this.onChange = onChange
         this.placeholder.value = placeholder
         this.masked.value = masked
@@ -168,12 +189,21 @@ object LibraryKeyboard {
             SPACE -> text.value + " "
             BACKSPACE -> text.value.dropLast(1)
             CLEAR -> ""
+            PASTE -> text.value + clipboardText()
             DONE -> { close(); return }
             else -> text.value + (if (shifted.value) key.uppercase() else key)
         }
         text.value = next
+        field.value = TextFieldValue(next, TextRange(next.length))
         onChange(next)
     }
+
+    /** The clipboard's text as one line: a code or an address copied from a message. */
+    private fun clipboardText(): String = runCatching {
+        val context = com.armsx2.Pasx2Application.appContext
+        context.getSystemService(android.content.ClipboardManager::class.java)?.primaryClip
+            ?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
+    }.getOrNull().orEmpty().replace(Regex("\\s*[\\r\\n]+\\s*"), " ").trim()
 
     /** Convenience hardware shortcut (e.g. X = backspace) from dispatchKeyEvent. */
     fun backspace() = pressKey(BACKSPACE)
@@ -266,8 +296,19 @@ object LibraryKeyboard {
     @Composable
     private fun XmbPanel(scope: BoxScope) {
         val font = com.armsx2.ui.xmb.rememberXmbFont()
-        val caret = androidx.compose.animation.core.rememberInfiniteTransition(label = "xmb-osk")
-            .animateFloat(1f, 0f, androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(530), androidx.compose.animation.core.RepeatMode.Reverse), label = "caret")
+        val ime = LocalSoftwareKeyboardController.current
+        val focus = remember { FocusRequester() }
+        // The field holds the caret from the start, without the phone's keyboard: a touch on the
+        // field brings that up.
+        LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+        DisposableEffect(Unit) {
+            fieldShown.value = true
+            onDispose {
+                if (typing.value) ime?.hide()
+                typing.value = false
+                fieldShown.value = false
+            }
+        }
         with(scope) {
             Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.55f)).clickable(enabled = false) {})
             Column(
@@ -291,25 +332,54 @@ object LibraryKeyboard {
                     fontSize = 14.sp,
                     maxLines = 1,
                 )
-                Row(
-                    Modifier
+                // A real field: tapped, the phone's own keyboard types in it (its clipboard too), and a
+                // long press pastes, so a code copied from an email goes straight in. The keys below
+                // still type here, by pad or by touch, and the caret is the field's own.
+                BasicTextField(
+                    value = field.value,
+                    onValueChange = {
+                        val next = it.text.replace("\n", "")
+                        field.value = if (next == it.text) it else TextFieldValue(next, TextRange(next.length))
+                        if (next != text.value) {
+                            text.value = next
+                            onChange(next)
+                        }
+                    },
+                    singleLine = true,
+                    textStyle = TextStyle(color = Color(0xFF101014), fontFamily = font, fontSize = 19.sp),
+                    cursorBrush = SolidColor(Color(0xFF101014)),
+                    visualTransformation = if (masked.value) androidx.compose.ui.text.input.PasswordVisualTransformation()
+                    else androidx.compose.ui.text.input.VisualTransformation.None,
+                    keyboardOptions = KeyboardOptions(
+                        imeAction = ImeAction.Done,
+                        keyboardType = if (masked.value) androidx.compose.ui.text.input.KeyboardType.Password
+                        else androidx.compose.ui.text.input.KeyboardType.Text,
+                        autoCorrectEnabled = false,
+                        showKeyboardOnFocus = false,
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { close() }),
+                    modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(Color.White.copy(alpha = 0.92f))
-                        .padding(horizontal = 10.dp, vertical = 7.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        if (masked.value) "\u2022".repeat(text.value.length) else text.value,
-                        color = Color(0xFF101014),
-                        fontFamily = font,
-                        fontSize = 19.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.StartEllipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    Box(Modifier.padding(start = 1.dp).size(2.dp, 22.dp).background(Color(0xFF101014).copy(alpha = caret.value)))
-                }
+                        .focusRequester(focus)
+                        .pointerInput(Unit) {
+                            awaitEachGesture {
+                                awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                                typing.value = true
+                            }
+                        },
+                    decorationBox = { inner ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color.White.copy(alpha = 0.92f))
+                                .padding(horizontal = 10.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            inner()
+                        }
+                    },
+                )
                 Spacer(Modifier.height(4.dp))
                 rows.forEachIndexed { r, keys ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -357,13 +427,15 @@ object LibraryKeyboard {
                     horizontalArrangement = Arrangement.spacedBy(18.dp, Alignment.End),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    // Each also does its job when tapped, so Paste is a tap away on a phone.
                     listOf(
-                        "\u25B3" to Color(0xFF3DDC84) to glyphOf(SPACE),
-                        "\u25A1" to Color(0xFFE88BD5) to glyphOf(BACKSPACE),
-                        "\u25CB" to Color(0xFFFF5A5A) to com.armsx2.i18n.I18n.get("xmb.back"),
-                        "START" to Color.White to glyphOf(DONE),
-                    ).forEach { (button, label) ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Triple("\u25B3" to Color(0xFF3DDC84), glyphOf(SPACE)) { pressKey(SPACE) },
+                        Triple("\u25A1" to Color(0xFFE88BD5), glyphOf(BACKSPACE)) { pressKey(BACKSPACE) },
+                        Triple("\u25CB" to Color(0xFFFF5A5A), com.armsx2.i18n.I18n.get("xmb.back")) { close() },
+                        Triple("SELECT" to Color.White, com.armsx2.i18n.I18n.get("xmb.keyboard.paste")) { pressKey(PASTE) },
+                        Triple("START" to Color.White, glyphOf(DONE)) { pressKey(DONE) },
+                    ).forEach { (button, label, action) ->
+                        Row(Modifier.clickable(onClick = action), verticalAlignment = Alignment.CenterVertically) {
                             Text(button.first, color = button.second, fontFamily = font, fontSize = 14.sp)
                             Text(" $label", color = Color.White.copy(alpha = 0.85f), fontFamily = font, fontSize = 13.sp)
                         }

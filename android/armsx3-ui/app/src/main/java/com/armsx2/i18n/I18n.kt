@@ -1944,6 +1944,7 @@ val EN: Map<String, String> = mapOf(
     "xmb.cat.network" to "Network",
     "xmb.rpcn.account" to "Account Management",
     "xmb.back" to "Back",
+    "xmb.keyboard.paste" to "Paste",
     "xmb.options" to "Options",
     "xmb.backToGame" to "Back to Game Screen",
     "xmb.quitGame" to "Quit Game",

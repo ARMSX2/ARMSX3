@@ -1530,5 +1530,6 @@
  "xmb.video.normal": "Normal",
  "xmb.video.fullScreen": "Layar Penuh",
  "xmb.video.original": "Asli",
- "xmb.video.aspect": "Rasio Aspek"
+ "xmb.video.aspect": "Rasio Aspek",
+ "xmb.keyboard.paste": "Tempel"
 }

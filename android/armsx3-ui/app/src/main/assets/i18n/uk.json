@@ -1530,5 +1530,6 @@
  "xmb.video.normal": "Звичайний",
  "xmb.video.fullScreen": "На весь екран",
  "xmb.video.original": "Оригінальний",
- "xmb.video.aspect": "Співвідношення сторін"
+ "xmb.video.aspect": "Співвідношення сторін",
+ "xmb.keyboard.paste": "Вставити"
 }

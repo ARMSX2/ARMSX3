@@ -1531,5 +1531,6 @@
  "xmb.video.normal": "Normal",
  "xmb.video.fullScreen": "Tela cheia",
  "xmb.video.original": "Original",
- "xmb.video.aspect": "Proporção da tela"
+ "xmb.video.aspect": "Proporção da tela",
+ "xmb.keyboard.paste": "Colar"
 }

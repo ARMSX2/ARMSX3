@@ -1530,5 +1530,6 @@
  "xmb.video.normal": "일반",
  "xmb.video.fullScreen": "전체 화면",
  "xmb.video.original": "원본",
- "xmb.video.aspect": "화면 비율"
+ "xmb.video.aspect": "화면 비율",
+ "xmb.keyboard.paste": "붙여넣기"
 }

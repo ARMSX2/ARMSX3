@@ -1530,5 +1530,6 @@
  "xmb.video.normal": "ปกติ",
  "xmb.video.fullScreen": "เต็มหน้าจอ",
  "xmb.video.original": "ต้นฉบับ",
- "xmb.video.aspect": "อัตราส่วนภาพ"
+ "xmb.video.aspect": "อัตราส่วนภาพ",
+ "xmb.keyboard.paste": "วาง"
 }

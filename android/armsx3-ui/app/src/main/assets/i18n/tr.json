@@ -1530,5 +1530,6 @@
  "xmb.video.normal": "Normal",
  "xmb.video.fullScreen": "Tam Ekran",
  "xmb.video.original": "Orijinal",
- "xmb.video.aspect": "En Boy Oranı"
+ "xmb.video.aspect": "En Boy Oranı",
+ "xmb.keyboard.paste": "Yapıştır"
 }
