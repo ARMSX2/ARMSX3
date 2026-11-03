@@ -78,7 +78,7 @@ private val ExitRed = Color(0xFFE60012)
 // browser when they aren't, so there's no app-specific scheme to special-case.
 internal const val DiscordUrl = "https://discord.gg/2Tynvwhc4A"
 internal const val GithubUrl = "https://github.com/ARMSX2/ARMSX3"
-internal const val WebsiteUrl = "https://armsx2.net/"
+internal const val WebsiteUrl = "https://armsx2.net/armsx3"
 
 /**
  * Opens an external link, telling the user when nothing on the device can handle it.
