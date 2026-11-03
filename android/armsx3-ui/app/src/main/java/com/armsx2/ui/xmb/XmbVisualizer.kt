@@ -521,6 +521,7 @@ internal class MusicDrive {
 internal enum class XmbVisualizerKind(val id: String, val title: String) {
     Waves("waves", "Waves"),
     Valley("valley", "Valley"),
+    Gaia("gaia", "Gaia"),
     Lines("lines", "Lines"),
 }
 
@@ -530,6 +531,29 @@ internal enum class XmbVisualizerKind(val id: String, val title: String) {
  */
 internal object XmbVisualizerStick {
     @Volatile var handler: ((Float, Float) -> Unit)? = null
+}
+
+/**
+ * Gaia, the console's Earth ([XmbGaiaView]): its presets' flights one after another; the right stick
+ * or a swipe moves on to another at once.
+ */
+@Composable
+internal fun XmbGaiaVisualizer(modifier: Modifier = Modifier) {
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        var held = false
+        val h: (Float, Float) -> Unit = { x, y ->
+            val v = maxOf(kotlin.math.abs(x), kotlin.math.abs(y)) * 128f
+            if (!held && v > 70f) {
+                held = true
+                XmbGaiaPresets.flick()
+            } else if (held && v < 66f) {
+                held = false
+            }
+        }
+        XmbVisualizerStick.handler = h
+        onDispose { if (XmbVisualizerStick.handler === h) XmbVisualizerStick.handler = null }
+    }
+    androidx.compose.ui.viewinterop.AndroidView(factory = { ctx -> XmbGaiaView(ctx) }, modifier = modifier)
 }
 
 /**

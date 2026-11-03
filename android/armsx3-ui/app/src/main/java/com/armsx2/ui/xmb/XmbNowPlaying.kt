@@ -7,7 +7,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -152,6 +153,9 @@ internal fun XmbNowPlaying(close: () -> Unit) {
     val valleyReady by produceState(false) {
         value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { XmbValleyFirmware.load() != null }
     }
+    val gaiaReady by produceState(false) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { XmbGaiaFirmware.available() }
+    }
     val month = XmbOriginalColors.now()
     val accent = remember(month) {
         val c = Color(month.end[0], month.end[1], month.end[2])
@@ -227,6 +231,8 @@ internal fun XmbNowPlaying(close: () -> Unit) {
             XmbWavesVisualizer(levels, positionMs = { clock.now() }, playing = { !paused && clock.playing }, modifier = Modifier.fillMaxSize())
         } else if (visualizerOnly && kind == XmbVisualizerKind.Valley && valleyReady) {
             XmbValleyVisualizer(levels, positionMs = { clock.now() }, playing = { !paused && clock.playing }, modifier = Modifier.fillMaxSize())
+        } else if (visualizerOnly && kind == XmbVisualizerKind.Gaia && gaiaReady) {
+            XmbGaiaVisualizer(modifier = Modifier.fillMaxSize())
         } else {
             XmbVisualizerView(
                 levels = levels,
@@ -332,22 +338,31 @@ internal fun XmbNowPlaying(close: () -> Unit) {
                         onLeft = { switchVisualizer(-1) },
                         onRight = { switchVisualizer(1) },
                     )
-                    .clickable(remember { MutableInteractionSource() }, indication = null) { visualizerOnly = false }
-                    // Valley's presets by swipe, as the right stick turns them: across another of
-                    // the group, up or down another group.
+                    // A touch goes back to the player; a swipe moves Valley's and Gaia's presets on,
+                    // as the right stick does (for Valley: across another of the group, up or down
+                    // another group). Told apart by how far the touch went, so a slow frame that
+                    // brings only its start and its end is still a swipe.
                     .pointerInput(kind) {
-                        if (kind != XmbVisualizerKind.Valley) return@pointerInput
-                        var dx = 0f
-                        var dy = 0f
-                        detectDragGestures(
-                            onDragStart = { dx = 0f; dy = 0f },
-                            onDrag = { change, amount -> change.consume(); dx += amount.x; dy += amount.y },
-                            onDragEnd = {
-                                val far = 60.dp.toPx()
-                                if (kotlin.math.abs(dx) >= kotlin.math.abs(dy) && kotlin.math.abs(dx) > far) XmbValleyPresets.flick(if (dx < 0) -1 else 1, 0)
-                                else if (kotlin.math.abs(dy) > far) XmbValleyPresets.flick(0, if (dy < 0) -1 else 1)
-                            },
-                        )
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            var end = down.position
+                            while (true) {
+                                val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+                                end = change.position
+                                if (!change.pressed) break
+                            }
+                            val dx = end.x - down.position.x
+                            val dy = end.y - down.position.y
+                            val far = 60.dp.toPx()
+                            val across = kotlin.math.abs(dx) >= kotlin.math.abs(dy) && kotlin.math.abs(dx) > far
+                            val upDown = !across && kotlin.math.abs(dy) > far
+                            when {
+                                !across && !upDown -> visualizerOnly = false
+                                kind == XmbVisualizerKind.Gaia -> XmbGaiaPresets.flick()
+                                kind == XmbVisualizerKind.Valley && across -> XmbValleyPresets.flick(if (dx < 0) -1 else 1, 0)
+                                kind == XmbVisualizerKind.Valley -> XmbValleyPresets.flick(0, if (dy < 0) -1 else 1)
+                            }
+                        }
                     },
             )
             AnimatedVisibility(kindNameShown, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopCenter).padding(top = d(30f))) {
