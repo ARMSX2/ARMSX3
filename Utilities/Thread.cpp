@@ -3155,6 +3155,18 @@ static struct ::sigaction s_prev_fault_action[NSIG]{};
 // Everything else is somebody else's fault, in both senses.
 static bool is_emulator_fault(void* addr)
 {
+	// None is, until vm's reservations exist. This handler is installed by a static initializer
+	// (s_exception_handler_set below) and vm's bases are set by others, in vm.cpp, in no order the
+	// language promises. In between, g_base_addr and g_exec_addr are still null, so every address
+	// below 8GiB reads as guest memory and address 0 as offset 0 of the exec map, and ART's own
+	// suspend and null checks -- faults at address 0 on whichever managed thread is running -- were
+	// taken for ours and made fatal. Seen at launch on the test emulator: the main thread in
+	// Thread.join under MediaPlayer.prepare, while the core library was still loading.
+	if (!vm::g_base_addr || !vm::g_exec_addr)
+	{
+		return false;
+	}
+
 	const u64 exec64 = (reinterpret_cast<u64>(addr) - reinterpret_cast<u64>(vm::g_exec_addr)) / 2;
 	const u64 seg_off = (reinterpret_cast<u64>(addr) - reinterpret_cast<u64>(vm::g_exec_addr)) - vm::g_exec_addr_seg_offset;
 
