@@ -45,6 +45,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -154,7 +155,7 @@ object XmbMediaFormats {
 object XmbVideos {
     private const val FoldersKey = "xmb.video.folders"
     private const val ResumeKey = "xmb.video.resume"
-    private const val ScreenModeKey = "xmb.video.screenMode"
+    private const val ScreenModeKey = "xmb.video.screen"
     private const val AspectKey = "xmb.video.aspect"
     private const val ShaderKey = "xmb.video.shader"
 
@@ -336,8 +337,8 @@ object XmbVideos {
         MainActivityRuntime.prefs.edit { putString(ResumeKey, o.toString()) }
     }
 
-    /** The console's Screen Mode, kept for every video: 0 Normal, 1 Full Screen, 2 Zoom, 3 Original. */
-    fun screenMode(): Int = MainActivityRuntime.prefs.getInt(ScreenModeKey, 0).coerceIn(0, 3)
+    /** The console's Screen Mode, kept for every video: 0 Normal, 1 Full Screen (until one is picked), 2 Zoom, 3 Original. */
+    fun screenMode(): Int = MainActivityRuntime.prefs.getInt(ScreenModeKey, 1).coerceIn(0, 3)
 
     fun setScreenMode(mode: Int) = MainActivityRuntime.prefs.edit { putInt(ScreenModeKey, mode) }
 
@@ -1088,6 +1089,9 @@ internal fun XmbVideoPlayer(
     // The bar hides three seconds into playing without a press; paused, it stays.
     val now by produceState(0L) { while (true) { value = android.os.SystemClock.uptimeMillis(); delay(250) } }
     val barShown = !playing || error != null || now - shown < 3_000
+    // A tap plays or pauses with the bar up, else brings the bar up. Read through a state: the tap
+    // detector runs on from the first touch with what it was given then.
+    val tap by rememberUpdatedState { if (options) openOptions(false) else if (barShown) toggle() else poke() }
 
     BoxWithConstraints(
         Modifier
@@ -1103,7 +1107,7 @@ internal fun XmbVideoPlayer(
             )
             .clipToBounds()
             .pointerInput(entry.key) {
-                detectTapGestures(onTap = { if (options) openOptions(false) else if (barShown) toggle() else poke() })
+                detectTapGestures(onTap = { tap() })
             },
         contentAlignment = Alignment.Center,
     ) {
