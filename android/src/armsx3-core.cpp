@@ -1076,6 +1076,7 @@ static std::pair<std::string, std::u32string> g_strings[] = {
                 "Select to create a new entry"),
     MAKE_STRING(CELL_SAVEDATA_SAVE_CONFIRMATION,
                 "Do you want to save this data?"),
+    MAKE_STRING(CELL_SAVEDATA_SAVE, "Do you want to save this data?\n\n%0"),
     MAKE_STRING(CELL_SAVEDATA_DELETE_CONFIRMATION,
                 "Do you really want to delete this data?\n\n%0"),
     MAKE_STRING(CELL_SAVEDATA_DELETE_SUCCESS,
