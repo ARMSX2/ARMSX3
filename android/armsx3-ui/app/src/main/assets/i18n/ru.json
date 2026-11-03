@@ -1530,5 +1530,6 @@
  "xmb.video.fullScreen": "Во весь экран",
  "xmb.video.original": "Исходный",
  "xmb.video.aspect": "Соотношение сторон",
- "xmb.keyboard.paste": "Вставить"
+ "xmb.keyboard.paste": "Вставить",
+ "xmb.video.shader.failed": "Этот шейдер здесь не работает, поэтому видео воспроизводится без него."
 }

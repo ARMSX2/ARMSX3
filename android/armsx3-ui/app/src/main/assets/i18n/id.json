@@ -1531,5 +1531,6 @@
  "xmb.video.fullScreen": "Layar Penuh",
  "xmb.video.original": "Asli",
  "xmb.video.aspect": "Rasio Aspek",
- "xmb.keyboard.paste": "Tempel"
+ "xmb.keyboard.paste": "Tempel",
+ "xmb.video.shader.failed": "Shader ini tidak bisa berjalan di sini, jadi video diputar tanpanya."
 }

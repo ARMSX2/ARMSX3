@@ -1531,5 +1531,6 @@
  "xmb.video.fullScreen": "전체 화면",
  "xmb.video.original": "원본",
  "xmb.video.aspect": "화면 비율",
- "xmb.keyboard.paste": "붙여넣기"
+ "xmb.keyboard.paste": "붙여넣기",
+ "xmb.video.shader.failed": "이 셰이더는 여기서 실행할 수 없어 셰이더 없이 재생합니다."
 }

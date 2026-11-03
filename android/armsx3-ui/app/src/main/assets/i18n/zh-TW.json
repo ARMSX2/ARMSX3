@@ -1531,5 +1531,6 @@
  "xmb.video.fullScreen": "全螢幕",
  "xmb.video.original": "原始",
  "xmb.video.aspect": "長寬比",
- "xmb.keyboard.paste": "貼上"
+ "xmb.keyboard.paste": "貼上",
+ "xmb.video.shader.failed": "此著色器無法在這裡執行，影片將不使用它播放。"
 }

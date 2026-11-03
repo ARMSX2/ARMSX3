@@ -1531,5 +1531,6 @@
  "xmb.video.fullScreen": "Tam Ekran",
  "xmb.video.original": "Orijinal",
  "xmb.video.aspect": "En Boy Oranı",
- "xmb.keyboard.paste": "Yapıştır"
+ "xmb.keyboard.paste": "Yapıştır",
+ "xmb.video.shader.failed": "Bu gölgelendirici burada çalışamıyor, bu yüzden video onsuz oynatılıyor."
 }

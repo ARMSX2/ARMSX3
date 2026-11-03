@@ -29,6 +29,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -66,6 +68,10 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.armsx2.LibraryMusic
 import com.armsx2.i18n.str
 import com.armsx2.runtime.MainActivityRuntime
+import com.armsx2.ui.common.ShaderScan
+import com.armsx2.ui.common.findDirectory
+import com.armsx2.ui.common.parentKeyWithin
+import com.armsx2.ui.common.scanShaderPresets
 import com.armsx2.ui.settings.SettingsControllerNav
 import com.armsx2.ui.settings.controllerFocusable
 import com.armsx3.core.ARMSX3
@@ -148,6 +154,7 @@ object XmbVideos {
     private const val ResumeKey = "xmb.video.resume"
     private const val ScreenModeKey = "xmb.video.screenMode"
     private const val AspectKey = "xmb.video.aspect"
+    private const val ShaderKey = "xmb.video.shader"
 
     /**
      * A file or a folder: on disk ([file]), or in a granted folder ([tree] and its [docId]). [key]
@@ -341,6 +348,11 @@ object XmbVideos {
         if (mode == 0) o.remove(key) else o.put(key, mode)
         MainActivityRuntime.prefs.edit { putString(AspectKey, o.toString()) }
     }
+
+    /** RetroArch Shaders on videos, kept for every video as Screen Mode is: a .slangp, or "" for none. */
+    fun shaderPreset(): String = MainActivityRuntime.prefs.getString(ShaderKey, "").orEmpty()
+
+    fun setShaderPreset(path: String) = MainActivityRuntime.prefs.edit { putString(ShaderKey, path) }
 
     /** Copy picked videos into the video folder; how many came in. IO thread. */
     fun import(context: Context, uris: List<Uri>): Int = uris.count { uri ->
@@ -539,6 +551,93 @@ fun xmbVideoColumn(controller: XmbController, shown: Boolean = false): XmbColumn
     )
 }
 
+/** The turn a video's frames need to stand upright, from its own metadata (0 without). IO thread. */
+private fun videoRotation(context: Context, uri: Uri): Int = runCatching {
+    MediaMetadataRetriever().use { r ->
+        r.setDataSource(context, uri)
+        r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+    }
+}.getOrDefault(0)
+
+/**
+ * RetroArch Shaders for videos, in the options' place: None, then the presets the game settings
+ * find, a folder at a time (Up one folder first inside one). A pick goes on at once and the list
+ * stays to try another; Circle goes up a folder, then back to the options; Triangle closes them.
+ */
+@Composable
+private fun XmbVideoShaderList(
+    font: androidx.compose.ui.text.font.FontFamily,
+    u: Float,
+    title: String,
+    noneWord: String,
+    scan: ShaderScan?,
+    folder: String,
+    current: String,
+    onFolder: (String) -> Unit,
+    onPick: (String) -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier,
+) {
+    val root = scan?.root
+    val here = root?.let { it.findDirectory(folder) ?: it }
+    Column(
+        modifier.verticalScroll(rememberScrollState()).padding(vertical = (40f * u).dp),
+        verticalArrangement = Arrangement.spacedBy((4f * u).dp),
+    ) {
+        Text(title, style = xmbText(font, 16f * u, 0.75f), modifier = Modifier.padding(horizontal = (18f * u).dp))
+        if (here != null && here.key.isNotEmpty()) {
+            Text(here.label, style = xmbText(font, 22f * u), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = (18f * u).dp))
+        }
+        @Composable
+        fun item(id: String, label: String, detail: String?, chosen: Boolean, onConfirm: () -> Unit) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .controllerFocusable(id, onConfirm = onConfirm, onRight = onConfirm, onSecondary = onClose)
+                    .pointerInput(id) { detectTapGestures { onConfirm() } }
+                    .padding(horizontal = (18f * u).dp, vertical = (9f * u).dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    label,
+                    style = xmbText(font, 19f * u, if (chosen) 1f else 0.85f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                when {
+                    chosen -> Text("✓", style = xmbText(font, 17f * u))
+                    detail != null -> Text(detail, style = xmbText(font, 15f * u, 0.6f))
+                }
+            }
+        }
+        item("xmb.video.shader.none", noneWord, null, current.isBlank()) { onPick("") }
+        when {
+            root == null -> Text("…", style = xmbText(font, 19f * u, 0.6f), modifier = Modifier.padding(horizontal = (18f * u).dp))
+            root.count == 0 -> {
+                // Nothing installed: where the packs come from.
+                Text(str("renderer.shaderPack.noneInstalled"), style = xmbText(font, 17f * u, 0.8f), modifier = Modifier.padding(horizontal = (18f * u).dp))
+                Text(
+                    "${str("tab.renderer")}  ›  ${str("renderer.shaderPack.label")}",
+                    style = xmbText(font, 15f * u, 0.6f),
+                    modifier = Modifier.padding(horizontal = (18f * u).dp),
+                )
+            }
+            else -> {
+                if (here != null && here.key.isNotEmpty()) {
+                    item("xmb.video.shader.up.${here.key}", str("renderer.shaderChain.folder.up"), null, false) { onFolder(here.parentKeyWithin(root)) }
+                }
+                here?.folders.orEmpty().forEach { f ->
+                    item("xmb.video.shader.dir.${f.key}", f.label, "${f.count}", false) { onFolder(f.key) }
+                }
+                here?.presets.orEmpty().forEach { p ->
+                    item("xmb.video.shader.preset.${p.path}", p.label, null, p.path == current) { onPick(p.path) }
+                }
+            }
+        }
+    }
+}
+
 /**
  * A video full screen. Cross plays and pauses; Left and Right go back and on ten seconds; L1 and R1
  * the previous and next video in its folder; Square fits the picture to the screen or fills it;
@@ -570,6 +669,9 @@ internal fun XmbVideoPlayer(
     val aspectWord = str("xmb.video.aspect")
     val aspects = listOf(str("common.auto"), "4:3", "16:9", "21:9")
     val optionsWord = str("xmb.options")
+    val shaderWord = str("renderer.shaderChain.label")
+    val noShaderWord = str("renderer.shaderChain.preset.none")
+    val shaderFailedWord = str("xmb.video.shader.failed")
     var index by remember { mutableIntStateOf(start) }
     var first by remember { mutableStateOf(fromBeginning) }
     val entry = list[index]
@@ -580,8 +682,18 @@ internal fun XmbVideoPlayer(
     // Screen Mode, kept for every video as the console keeps it; Aspect Ratio, kept for each video.
     var screenMode by remember { mutableIntStateOf(XmbVideos.screenMode()) }
     var aspectMode by remember(entry.key) { mutableIntStateOf(XmbVideos.aspectMode(entry.key)) }
-    // Triangle's options: Screen Mode and Aspect Ratio, Left and Right to change them.
+    // Triangle's options: Screen Mode, Aspect Ratio and RetroArch Shaders, Left and Right to change them.
     var options by remember { mutableStateOf(false) }
+    // The row the options open on: Screen Mode, or RetroArch Shaders coming back from their list.
+    var optionsFocus by remember { mutableStateOf("xmb.video.opt.screen") }
+    // RetroArch Shaders, kept for every video as Screen Mode is (a .slangp, or none), and their list
+    // while it is open in the options' place: the presets the game settings find, a folder at a time.
+    var shaderPreset by remember { mutableStateOf(XmbVideos.shaderPreset()) }
+    var shaderList by remember { mutableStateOf(false) }
+    var shaderFolder by remember { mutableStateOf("") }
+    var shaderScan by remember { mutableStateOf<ShaderScan?>(null) }
+    // A preset that could not run on this video: it plays on without one.
+    var shaderBroken by remember(entry.key) { mutableStateOf(false) }
     var position by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
     var shown by remember { mutableLongStateOf(android.os.SystemClock.uptimeMillis()) }
@@ -607,6 +719,66 @@ internal fun XmbVideoPlayer(
     // The FFmpeg player's handle while it has one, 0 otherwise.
     val ff = remember { longArrayOf(0L) }
     fun core() = com.armsx3.core.ARMSX3.instance
+    // RetroArch Shaders' stage (XmbVideoShader) while one is on: the decoder writes into its input
+    // and it draws through the preset onto the picture's surface. A surface takes one writer at a
+    // time: the decoder comes off the stage's input before the stage closes, and goes back onto the
+    // picture's surface only once a closing stage has let go of it.
+    val stage = remember { arrayOfNulls<XmbVideoShader.Stage>(1) }
+    var stageInput by remember { mutableStateOf<android.view.Surface?>(null) }
+    var stagesClosing by remember { mutableIntStateOf(0) }
+    val wantShader = shaderPreset.isNotBlank() && !shaderBroken
+    // Where the decoder draws: the stage's input with a shader on (nowhere until it is open), the
+    // picture's surface without (nowhere while a stage still holds it).
+    val decoderSurface = when {
+        wantShader -> stageInput
+        stagesClosing > 0 -> null
+        else -> holder.value
+    }
+    val route = remember { arrayOfNulls<android.view.Surface>(1) }
+    route[0] = decoderSurface
+    val wantShaderNow = remember { booleanArrayOf(false) }
+    wantShaderNow[0] = wantShader
+    fun closeStage() {
+        val s = stage[0] ?: return
+        stage[0] = null
+        runCatching { active[0]?.setSurface(null) }
+        stageInput = null
+        stagesClosing++
+        s.close { stagesClosing-- }
+    }
+    // Closed as the player goes, before its MediaPlayer is released.
+    DisposableEffect(Unit) { onDispose { closeStage() } }
+    // Opened once the picture has its surface and the player is known, and kept for another preset;
+    // closed for none, and opened again for the other player.
+    val pictureSurface = holder.value
+    LaunchedEffect(pictureSurface, wantShader, shaderPreset, ffmpeg) {
+        val out = pictureSurface
+        val rgba = ffmpeg == true
+        if (out == null || !wantShader || ffmpeg == null) {
+            closeStage()
+            return@LaunchedEffect
+        }
+        // The preset's settings as the game settings tune it.
+        val params = withContext(Dispatchers.IO) {
+            runCatching { com.armsx2.config.ConfigStore.loadGlobal().shaderChainParams[shaderPreset] }.getOrNull().orEmpty()
+        }
+        val open = stage[0]
+        if (open != null && open.output === out && open.rgba == rgba) {
+            open.preset(shaderPreset, params)
+            return@LaunchedEffect
+        }
+        closeStage()
+        val turn = if (rgba) 0 else withContext(Dispatchers.IO) { videoRotation(context, entry.uri) }
+        val opened = XmbVideoShader.open(out, shaderPreset, params, rgba, videoW, videoH)
+        if (opened == null) {
+            shaderBroken = true
+            message = shaderFailedWord
+            return@LaunchedEffect
+        }
+        opened.rotation(turn)
+        stage[0] = opened
+        stageInput = opened.input
+    }
     // The music behind the XMB waits while a video plays, as a game's music does.
     DisposableEffect(Unit) {
         LibraryMusic.startPreview()
@@ -642,7 +814,7 @@ internal fun XmbVideoPlayer(
                 val at = if (first) 0L else XmbVideos.resumeAt(entry)
                 first = false
                 if (at > 0) p.seekTo(at, MediaPlayer.SEEK_CLOSEST_SYNC)
-                holder.value?.let { runCatching { p.setSurface(it) } }
+                route[0]?.let { runCatching { p.setSurface(it) } }
                 p.start()
                 playing = true
                 poke()
@@ -655,9 +827,15 @@ internal fun XmbVideoPlayer(
             runCatching { player.setSurface(null) }
         }
     }
-    // FFmpeg's player, once the picture has its surface: from where the video was left, or the start.
-    // Opened off the main thread (it reads the file's index); closed before the surface goes.
-    val surface = holder.value
+    // Android's player draws where the decoder is routed: onto the shader stage's input as it opens,
+    // back onto the picture's surface once it has closed.
+    LaunchedEffect(decoderSurface, ffmpeg) {
+        if (ffmpeg == false) runCatching { player.setSurface(decoderSurface) }
+    }
+    // FFmpeg's player, once it has somewhere to draw (the picture's surface, or the shader stage's
+    // input): from where the video was left, or the start. Opened off the main thread (it reads the
+    // file's index); closed before the surface goes.
+    val surface = decoderSurface
     LaunchedEffect(entry.key, ffmpeg, surface) {
         if (ffmpeg != true || surface == null) return@LaunchedEffect
         error = null
@@ -719,6 +897,14 @@ internal fun XmbVideoPlayer(
                 runCatching { if (playing) position = player.currentPosition.toLong() }
             }
             if (playing && ++n % 4 == 0) com.armsx2.ui.home.LibraryScreensaver.reset()
+            // A shader that stopped working: the video goes on without it.
+            stage[0]?.let { s ->
+                if (s.failed) {
+                    shaderBroken = true
+                    message = shaderFailedWord
+                    closeStage()
+                }
+            }
             delay(250)
         }
     }
@@ -813,15 +999,62 @@ internal fun XmbVideoPlayer(
     fun openOptions(open: Boolean) {
         XmbSounds.play(if (open) XmbSounds.Sfx.OPTION else XmbSounds.Sfx.CANCEL)
         options = open
+        shaderList = false
+        optionsFocus = "xmb.video.opt.screen"
         poke()
     }
-    // Circle closes the options before it closes the video.
+    // RetroArch Shaders' list, at its top, scanned as it opens: packs may have come in since.
+    fun openShaderList() {
+        XmbSounds.play(XmbSounds.Sfx.DECIDE)
+        shaderFolder = ""
+        shaderList = true
+        optionsFocus = "xmb.video.opt.shader"
+    }
+    // A preset picked (or none): on at once, the list kept open to try another.
+    fun pickShader(path: String) {
+        XmbSounds.play(XmbSounds.Sfx.DECIDE)
+        shaderPreset = path
+        shaderBroken = false
+        XmbVideos.setShaderPreset(path)
+    }
+    // Circle in the list: up a folder, and out of the list from its top.
+    fun shaderBack() {
+        XmbSounds.play(XmbSounds.Sfx.CANCEL)
+        val root = shaderScan?.root
+        val here = root?.findDirectory(shaderFolder)
+        if (root != null && here != null && here.key.isNotEmpty()) shaderFolder = here.parentKeyWithin(root)
+        else shaderList = false
+    }
+    LaunchedEffect(shaderList) {
+        if (shaderList) shaderScan = withContext(Dispatchers.IO) { runCatching { scanShaderPresets(context) }.getOrNull() }
+    }
+    // Circle closes the shader list, then the options, before it closes the video.
     DisposableEffect(controller) {
-        controller.panelBack = { if (options) { options = false; poke(); true } else false }
+        controller.panelBack = {
+            when {
+                shaderList -> { shaderBack(); true }
+                options -> { options = false; poke(); true }
+                else -> false
+            }
+        }
         onDispose { controller.panelBack = null }
     }
-    LaunchedEffect(options) {
-        val id = if (options) "xmb.video.opt.screen" else "xmb.video.player"
+    // The list opens on the preset in use where it is in the folder shown, else on the folder's top.
+    val shaderFocus = run {
+        val root = shaderScan?.root
+        val here = root?.let { it.findDirectory(shaderFolder) ?: it }
+        when {
+            here != null && here.presets.any { it.path == shaderPreset } -> "xmb.video.shader.preset.$shaderPreset"
+            here != null && here.key.isNotEmpty() -> "xmb.video.shader.up.${here.key}"
+            else -> "xmb.video.shader.none"
+        }
+    }
+    LaunchedEffect(options, shaderList, shaderFolder, shaderScan) {
+        val id = when {
+            shaderList -> shaderFocus
+            options -> optionsFocus
+            else -> "xmb.video.player"
+        }
         var tries = 0
         while (!SettingsControllerNav.selectById(id) && tries++ < 10) withFrameNanos {}
     }
@@ -878,10 +1111,15 @@ internal fun XmbVideoPlayer(
                         override fun onSurfaceTextureAvailable(texture: android.graphics.SurfaceTexture, width: Int, height: Int) {
                             val s = android.view.Surface(texture)
                             holder.value = s
-                            runCatching { active[0]?.setSurface(s) }
+                            // Straight on unless a shader is wanted; its stage routes the player then.
+                            if (!wantShaderNow[0]) runCatching { active[0]?.setSurface(s) }
                         }
-                        override fun onSurfaceTextureSizeChanged(texture: android.graphics.SurfaceTexture, width: Int, height: Int) {}
+                        override fun onSurfaceTextureSizeChanged(texture: android.graphics.SurfaceTexture, width: Int, height: Int) {
+                            // A paused video's shaded picture, drawn again at the new size.
+                            stage[0]?.redraw()
+                        }
                         override fun onSurfaceTextureDestroyed(texture: android.graphics.SurfaceTexture): Boolean {
+                            closeStage()
                             runCatching { active[0]?.setSurface(null) }
                             holder.value?.release()
                             holder.value = null
@@ -957,14 +1195,29 @@ internal fun XmbVideoPlayer(
         }
 
         // Triangle's options, at the right as the console's are: each one's name over its setting,
-        // Left and Right (or Cross) to change it, Circle or Triangle to close.
+        // Left and Right (or Cross) to change it, Circle or Triangle to close. RetroArch Shaders opens
+        // its list in their place.
         AnimatedVisibility(options, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
             Box(
                 Modifier.fillMaxSize().background(
                     Brush.horizontalGradient(0.45f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.8f)),
                 ),
             ) {
-                Column(
+                if (shaderList) {
+                    XmbVideoShaderList(
+                        font = font,
+                        u = u,
+                        title = shaderWord,
+                        noneWord = noShaderWord,
+                        scan = shaderScan,
+                        folder = shaderFolder,
+                        current = shaderPreset,
+                        onFolder = { XmbSounds.play(XmbSounds.Sfx.DECIDE); shaderFolder = it },
+                        onPick = ::pickShader,
+                        onClose = { openOptions(false) },
+                        modifier = Modifier.align(Alignment.CenterEnd).width((440f * u).dp).fillMaxHeight().padding(end = (48f * u).dp),
+                    )
+                } else Column(
                     Modifier.align(Alignment.CenterEnd).width((440f * u).dp).padding(end = (48f * u).dp),
                     verticalArrangement = Arrangement.spacedBy((14f * u).dp),
                 ) {
@@ -993,6 +1246,11 @@ internal fun XmbVideoPlayer(
                     }
                     row("xmb.video.opt.screen", screenModeWord, screenModes[screenMode], ::changeScreenMode)
                     row("xmb.video.opt.aspect", aspectWord, aspects[aspectMode], ::changeAspect)
+                    row(
+                        "xmb.video.opt.shader",
+                        shaderWord,
+                        if (shaderPreset.isBlank()) noShaderWord else File(shaderPreset).nameWithoutExtension,
+                    ) { openShaderList() }
                 }
             }
         }

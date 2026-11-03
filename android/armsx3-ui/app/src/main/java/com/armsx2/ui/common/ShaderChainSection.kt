@@ -66,12 +66,12 @@ import java.io.File
  *  shown and the judgement is left to the user. Do NOT resurrect a Lightweight/Heavy split
  *  on top of it: a wrong "Lightweight" badge misleads exactly the user who picked that tier
  *  because they wanted cheap. */
-private data class ShaderPreset(val label: String, val path: String, val passes: Int?)
+internal data class ShaderPreset(val label: String, val path: String, val passes: Int?)
 
 /** One directory in the on-disk shader tree. Only this directory's immediate [folders] and
  *  [presets] are composed at a time; navigating into a child replaces the visible rows
  *  instead of adding another expanded section to an ever-growing list. */
-private data class ShaderDirectory(
+internal data class ShaderDirectory(
     val key: String,
     val label: String,
     val count: Int,
@@ -79,8 +79,9 @@ private data class ShaderDirectory(
     val presets: List<ShaderPreset>,
 )
 
-/** Result of one scan, including the filesystem path used by the empty-state message. */
-private data class ShaderScan(val dir: String, val root: ShaderDirectory)
+/** Result of one scan, including the filesystem path used by the empty-state message. The video
+ *  player's RetroArch Shaders list reads the same scan. */
+internal data class ShaderScan(val dir: String, val root: ShaderDirectory)
 
 /** A preset plus the path segments of its folder, relative to the shaders root. */
 private class FoundPreset(val preset: ShaderPreset, val segments: List<String>)
@@ -686,7 +687,7 @@ private fun ShaderPresetRow(
  *  load-bearing: 691 of the stock pack's 2542 presets are thin wrappers pointing at a
  *  handful of shared roots, and without memoising those roots would be re-parsed hundreds
  *  of times each. */
-private fun scanShaderPresets(context: Context): ShaderScan {
+internal fun scanShaderPresets(context: Context): ShaderScan {
     val root = ShaderRepo.shadersRoot(context)
     if (!root.isDirectory) return ShaderScan(root.absolutePath, emptyShaderDirectory())
     val cache = HashMap<String, Int?>()
@@ -759,7 +760,7 @@ private fun ShaderDirectory.promoteDefaultPackContents(): ShaderDirectory {
     )
 }
 
-private fun ShaderDirectory.findDirectory(targetKey: String): ShaderDirectory? {
+internal fun ShaderDirectory.findDirectory(targetKey: String): ShaderDirectory? {
     if (key == targetKey) return this
     return folders.firstNotNullOfOrNull { it.findDirectory(targetKey) }
 }
@@ -772,7 +773,7 @@ private fun ShaderDirectory.findPresetDirectory(presetPath: String): String? {
 
 /** Parent inside the PRESENTED tree. The promoted pack wrapper is absent, so a category
  *  such as `shaders_slang/crt` returns the visible root instead of that hidden wrapper. */
-private fun ShaderDirectory.parentKeyWithin(root: ShaderDirectory?): String {
+internal fun ShaderDirectory.parentKeyWithin(root: ShaderDirectory?): String {
     if (root == null) return ""
     val parent = key.substringBeforeLast('/', "")
     return if (root.findDirectory(parent) != null) parent else root.key

@@ -2054,6 +2054,7 @@ val EN: Map<String, String> = mapOf(
     "xmb.video.fullScreen" to "Full Screen",
     "xmb.video.original" to "Original",
     "xmb.video.aspect" to "Aspect Ratio",
+    "xmb.video.shader.failed" to "This shader can't run here, so the video plays without it.",
     "xmb.media.unsupported" to "The data type is not supported.",
     "xmb.screenshot" to "Take Screenshot",
     "xmb.screenshot.desc" to "Saves a picture of the game to Photo",

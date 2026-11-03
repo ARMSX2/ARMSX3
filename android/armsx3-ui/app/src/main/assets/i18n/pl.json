@@ -1531,5 +1531,6 @@
  "xmb.video.fullScreen": "Pełny ekran",
  "xmb.video.original": "Oryginalny",
  "xmb.video.aspect": "Proporcje obrazu",
- "xmb.keyboard.paste": "Wklej"
+ "xmb.keyboard.paste": "Wklej",
+ "xmb.video.shader.failed": "Ten shader nie może tu działać, więc wideo jest odtwarzane bez niego."
 }

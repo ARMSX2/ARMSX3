@@ -1531,5 +1531,6 @@
  "xmb.video.fullScreen": "フルスクリーン",
  "xmb.video.original": "オリジナル",
  "xmb.video.aspect": "アスペクト比",
- "xmb.keyboard.paste": "貼り付け"
+ "xmb.keyboard.paste": "貼り付け",
+ "xmb.video.shader.failed": "このシェーダーはここでは動作しないため、シェーダーなしで再生します。"
 }

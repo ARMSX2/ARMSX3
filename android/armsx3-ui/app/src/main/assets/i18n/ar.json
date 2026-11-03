@@ -1531,5 +1531,6 @@
  "xmb.video.fullScreen": "ملء الشاشة",
  "xmb.video.original": "الأصلي",
  "xmb.video.aspect": "نسبة العرض إلى الارتفاع",
- "xmb.keyboard.paste": "لصق"
+ "xmb.keyboard.paste": "لصق",
+ "xmb.video.shader.failed": "لا يمكن تشغيل هذا التظليل هنا، لذا يُعرض الفيديو بدونه."
 }

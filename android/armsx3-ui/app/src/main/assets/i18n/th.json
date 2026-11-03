@@ -1531,5 +1531,6 @@
  "xmb.video.fullScreen": "เต็มหน้าจอ",
  "xmb.video.original": "ต้นฉบับ",
  "xmb.video.aspect": "อัตราส่วนภาพ",
- "xmb.keyboard.paste": "วาง"
+ "xmb.keyboard.paste": "วาง",
+ "xmb.video.shader.failed": "เชเดอร์นี้ใช้งานที่นี่ไม่ได้ จึงเล่นวิดีโอโดยไม่มีเชเดอร์"
 }

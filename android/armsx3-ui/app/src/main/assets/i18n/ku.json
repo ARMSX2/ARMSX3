@@ -1531,5 +1531,6 @@
  "xmb.video.fullScreen": "Ekrana Tijî",
  "xmb.video.original": "Orîjînal",
  "xmb.video.aspect": "Rêjeya Dîmenê",
- "xmb.keyboard.paste": "Pêve bike"
+ "xmb.keyboard.paste": "Pêve bike",
+ "xmb.video.shader.failed": "Ev shader li vir naxebite, ji ber vê vîdyo bê wê tê lîstin."
 }

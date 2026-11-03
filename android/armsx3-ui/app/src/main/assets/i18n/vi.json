@@ -1531,5 +1531,6 @@
  "xmb.video.fullScreen": "Toàn màn hình",
  "xmb.video.original": "Gốc",
  "xmb.video.aspect": "Tỷ lệ khung hình",
- "xmb.keyboard.paste": "Dán"
+ "xmb.keyboard.paste": "Dán",
+ "xmb.video.shader.failed": "Shader này không chạy được ở đây nên video được phát mà không có nó."
 }

@@ -1531,5 +1531,6 @@
  "xmb.video.fullScreen": "Pantalla completa",
  "xmb.video.original": "Original",
  "xmb.video.aspect": "Relación de aspecto",
- "xmb.keyboard.paste": "Pegar"
+ "xmb.keyboard.paste": "Pegar",
+ "xmb.video.shader.failed": "Este shader no puede ejecutarse aquí, así que el vídeo se reproduce sin él."
 }
