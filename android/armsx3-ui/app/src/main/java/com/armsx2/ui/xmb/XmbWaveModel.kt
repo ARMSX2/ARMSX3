@@ -201,8 +201,9 @@ class XmbWaveModel(initialState: FloatArray?, val line: Line = XmbWaveFirmware.l
         latticeTime += dt * 60f * line.timestep * 1e-3f * (1f + billow * 1.5f)
         if (latticeTime > 100f) latticeTime = 0f
         fillLattice(latticeTime, billow)
-        val sy = SY
-        val sx = SY / aspect
+        // Held upright, as much across as on 16:9 and more up and down, as the visualizers do.
+        val sx = SY / maxOf(aspect, 16f / 9f)
+        val sy = sx * aspect
         for (i in 0 until N) {
             // The grid as the frame shows it, between two steps, then narrowed and widened along its
             // length (0x4f81c: cos, a fifth of a smoothstep, about PARAM1).

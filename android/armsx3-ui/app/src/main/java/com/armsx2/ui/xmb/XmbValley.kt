@@ -562,7 +562,9 @@ internal class XmbValleyView(context: Context) : TextureView(context), TextureVi
             // The camera, POS and TARGET from where the terrain has got to.
             val t = scene.travelled
             Matrix.setLookAtM(view, 0, p.posX, p.posY, p.posZ + t, p.targetX, p.targetY, p.targetZ + t, 0f, 1f, 0f)
-            Matrix.perspectiveM(proj, 0, p.zoom, w.toFloat() / h.coerceAtLeast(1), 0.1f, 10000f)
+            // Held upright, as much across as the console's 16:9 shows, and more up and down.
+            val aspect = w.toFloat() / h.coerceAtLeast(1)
+            Matrix.perspectiveM(proj, 0, xmbFovy(p.zoom, aspect), aspect, 0.1f, 10000f)
             Matrix.multiplyMM(mvp, 0, proj, 0, view, 0)
             val fade = p.fade * p.fade
             val newest = scene.newest

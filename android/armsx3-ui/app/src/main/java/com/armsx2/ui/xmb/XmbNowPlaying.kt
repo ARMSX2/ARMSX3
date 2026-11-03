@@ -411,9 +411,11 @@ internal fun XmbNowPlaying(close: () -> Unit) {
                 }
             }
         }
-        // Square's hint, bottom right, where the XMB's own hints sit.
+        // Square's hint, bottom right, where the XMB's own hints sit; held upright, top right under
+        // Back, clear of the control panel.
         if (!visualizerOnly) Row(
-            Modifier.align(Alignment.BottomEnd).padding(end = d(10f))
+            (if (landscape) Modifier.align(Alignment.BottomEnd).padding(end = d(10f))
+            else Modifier.align(Alignment.TopEnd).padding(top = d(64f), end = d(10f)))
                 .clickable(remember { MutableInteractionSource() }, indication = null) { visualizerOnly = !visualizerOnly }
                 .padding(start = d(20f), end = d(20f), top = d(14f), bottom = d(10f)),
             verticalAlignment = Alignment.CenterVertically,

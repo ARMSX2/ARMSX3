@@ -410,9 +410,11 @@ internal class XmbGaiaView(context: Context) : TextureView(context), TextureView
                 GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
                 return
             }
-            val fovy = camera(p, pathTime, eye, center, up)
+            val aspect = w.toFloat() / h.coerceAtLeast(1)
+            // Held upright, as much across as the console's 16:9 shows, and more up and down.
+            val fovy = xmbFovy(camera(p, pathTime, eye, center, up), aspect)
             Matrix.setLookAtM(view, 0, eye[0], eye[1], eye[2], center[0], center[1], center[2], up[0], up[1], up[2])
-            Matrix.perspectiveM(proj, 0, fovy, w.toFloat() / h.coerceAtLeast(1), 0.01f, 1000f)
+            Matrix.perspectiveM(proj, 0, fovy, aspect, 0.01f, 1000f)
             Matrix.multiplyMM(viewProj, 0, proj, 0, view, 0)
             Matrix.invertM(invViewProj, 0, viewProj, 0)
 
@@ -421,7 +423,6 @@ internal class XmbGaiaView(context: Context) : TextureView(context), TextureView
             val az = Math.toRadians(p.f("SUN.mnu", "SUN ANG Z", 0f).toDouble())
             val sun = floatArrayOf((sin(ay) * sin(az)).toFloat(), cos(ay).toFloat(), (sin(ay) * cos(az)).toFloat())
 
-            val aspect = w.toFloat() / h.coerceAtLeast(1)
             val sc = target(scene, w, h).also { scene = it }
             // Gaia's glare is finer than the XMB's: 256 high and twice that across on a wide screen,
             // in eight sizes (its HDR takes TEX SIZE 9 and 8 levels).

@@ -517,6 +517,17 @@ internal class MusicDrive {
     }
 }
 
+/**
+ * The console's views are made for its 16:9 screen. A narrower one (a phone held upright) sees as
+ * much across as that and more above and below, rather than losing the sides: [fovy] (degrees, for
+ * 16:9) as it needs to be at [aspect].
+ */
+internal fun xmbFovy(fovy: Float, aspect: Float): Float {
+    if (aspect >= 16f / 9f) return fovy
+    val half = Math.toRadians(fovy / 2.0)
+    return Math.toDegrees(2.0 * kotlin.math.atan(kotlin.math.tan(half) * (16.0 / 9.0) / aspect)).toFloat().coerceAtMost(150f)
+}
+
 /** The visualizers to choose between in Now Playing: the console's, then the PSP's lines. */
 internal enum class XmbVisualizerKind(val id: String, val title: String) {
     Waves("waves", "Waves"),
