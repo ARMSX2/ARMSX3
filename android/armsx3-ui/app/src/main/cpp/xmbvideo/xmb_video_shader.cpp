@@ -12,6 +12,7 @@
 // device, made when a shader is picked and gone when the video closes.
 
 #include <android/hardware_buffer.h>
+#include <dlfcn.h>
 #include <android/log.h>
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
@@ -53,6 +54,21 @@ const uint32_t kVert[] = {
 const uint32_t kFrag[] = {
 #include "picture.frag.inc"
 };
+
+// A frame buffer's identity for the import cache. AHardwareBuffer_getId came with Android 12, so it is
+// looked up rather than linked (the a11 and legacy builds run on Android 11). Before it, the buffer's
+// address serves: each import holds a reference to its buffer, so no other buffer can take that
+// address while it is cached.
+uint64_t bufferKey(AHardwareBuffer* buffer) {
+  using GetId = int (*)(const AHardwareBuffer*, uint64_t*);
+  static const GetId get_id = [] {
+    void* lib = dlopen("libnativewindow.so", RTLD_NOW);
+    return lib != nullptr ? reinterpret_cast<GetId>(dlsym(lib, "AHardwareBuffer_getId")) : nullptr;
+  }();
+  uint64_t id = 0;
+  if (get_id != nullptr && get_id(buffer, &id) == 0) return id;
+  return reinterpret_cast<uintptr_t>(buffer);
+}
 
 const libra_instance_t& libra() {
   static const libra_instance_t instance = librashader_load_instance();
@@ -524,8 +540,7 @@ class Stage {
   }
 
   Imported* importBuffer(AHardwareBuffer* buffer, Reading*& reading) {
-    uint64_t id = 0;
-    AHardwareBuffer_getId(buffer, &id);
+    const uint64_t id = bufferKey(buffer);
     auto it = imported_.find(id);
     if (it != imported_.end()) {
       reading = &readings_[it->second.key];
