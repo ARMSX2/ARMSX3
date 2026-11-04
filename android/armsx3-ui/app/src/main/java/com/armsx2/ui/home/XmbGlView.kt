@@ -617,12 +617,13 @@ void main() {
   gl_Position = vec4(aPos, 0.0, 1.0);
 }"""
 
-        // The sparkles' wind from moving the controller (XmbSparkleMotion): unhurried, a firm swing
-        // carries the field a few percent of the screen and a 15 degree tip drifts it about a tenth
-        // of a screen a second, and it eases off over a second or two.
-        private const val SPARK_PUSH = 5f
-        private const val SPARK_FRICTION = 1.2f
-        private const val SPARK_MAX_SPEED = 0.9f
+        // The sparkles' wind from moving the controller (XmbSparkleMotion): slow, as on the console. A
+        // firm swing drifts the field a few hundredths of the screen a second, a 15 degree tip about
+        // as much, never faster than a tenth of the screen a second, and it glides to a stop over a
+        // couple of seconds. (User 11-04: five times this was "far too fast" against the real XMB.)
+        private const val SPARK_PUSH = 1.2f
+        private const val SPARK_FRICTION = 0.8f
+        private const val SPARK_MAX_SPEED = 0.2f
         private const val SPARK_SCATTER_FADE = 2.5f
 
         /** XmbWaveModel's projection height (its SY), which the particles' camera shares. */

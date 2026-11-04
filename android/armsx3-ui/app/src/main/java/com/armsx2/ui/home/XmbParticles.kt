@@ -301,7 +301,7 @@ internal class XmbParticles {
         private const val SPIN_TIME_SCALE = 2.74f
 
         /** A hard shake's jolt on every flake, on top of the jitter (PARTICLES_UI.mnu "dshake brw imp" in spirit). */
-        private const val SCATTER_KICK = 1.5f
+        private const val SCATTER_KICK = 0.6f
 
         // particles_quads / particles_second, with the constants the RSX capture of the console's
         // XMB showed them drawn with (PARTICLES.mnu's own values, as the shaders take them).
