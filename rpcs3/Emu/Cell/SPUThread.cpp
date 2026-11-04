@@ -321,6 +321,84 @@ static FORCE_INLINE bool rdata_fence()
 	return true;
 }
 
+#if defined(ARCH_ARM64)
+// A line another core is still writing, read with its second half landed and its first half not.
+//
+// The Cell and x86 both show another core's stores to one 128-byte line in the order they were
+// made, so a reader that sees a later part of the line written also sees the earlier parts. AArch64
+// promises no order between stores to two different cache lines, and its lines are 64 bytes, so
+// the two halves of a PS3 line can become visible in either order for a moment. A snapshot taken in
+// that moment matches memory as this core sees it, so the timestamp check and the second comparison
+// in GETLLAR both pass.
+//
+// Yakuza: Dead Souls froze on exactly that. Its command-patching SPURS task reads a ring of 32-byte
+// commands one 128-byte line at a time and takes a line as complete once its fourth entry is
+// non-zero. One GETLLAR caught a line with entries 2 and 3 written and entries 0 and 1 still zero.
+// The task moved past the line, then stopped at the first empty entry for good, and the jump in the
+// RSX command buffer that a later command would have released kept the GPU waiting, and the main
+// thread with it.
+//
+// A line whose bytes 32..63 are all zero while its second half holds data has that shape. Wait a
+// few microseconds, long enough for a store still in flight to land, and compare again. Lines this
+// SPU updates itself are left alone: an update that started from such a copy fails its PUTLLC and
+// retries anyway, and the SPURS control block, which every kernel updates constantly, often has
+// that shape.
+//
+// Only Yakuza: Dead Souls is known to need it, so only its five releases turn it on. The flag is
+// written whenever an SPU thread is created, before the game's SPU code runs, so GETLLAR reads one
+// bool, and the next game booted sets it again for itself.
+static atomic_t<bool> g_spu_getllar_settle{false};
+
+static bool spu_getllar_settle_title(std::string_view title)
+{
+	static constexpr std::string_view s_titles[] =
+	{
+		"BLUS30826"sv, "BLES01399"sv, "BLJM60316"sv, // disc
+		"NPUB31509"sv, "NPEB02034"sv, // PSN
+	};
+
+	return std::find(std::begin(s_titles), std::end(s_titles), title) != std::end(s_titles);
+}
+
+static thread_local u32 s_getllar_putllc_lines[4]{};
+static thread_local u32 s_getllar_putllc_next = 0;
+static thread_local u32 s_getllar_settled_addr = 0;
+static thread_local u32 s_getllar_settled_hash = 0;
+
+static FORCE_INLINE bool rdata_looks_half_landed(const spu_rdata_t& _data)
+{
+	const auto data = reinterpret_cast<const v128*>(_data);
+	return gv_testz(data[2] | data[3]) && !gv_testz((data[4] | data[5]) | (data[6] | data[7]));
+}
+
+static FORCE_INLINE bool rdata_updated_by_this_spu(u32 addr)
+{
+	return std::find(std::begin(s_getllar_putllc_lines), std::end(s_getllar_putllc_lines), addr) != std::end(s_getllar_putllc_lines);
+}
+
+static FORCE_INLINE void rdata_note_putllc_line(u32 addr)
+{
+	if (!rdata_updated_by_this_spu(addr))
+	{
+		s_getllar_putllc_lines[s_getllar_putllc_next++ % std::size(s_getllar_putllc_lines)] = addr;
+	}
+}
+
+static void rdata_settle_wait()
+{
+	u64 freq = 0;
+	asm volatile("mrs %0, cntfrq_el0" : "=r"(freq));
+
+	// About 3 microseconds. A store waits for its cache line far less than that.
+	const u64 stop = utils::get_tsc() + std::max<u64>(freq / 333'333, 2);
+
+	while (utils::get_tsc() < stop)
+	{
+		utils::pause();
+	}
+}
+#endif
+
 #if defined(ARCH_X64)
 static FORCE_INLINE void mov_rdata_avx(__m256i* dst, const __m256i* src)
 {
@@ -2142,6 +2220,10 @@ spu_thread::spu_thread(lv2_spu_group* group, u32 index, std::string_view name, u
 {
 	init_spu_decoder();
 
+#if defined(ARCH_ARM64)
+	g_spu_getllar_settle = spu_getllar_settle_title(Emu.GetTitleID());
+#endif
+
 	if (g_cfg.core.mfc_debug)
 	{
 		utils::memory_commit(vm::g_stat_addr + vm_offset(), SPU_LS_SIZE);
@@ -2205,6 +2287,10 @@ spu_thread::spu_thread(utils::serial& ar, lv2_spu_group* group)
 	, spu_tname(make_single<std::string>(ar.operator std::string()))
 {
 	init_spu_decoder();
+
+#if defined(ARCH_ARM64)
+	g_spu_getllar_settle = spu_getllar_settle_title(Emu.GetTitleID());
+#endif
 
 	if (g_cfg.core.mfc_debug)
 	{
@@ -5999,6 +6085,30 @@ bool spu_thread::process_mfc_cmd()
 				continue;
 			}
 
+#if defined(ARCH_ARM64)
+			// See rdata_looks_half_landed()
+			if (g_spu_getllar_settle.observe() && rdata_looks_half_landed(rdata) && addr != spurs_addr && !rdata_updated_by_this_spu(addr))
+			{
+				const u32 hash = compute_rdata_hash32(rdata);
+
+				// A line that kept this shape through one wait is taken as it is until it changes
+				if (s_getllar_settled_addr != addr || s_getllar_settled_hash != hash)
+				{
+					rdata_settle_wait();
+					atomic_fence_acquire();
+
+					if (vm::reservation_acquire(addr) != ntime || !cmp_rdata(rdata, data))
+					{
+						// It was still being written: read it again
+						continue;
+					}
+
+					s_getllar_settled_addr = addr;
+					s_getllar_settled_hash = hash;
+				}
+			}
+#endif
+
 			if (i >= 15 && g_cfg.core.perf_report) [[unlikely]]
 			{
 				perf_log.warning("GETLLAR: took too long: %u", i);
@@ -6028,6 +6138,14 @@ bool spu_thread::process_mfc_cmd()
 
 	case MFC_PUTLLC_CMD:
 	{
+#if defined(ARCH_ARM64)
+		// See rdata_looks_half_landed()
+		if (g_spu_getllar_settle.observe())
+		{
+			rdata_note_putllc_line(ch_mfc_cmd.eal & -128);
+		}
+#endif
+
 		// Avoid logging useless commands if there is no reservation
 		const bool dump = g_cfg.core.mfc_debug && raddr;
 
