@@ -119,8 +119,8 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
         private var bgProg = 0
         private var waveProg = 0
         private var bgVao = 0
-        private var sparkProg = 0
-        private var sparkVao = 0
+        /** XMB mode's sparkles, the console's particle field (XmbParticles). */
+        private var particles: XmbParticles? = null
         private var gridVao = 0
         private var gridIndexCount = 0
         private var splineTex = 0
@@ -130,25 +130,13 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
         private val cp = FloatArray(28)
         private var startNanos = 0L
 
-        // The sparkles' sideways drift from moving the controller, in clip-space units: where the
-        // field has moved to (kept within +-6, see SPARK_VS), how fast, and how scattered.
-        private var sparkShift = 0f
+        // The wind on the sparkles from moving the controller or the XMB's cursor, in clip-space units
+        // a second across and up, and how scattered a hard shake has left them.
         private var sparkVelocity = 0f
+        private var sparkVelocityY = 0f
         private var sparkScatter = 0f
         private var sparkLastNanos = 0L
-
-        // Up and down from scrolling the icons, springing back to rest.
-        private var sparkOffsetY = 0f
-        private var sparkVelocityY = 0f
         private val sparkNudge = FloatArray(2)
-
-        // Where the wave's band is across the screen (XmbFirmwareWave.band), eased so the sparkles
-        // glide with it, and the frame's raw reading.
-        private val bandY = FloatArray(BAND_N)
-        private val bandH = FloatArray(BAND_N)
-        private val bandYNow = FloatArray(BAND_N)
-        private val bandHNow = FloatArray(BAND_N)
-        private var bandReady = false
 
         // The firmware's iridescent swirl for the sparkles' colours: white until it is read.
         private var iridTex = 0
@@ -271,7 +259,7 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
                     val push = drive()
                     wave.drive = push
                     wave.draw(timeSec, width, height, com.armsx2.ui.xmb.XmbOriginalColors.bootWave * (1f + push * 0.35f))
-                    drawSparks(timeSec)
+                    drawParticles()
                     return
                 }
             }
@@ -322,38 +310,30 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
             GLES30.glDrawElements(GLES30.GL_TRIANGLE_STRIP, gridIndexCount, GLES30.GL_UNSIGNED_SHORT, 0)
             GLES30.glBindVertexArray(0)
 
-            // XMB mode: the console's sparkles, specks of light drifting and twinkling about the wave.
-            if (com.armsx2.ui.theme.LibraryBackgroundColorPreferences.xmbModeGl) drawSparks(timeSec)
-        }
-
-        private fun drawSparks(timeSec: Float) {
-            val dt = stepSparkMotion()
-            followBand(dt)
-            GLES30.glEnable(GLES30.GL_BLEND)
-            GLES30.glBlendFuncSeparate(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE, GLES30.GL_ZERO, GLES30.GL_ONE)
-            GLES30.glUseProgram(sparkProg)
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uTime"), timeSec)
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uShift"), sparkShift)
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uOffY"), sparkOffsetY)
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uScatter"), sparkScatter)
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, iridescentTexture())
-            GLES30.glUniform1i(GLES30.glGetUniformLocation(sparkProg, "uIrid"), 0)
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uTint"), if (iridLoaded) SPARK_TINT else 0f)
-            GLES30.glUniform1fv(GLES30.glGetUniformLocation(sparkProg, "uBandY"), BAND_N, bandY, 0)
-            GLES30.glUniform1fv(GLES30.glGetUniformLocation(sparkProg, "uBandH"), BAND_N, bandH, 0)
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uSize"), height / 450f)
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uLevel"), com.armsx2.ui.xmb.XmbOriginalColors.bootWave)
-            GLES30.glBindVertexArray(sparkVao)
-            GLES30.glDrawArrays(GLES30.GL_POINTS, 0, SPARKS)
-            GLES30.glBindVertexArray(0)
-            GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
         }
 
         /**
-         * Moves the sparkle field by the controller's motion (XmbSparkleMotion's push, in g): the push
-         * speeds the field up, friction slows it, so a swing carries the sparkles the way the pad went
-         * and a tip keeps them drifting downhill. A hard shake scatters them, fading out.
+         * The console's sparkles (XmbParticles): born on the wave's surface as it is this frame, moved
+         * on, and drawn over it, coming up with the wave in XMB mode's boot.
+         */
+        private fun drawParticles() {
+            val dt = stepSparkMotion()
+            val wave = firmwareWave ?: return
+            val p = particles ?: return
+            // The wave's projection (XmbWaveModel.update), which the particles' camera shares.
+            val aspect = width.toFloat() / height.coerceAtLeast(1)
+            val sx = WAVE_SY / maxOf(aspect, 16f / 9f)
+            val sy = sx * aspect
+            p.setWave(wave.controlPoints, sx, sy)
+            // The wind, from clip-space units a second into world ones at the field's middle depth.
+            p.step(dt, sparkVelocity * FIELD_DEPTH / sx, sparkVelocityY * FIELD_DEPTH / sy, sparkScatter)
+            p.draw(sx, sy, com.armsx2.ui.xmb.XmbOriginalColors.bootWave, iridescentTexture(), if (iridLoaded) 1f else 0f)
+        }
+
+        /**
+         * The wind on the sparkle field from the controller's motion (XmbSparkleMotion's push, in g):
+         * the push speeds it up, friction slows it, so a swing carries the sparkles the way the pad
+         * went and a tip keeps them drifting downhill. A hard shake scatters them, fading out.
          */
         private fun stepSparkMotion(): Float {
             val now = System.nanoTime()
@@ -365,13 +345,7 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
             sparkVelocityY += sparkNudge[1] * SPARK_NUDGE_Y
             sparkVelocity = ((sparkVelocity + motion.push * SPARK_PUSH * dt) * exp(-SPARK_FRICTION * dt))
                 .coerceIn(-SPARK_MAX_SPEED, SPARK_MAX_SPEED)
-            sparkShift += sparkVelocity * dt
-            // Every speck moves by the shift times a factor of 0.6 to 1.4 in steps of 0.2, and 12 of
-            // any of those is a whole number of 2.4-wide wraps, so this jump is invisible.
-            if (sparkShift > 6f) sparkShift -= 12f else if (sparkShift < -6f) sparkShift += 12f
-            // Up and down they spring back: the band is where they belong.
-            sparkVelocityY = (sparkVelocityY - sparkOffsetY * SPARK_SPRING * dt) * exp(-SPARK_SPRING_DAMP * dt)
-            sparkOffsetY += sparkVelocityY * dt
+            sparkVelocityY = (sparkVelocityY * exp(-SPARK_FRICTION * dt)).coerceIn(-SPARK_MAX_SPEED, SPARK_MAX_SPEED)
             sparkScatter = maxOf(sparkScatter * exp(-SPARK_SCATTER_FADE * dt), motion.shake)
             return dt
         }
@@ -399,25 +373,6 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
                 }
             }
             return iridTex
-        }
-
-        /**
-         * The sparkles gather about the wave's band, so they follow where it is now: XMB mode's own
-         * wave reports it; otherwise (the library's wave as a fallback) a band low across the middle.
-         */
-        private fun followBand(dt: Float) {
-            if (firmwareWave?.band(bandYNow, bandHNow) != true) {
-                for (k in 0 until BAND_N) {
-                    bandYNow[k] = -0.15f
-                    bandHNow[k] = 0.2f
-                }
-            }
-            val ease = if (bandReady) 1f - exp(-dt * 4f) else 1f
-            bandReady = true
-            for (k in 0 until BAND_N) {
-                bandY[k] += (bandYNow[k] - bandY[k]) * ease
-                bandH[k] += (bandHNow[k] - bandH[k]) * ease
-            }
         }
 
         /** Port of linkev writeDisplacementTexture: 28 control points per row from band + legacy
@@ -462,8 +417,7 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
             bgProg = link(BG_VS, BG_FS)
             waveProg = link(WAVE_VS, WAVE_FS)
             bgVao = makeFullscreenQuad()
-            sparkProg = link(SPARK_VS, SPARK_FS)
-            sparkVao = makeSparks()
+            particles = XmbParticles().also { it.init() }
             makeGrid(100)
             makeSplineTexture()
         }
@@ -502,39 +456,6 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
             val loc = GLES30.glGetAttribLocation(bgProg, "aPos")
             GLES30.glEnableVertexAttribArray(loc)
             GLES30.glVertexAttribPointer(loc, 2, GLES30.GL_FLOAT, false, 0, 0)
-            GLES30.glBindVertexArray(0)
-            return vao[0]
-        }
-
-        /**
-         * Each speck: where it starts across (clip space), how far from the middle of the wave's band
-         * in half-heights of the band (up positive), its drift, a phase. As on the console they keep
-         * close to the wave: most on the band, a thin haze just above it (less below), a few further.
-         */
-        private fun makeSparks(): Int {
-            val rnd = java.util.Random(0x5EEDL)
-            val data = FloatArray(SPARKS * 4)
-            for (i in 0 until SPARKS) {
-                data[i * 4] = rnd.nextFloat() * 2.4f - 1.2f
-                val pick = rnd.nextFloat()
-                val g = kotlin.math.abs(rnd.nextGaussian().toFloat())
-                data[i * 4 + 1] = when {
-                    pick < 0.72f -> rnd.nextGaussian().toFloat() * 0.5f
-                    pick < 0.96f -> if (rnd.nextFloat() < 0.75f) 0.45f + g * 0.7f else -(0.45f + g * 0.45f)
-                    else -> rnd.nextFloat() * 5f - 2f
-                }
-                data[i * 4 + 2] = 0.006f + rnd.nextFloat() * 0.018f
-                data[i * 4 + 3] = rnd.nextFloat()
-            }
-            val vao = IntArray(1); GLES30.glGenVertexArrays(1, vao, 0); GLES30.glBindVertexArray(vao[0])
-            val buf = IntArray(1); GLES30.glGenBuffers(1, buf, 0)
-            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, buf[0])
-            val fb = ByteBuffer.allocateDirect(data.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
-            fb.put(data).position(0)
-            GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, data.size * 4, fb, GLES30.GL_STATIC_DRAW)
-            val loc = GLES30.glGetAttribLocation(sparkProg, "aSpark")
-            GLES30.glEnableVertexAttribArray(loc)
-            GLES30.glVertexAttribPointer(loc, 4, GLES30.GL_FLOAT, false, 0, 0)
             GLES30.glBindVertexArray(0)
             return vao[0]
         }
@@ -697,88 +618,25 @@ void main() {
   gl_Position = vec4(aPos, 0.0, 1.0);
 }"""
 
-        /** The console's XMB has hundreds of specks about its wave. */
-        private const val SPARKS = 640
-
-        /** How far the sparkles take the iridescent swirl's colour over white: a pastel tint, as on the console. */
-        private const val SPARK_TINT = 0.55f
-
-        /** Points across the screen at which the wave's band is followed (SPARK_VS has the same). */
-        private const val BAND_N = 13
-
-        // The sparkles' response to moving the controller (XmbSparkleMotion): unhurried, a firm
-        // swing carries the field a few percent of the screen and a 15 degree tip drifts it about a
-        // tenth of a screen a second, and it slows to a stop over a second or two.
+        // The sparkles' wind from moving the controller (XmbSparkleMotion): unhurried, a firm swing
+        // carries the field a few percent of the screen and a 15 degree tip drifts it about a tenth
+        // of a screen a second, and it eases off over a second or two.
         private const val SPARK_PUSH = 5f
         private const val SPARK_FRICTION = 1.2f
         private const val SPARK_MAX_SPEED = 0.9f
         private const val SPARK_SCATTER_FADE = 2.5f
 
-        // Moving through the XMB (XmbSparkles): a column across, or a row up or down, kicks the
-        // field the way the icons went; up and down it springs back to the band.
+        // Moving through the XMB (XmbSparkles): a column across, or a row up or down, gusts the
+        // field the way the icons went.
         private const val SPARK_NUDGE_X = 0.22f
         private const val SPARK_NUDGE_Y = 0.16f
-        private const val SPARK_SPRING = 3f
-        private const val SPARK_SPRING_DAMP = 3.5f
 
+        /** XmbWaveModel's projection height (its SY), which the particles' camera shares. */
+        private const val WAVE_SY = 2.0057f
 
-        private const val SPARK_VS = """#version 300 es
-precision highp float;
-in vec4 aSpark;
-uniform float uTime;
-uniform float uSize;
-uniform float uShift;
-uniform float uOffY;
-uniform float uScatter;
-uniform float uBandY[13];
-uniform float uBandH[13];
-uniform sampler2D uIrid;
-uniform float uTint;
-out float vAlpha;
-out float vSoft;
-out vec3 vColor;
-void main() {
-  // Five depths, most of them far: the nearer specks are bigger, softer and dimmer, and move
-  // further, by a factor of 0.6 to 1.4 (the CPU keeps uShift within +-6 relying on these steps).
-  float k = floor(pow(fract(aSpark.w * 7.31), 1.7) * 5.0);
-  float depth = (3.0 + k) / 5.0;
-  float x = mod(aSpark.x - uTime * aSpark.z + uShift * depth + 1.2, 2.4) - 1.2;
-  // About the wave's band where it is at this x.
-  float t = clamp((x + 1.2) / 2.4 * 12.0, 0.0, 12.0);
-  int i = int(min(floor(t), 11.0));
-  float f = t - float(i);
-  float by = mix(uBandY[i], uBandY[i + 1], f);
-  float bh = mix(uBandH[i], uBandH[i + 1], f);
-  float y = by + aSpark.y * bh + uOffY * depth + 0.02 * sin(uTime * 0.5 + aSpark.w * 6.2832);
-  // A hard shake scatters them for a moment.
-  x += uScatter * 0.03 * sin(uTime * 13.0 + aSpark.w * 91.0);
-  y += uScatter * 0.03 * cos(uTime * 11.0 + aSpark.w * 57.0);
-  gl_Position = vec4(x, y, 0.0, 1.0);
-  float tw = 0.72 + 0.28 * sin(uTime * (0.6 + aSpark.w * 1.4) + aSpark.w * 40.0);
-  float bright = 0.35 + 0.65 * fract(aSpark.w * 13.7);
-  vAlpha = bright * tw * (1.0 - 0.35 * k / 4.0);
-  vSoft = k / 4.0;
-  gl_PointSize = uSize * (0.8 + 0.5 * k);
-  // The console's particles spin, and each takes its colour off an iridescent swirl
-  // (particles/proc_iridescent.tga) as it turns, so they shimmer through gold, pink and blue.
-  float spin = aSpark.w * 6.2832 + uTime * (0.25 + 0.5 * fract(aSpark.w * 5.1));
-  float r = 0.12 + 0.3 * fract(aSpark.w * 3.7);
-  vec3 irid = textureLod(uIrid, vec2(0.5) + r * vec2(cos(spin), sin(spin)), 0.0).rgb;
-  vColor = mix(vec3(1.0), irid, uTint);
-}"""
+        /** The sparkle field's middle distance from the camera (the RSX capture's median clip w). */
+        private const val FIELD_DEPTH = 8.6f
 
-        private const val SPARK_FS = """#version 300 es
-precision mediump float;
-in float vAlpha;
-in float vSoft;
-in vec3 vColor;
-out vec4 oColor;
-uniform float uLevel;
-void main() {
-  // A far speck is a sharp point; a near one, out of focus, a soft disc.
-  float a = 1.0 - smoothstep(mix(0.12, 0.0, vSoft), 0.5, length(gl_PointCoord - vec2(0.5)));
-  oColor = vec4(vColor, a * vAlpha * 0.9 * uLevel);
-}"""
 
         private const val BG_FS = """#version 300 es
 precision highp float;

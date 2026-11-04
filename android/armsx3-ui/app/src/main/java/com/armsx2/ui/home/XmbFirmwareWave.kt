@@ -29,6 +29,9 @@ import kotlin.math.max
 internal class XmbFirmwareWave(context: Context, private val mood: XmbWaveFirmware.Mood? = null) {
     private val model = XmbWaveModel(loadState(context), mood?.line ?: XmbWaveFirmware.line)
     private val ctrl = FloatArray(XmbWaveModel.N * 4)
+
+    /** The wave's 19x19 control points in clip space (x, y, z, w) as the last [draw] left them. */
+    val controlPoints: FloatArray get() = ctrl
     private val ctrlBuf: FloatBuffer = ByteBuffer.allocateDirect(ctrl.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
 
     private var lineProg = 0
@@ -329,57 +332,6 @@ internal class XmbFirmwareWave(context: Context, private val mood: XmbWaveFirmwa
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, filter)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, filter)
         return t[0]
-    }
-
-    // For band(): sums per slot across the screen.
-    private var bandSum = FloatArray(0)
-    private var bandSumSq = FloatArray(0)
-    private var bandCount = IntArray(0)
-
-    /**
-     * Where the band is across the screen, for the sparkles that gather about it: at [outY].size
-     * evenly spaced x from -1.2 to 1.2 (clip space), its middle in [outY] and its half-height in
-     * [outH], from the control points of the last [draw] (the surface lies inside them). False
-     * before the first draw.
-     */
-    fun band(outY: FloatArray, outH: FloatArray): Boolean {
-        val n = outY.size
-        if (bandSum.size != n) {
-            bandSum = FloatArray(n)
-            bandSumSq = FloatArray(n)
-            bandCount = IntArray(n)
-        }
-        bandSum.fill(0f)
-        bandSumSq.fill(0f)
-        bandCount.fill(0)
-        for (i in 0 until XmbWaveModel.N) {
-            val w = ctrl[i * 4 + 3]
-            if (w < 0.05f) continue
-            val t = (ctrl[i * 4] / w + 1.2f) / 2.4f * (n - 1)
-            if (t < -0.5f || t > n - 0.5f) continue
-            val k = (t + 0.5f).toInt().coerceIn(0, n - 1)
-            val y = ctrl[i * 4 + 1] / w
-            bandSum[k] += y
-            bandSumSq[k] += y * y
-            bandCount[k]++
-        }
-        if (bandCount.all { it == 0 }) return false
-        for (k in 0 until n) {
-            // A slot with no control point in it takes the nearest one that has.
-            var src = k
-            var d = 1
-            while (bandCount[src] == 0) {
-                src = if (k - d >= 0 && bandCount[k - d] > 0) k - d
-                else if (k + d < n && bandCount[k + d] > 0) k + d
-                else { d++; continue }
-            }
-            val c = bandCount[src].toFloat()
-            val mean = bandSum[src] / c
-            outY[k] = mean
-            // The surface lies well inside its control points, so the band is narrower than their spread.
-            outH[k] = (kotlin.math.sqrt(max(0f, bandSumSq[src] / c - mean * mean)) * 0.9f).coerceIn(0.04f, 0.18f)
-        }
-        return true
     }
 
     /** The 128x128 samples as (row, column), drawn as strips along each line with restarts between. */
