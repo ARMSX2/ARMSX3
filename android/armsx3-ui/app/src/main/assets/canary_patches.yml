@@ -916,3 +916,37 @@ PPU-6e828d3466bb1272243213bef0df0e499f3965a5:
       # Priority the worker is created with, read by lwz r6,-0x22bc(r29) at 0xd7b0c0 (r29 = rtoc 0xedfa50 + 0x80000)
       # for sys_ppu_thread_create at 0xd7b0f4. Read nowhere else and never written.
       - [ be32, 0x00f5d794, 0x000003e9 ] # 1010 -> 1001
+
+# JOURNEY -- froze entering the Graveyard on an 8 Gen 2-class device (1.6.2): the EDGE MLAA
+# post-process threads polled while every SPU sat idle. Whatcookie's "Disable SPU MLAA - Multiple
+# titles (01)" from RPCS3's database stops it (a tester confirmed, 11-03). That one is for every
+# game running this program, so this copy names Journey's serials only. Same two writes as its
+# SPU_MLAA_02: the MLAA job loads 0 where it reads its work, so it does none.
+SPU-9001b44fd7278b5a6fa5385939fe928a0e549394: # SPUNAME: 'PS3_Release/edgepost-mlaa-task.s'
+  Disable SPU MLAA (Journey):
+    Games:
+      "Journey":
+        NPUA80275:
+          - "All"
+        NPEA00288:
+          - "All"
+        NPHA80188:
+          - "All"
+      "Journey: Collector's Edition":
+        NPUA70218:
+          - "All"
+        NPEA00438:
+          - "All"
+        BCUS98377:
+          - "All"
+        BCES01740:
+          - "All"
+      "Journey Retailer Demo":
+        NPUA70230:
+          - "All"
+    Author: Whatcookie
+    Patch Version: 1.0
+    Notes: Removes the anti-aliasing (MLAA) the game runs on the SPUs. Without it, Journey freezes entering the Graveyard.
+    Patch:
+      - [ be32, 0x000031f4, 0x40800003 ] # il r3 0
+      - [ be32, 0x0000349c, 0x40800017 ] # il r23 0

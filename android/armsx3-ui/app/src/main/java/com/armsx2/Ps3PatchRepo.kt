@@ -845,6 +845,65 @@ object Ps3PatchRepo {
             appVersion = "01.00",
             sinceRevision = 22,
         ),
+        // JOURNEY, all eight serials -- Whatcookie's "Disable SPU MLAA" from RPCS3's database, copied
+        // for Journey alone (the original switches MLAA off in every game running the program).
+        // With MLAA on the game froze entering the Graveyard. See canary_patches.yml.
+        Bundled(
+            hash = "SPU-9001b44fd7278b5a6fa5385939fe928a0e549394",
+            name = "Disable SPU MLAA (Journey)",
+            serial = "NPUA80275",
+            appVersion = "All",
+            sinceRevision = 24,
+        ),
+        Bundled(
+            hash = "SPU-9001b44fd7278b5a6fa5385939fe928a0e549394",
+            name = "Disable SPU MLAA (Journey)",
+            serial = "NPEA00288",
+            appVersion = "All",
+            sinceRevision = 24,
+        ),
+        Bundled(
+            hash = "SPU-9001b44fd7278b5a6fa5385939fe928a0e549394",
+            name = "Disable SPU MLAA (Journey)",
+            serial = "NPHA80188",
+            appVersion = "All",
+            sinceRevision = 24,
+        ),
+        Bundled(
+            hash = "SPU-9001b44fd7278b5a6fa5385939fe928a0e549394",
+            name = "Disable SPU MLAA (Journey)",
+            serial = "NPUA70218",
+            appVersion = "All",
+            sinceRevision = 24,
+        ),
+        Bundled(
+            hash = "SPU-9001b44fd7278b5a6fa5385939fe928a0e549394",
+            name = "Disable SPU MLAA (Journey)",
+            serial = "NPEA00438",
+            appVersion = "All",
+            sinceRevision = 24,
+        ),
+        Bundled(
+            hash = "SPU-9001b44fd7278b5a6fa5385939fe928a0e549394",
+            name = "Disable SPU MLAA (Journey)",
+            serial = "BCUS98377",
+            appVersion = "All",
+            sinceRevision = 24,
+        ),
+        Bundled(
+            hash = "SPU-9001b44fd7278b5a6fa5385939fe928a0e549394",
+            name = "Disable SPU MLAA (Journey)",
+            serial = "BCES01740",
+            appVersion = "All",
+            sinceRevision = 24,
+        ),
+        Bundled(
+            hash = "SPU-9001b44fd7278b5a6fa5385939fe928a0e549394",
+            name = "Disable SPU MLAA (Journey)",
+            serial = "NPUA70230",
+            appVersion = "All",
+            sinceRevision = 24,
+        ),
     )
 
     private const val BUNDLED_ASSET = "canary_patches.yml"
@@ -854,7 +913,7 @@ object Ps3PatchRepo {
      * install re-imports and enables the new ones. Not a timestamp: it has to be
      * something a diff of this file makes obvious.
      */
-    private const val BUNDLED_REVISION = 23
+    private const val BUNDLED_REVISION = 24
 
     private const val PREFS_NAME = "ARMSX2"
     private const val KEY_BUNDLED_REVISION = "ps3_bundled_patch_revision"
