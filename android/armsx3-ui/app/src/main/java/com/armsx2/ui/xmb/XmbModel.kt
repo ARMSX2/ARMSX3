@@ -307,6 +307,8 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
     fun selectColumn(index: Int) {
         if (index == column || index !in columns.indices) return
         closeAll()
+        // The icons slide the other way from the cursor, and the sparkles go with them.
+        XmbSparkles.nudge(-(index - column).coerceIn(-2, 2).toFloat(), 0f)
         column = index
         XmbSounds.play(XmbSounds.Sfx.CURSOR)
     }
@@ -316,6 +318,8 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
         if (level != null) {
             val i = index.coerceIn(0, (level.children.size - 1).coerceAtLeast(0))
             if (i != level.focus) {
+                // Down the list scrolls it up, and the sparkles rise with it.
+                XmbSparkles.nudge(0f, (i - level.focus).coerceIn(-2, 2).toFloat())
                 level.focus = i
                 XmbSounds.play(XmbSounds.Sfx.CURSOR)
             }
@@ -324,6 +328,7 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
         val c = currentColumn() ?: return
         val i = index.coerceIn(0, (c.items.size - 1).coerceAtLeast(0))
         if (i != focusOf(c)) {
+            XmbSparkles.nudge(0f, (i - focusOf(c)).coerceIn(-2, 2).toFloat())
             focus[c.key] = i
             XmbSounds.play(XmbSounds.Sfx.CURSOR)
         }

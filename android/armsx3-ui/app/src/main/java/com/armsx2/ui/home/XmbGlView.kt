@@ -137,6 +137,19 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
         private var sparkScatter = 0f
         private var sparkLastNanos = 0L
 
+        // Up and down from scrolling the icons, springing back to rest.
+        private var sparkOffsetY = 0f
+        private var sparkVelocityY = 0f
+        private val sparkNudge = FloatArray(2)
+
+        // Where the wave's band is across the screen (XmbFirmwareWave.band), eased so the sparkles
+        // glide with it, and the frame's raw reading.
+        private val bandY = FloatArray(BAND_N)
+        private val bandH = FloatArray(BAND_N)
+        private val bandYNow = FloatArray(BAND_N)
+        private val bandHNow = FloatArray(BAND_N)
+        private var bandReady = false
+
         /** XMB mode's wave, as the console's firmware makes it; made the first time XMB mode shows. */
         private var firmwareWave: XmbFirmwareWave? = null
         private var firmwareWaveFailed = false
@@ -310,14 +323,18 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
         }
 
         private fun drawSparks(timeSec: Float) {
-            stepSparkMotion()
+            val dt = stepSparkMotion()
+            followBand(dt)
             GLES30.glEnable(GLES30.GL_BLEND)
             GLES30.glBlendFuncSeparate(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE, GLES30.GL_ZERO, GLES30.GL_ONE)
             GLES30.glUseProgram(sparkProg)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uTime"), timeSec)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uShift"), sparkShift)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uOffY"), sparkOffsetY)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uScatter"), sparkScatter)
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uSize"), height / 360f)
+            GLES30.glUniform1fv(GLES30.glGetUniformLocation(sparkProg, "uBandY"), BAND_N, bandY, 0)
+            GLES30.glUniform1fv(GLES30.glGetUniformLocation(sparkProg, "uBandH"), BAND_N, bandH, 0)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uSize"), height / 450f)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uLevel"), com.armsx2.ui.xmb.XmbOriginalColors.bootWave)
             GLES30.glBindVertexArray(sparkVao)
             GLES30.glDrawArrays(GLES30.GL_POINTS, 0, SPARKS)
@@ -330,17 +347,44 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
          * speeds the field up, friction slows it, so a swing carries the sparkles the way the pad went
          * and a tip keeps them drifting downhill. A hard shake scatters them, fading out.
          */
-        private fun stepSparkMotion() {
+        private fun stepSparkMotion(): Float {
             val now = System.nanoTime()
             val dt = if (sparkLastNanos == 0L) 0f else ((now - sparkLastNanos) / 1e9f).coerceIn(0f, 0.1f)
             sparkLastNanos = now
+            // Moving through the XMB: a kick the way the icons slid (XmbSparkles).
+            com.armsx2.ui.xmb.XmbSparkles.take(sparkNudge)
+            sparkVelocity += sparkNudge[0] * SPARK_NUDGE_X
+            sparkVelocityY += sparkNudge[1] * SPARK_NUDGE_Y
             sparkVelocity = ((sparkVelocity + motion.push * SPARK_PUSH * dt) * exp(-SPARK_FRICTION * dt))
                 .coerceIn(-SPARK_MAX_SPEED, SPARK_MAX_SPEED)
             sparkShift += sparkVelocity * dt
             // Every speck moves by the shift times a factor of 0.6 to 1.4 in steps of 0.2, and 12 of
             // any of those is a whole number of 2.4-wide wraps, so this jump is invisible.
             if (sparkShift > 6f) sparkShift -= 12f else if (sparkShift < -6f) sparkShift += 12f
+            // Up and down they spring back: the band is where they belong.
+            sparkVelocityY = (sparkVelocityY - sparkOffsetY * SPARK_SPRING * dt) * exp(-SPARK_SPRING_DAMP * dt)
+            sparkOffsetY += sparkVelocityY * dt
             sparkScatter = maxOf(sparkScatter * exp(-SPARK_SCATTER_FADE * dt), motion.shake)
+            return dt
+        }
+
+        /**
+         * The sparkles gather about the wave's band, so they follow where it is now: XMB mode's own
+         * wave reports it; otherwise (the library's wave as a fallback) a band low across the middle.
+         */
+        private fun followBand(dt: Float) {
+            if (firmwareWave?.band(bandYNow, bandHNow) != true) {
+                for (k in 0 until BAND_N) {
+                    bandYNow[k] = -0.15f
+                    bandHNow[k] = 0.2f
+                }
+            }
+            val ease = if (bandReady) 1f - exp(-dt * 4f) else 1f
+            bandReady = true
+            for (k in 0 until BAND_N) {
+                bandY[k] += (bandYNow[k] - bandY[k]) * ease
+                bandH[k] += (bandHNow[k] - bandH[k]) * ease
+            }
         }
 
         /** Port of linkev writeDisplacementTexture: 28 control points per row from band + legacy
@@ -429,14 +473,23 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
             return vao[0]
         }
 
-        /** Each speck: where it starts (x, y in clip space, gathered about the wave), its drift, a phase. */
+        /**
+         * Each speck: where it starts across (clip space), how far from the middle of the wave's band
+         * in half-heights of the band (up positive), its drift, a phase. As on the console, most sit
+         * on the band, a haze reaches above it (and less below), and a few are strewn wide.
+         */
         private fun makeSparks(): Int {
             val rnd = java.util.Random(0x5EEDL)
             val data = FloatArray(SPARKS * 4)
             for (i in 0 until SPARKS) {
                 data[i * 4] = rnd.nextFloat() * 2.4f - 1.2f
-                // About the wave, which XMB mode draws lower (see the wave's uXmb).
-                data[i * 4 + 1] = (rnd.nextGaussian().toFloat() * 0.32f - 0.15f).coerceIn(-0.9f, 0.8f)
+                val pick = rnd.nextFloat()
+                val g = kotlin.math.abs(rnd.nextGaussian().toFloat())
+                data[i * 4 + 1] = when {
+                    pick < 0.5f -> rnd.nextGaussian().toFloat() * 0.75f
+                    pick < 0.85f -> if (rnd.nextFloat() < 0.75f) 0.6f + g * 2.4f else -(0.6f + g * 1.3f)
+                    else -> rnd.nextFloat() * 9f - 3f
+                }
                 data[i * 4 + 2] = 0.006f + rnd.nextFloat() * 0.018f
                 data[i * 4 + 3] = rnd.nextFloat()
             }
@@ -611,15 +664,26 @@ void main() {
   gl_Position = vec4(aPos, 0.0, 1.0);
 }"""
 
-        private const val SPARKS = 56
+        /** The console's XMB has hundreds of specks about its wave. */
+        private const val SPARKS = 640
 
-        // The sparkles' response to moving the controller (XmbSparkleMotion). A firm swing moves the
-        // field about a fifth of the screen; tipping 15 degrees drifts it a third of a screen a
-        // second; the drift halves in under half a second once the pad is still and level.
-        private const val SPARK_PUSH = 16f
-        private const val SPARK_FRICTION = 1.6f
-        private const val SPARK_MAX_SPEED = 3f
+        /** Points across the screen at which the wave's band is followed (SPARK_VS has the same). */
+        private const val BAND_N = 13
+
+        // The sparkles' response to moving the controller (XmbSparkleMotion): unhurried, a firm
+        // swing carries the field a few percent of the screen and a 15 degree tip drifts it about a
+        // tenth of a screen a second, and it slows to a stop over a second or two.
+        private const val SPARK_PUSH = 5f
+        private const val SPARK_FRICTION = 1.2f
+        private const val SPARK_MAX_SPEED = 0.9f
         private const val SPARK_SCATTER_FADE = 2.5f
+
+        // Moving through the XMB (XmbSparkles): a column across, or a row up or down, kicks the
+        // field the way the icons went; up and down it springs back to the band.
+        private const val SPARK_NUDGE_X = 0.22f
+        private const val SPARK_NUDGE_Y = 0.16f
+        private const val SPARK_SPRING = 3f
+        private const val SPARK_SPRING_DAMP = 3.5f
 
 
         private const val SPARK_VS = """#version 300 es
@@ -628,31 +692,46 @@ in vec4 aSpark;
 uniform float uTime;
 uniform float uSize;
 uniform float uShift;
+uniform float uOffY;
 uniform float uScatter;
+uniform float uBandY[13];
+uniform float uBandH[13];
 out float vAlpha;
+out float vSoft;
 void main() {
-  // Moving the controller shifts the field, the nearer (bigger) specks further: five depths, a
-  // factor of 0.6 to 1.4 (the CPU keeps uShift within +-6 relying on these steps).
-  float depth = (3.0 + floor(fract(aSpark.w * 7.31) * 5.0)) / 5.0;
+  // Five depths, most of them far: the nearer specks are bigger, softer and dimmer, and move
+  // further, by a factor of 0.6 to 1.4 (the CPU keeps uShift within +-6 relying on these steps).
+  float k = floor(pow(fract(aSpark.w * 7.31), 1.7) * 5.0);
+  float depth = (3.0 + k) / 5.0;
   float x = mod(aSpark.x - uTime * aSpark.z + uShift * depth + 1.2, 2.4) - 1.2;
-  float y = aSpark.y + 0.025 * sin(uTime * 0.5 + aSpark.w * 6.2832);
+  // About the wave's band where it is at this x.
+  float t = clamp((x + 1.2) / 2.4 * 12.0, 0.0, 12.0);
+  int i = int(min(floor(t), 11.0));
+  float f = t - float(i);
+  float by = mix(uBandY[i], uBandY[i + 1], f);
+  float bh = mix(uBandH[i], uBandH[i + 1], f);
+  float y = by + aSpark.y * bh + uOffY * depth + 0.02 * sin(uTime * 0.5 + aSpark.w * 6.2832);
   // A hard shake scatters them for a moment.
-  x += uScatter * 0.035 * sin(uTime * 13.0 + aSpark.w * 91.0);
-  y += uScatter * 0.035 * cos(uTime * 11.0 + aSpark.w * 57.0);
+  x += uScatter * 0.03 * sin(uTime * 13.0 + aSpark.w * 91.0);
+  y += uScatter * 0.03 * cos(uTime * 11.0 + aSpark.w * 57.0);
   gl_Position = vec4(x, y, 0.0, 1.0);
-  float tw = 0.5 + 0.5 * sin(uTime * (0.7 + aSpark.w * 1.6) + aSpark.w * 40.0);
-  vAlpha = tw * tw * tw;
-  gl_PointSize = uSize * (1.0 + fract(aSpark.w * 7.31) * 1.6);
+  float tw = 0.72 + 0.28 * sin(uTime * (0.6 + aSpark.w * 1.4) + aSpark.w * 40.0);
+  float bright = 0.35 + 0.65 * fract(aSpark.w * 13.7);
+  vAlpha = bright * tw * (1.0 - 0.35 * k / 4.0);
+  vSoft = k / 4.0;
+  gl_PointSize = uSize * (0.8 + 0.5 * k);
 }"""
 
         private const val SPARK_FS = """#version 300 es
 precision mediump float;
 in float vAlpha;
+in float vSoft;
 out vec4 oColor;
 uniform float uLevel;
 void main() {
-  float a = smoothstep(0.5, 0.0, length(gl_PointCoord - vec2(0.5)));
-  oColor = vec4(1.0, 1.0, 1.0, a * a * vAlpha * 0.8 * uLevel);
+  // A far speck is a sharp point; a near one, out of focus, a soft disc.
+  float a = 1.0 - smoothstep(mix(0.12, 0.0, vSoft), 0.5, length(gl_PointCoord - vec2(0.5)));
+  oColor = vec4(1.0, 1.0, 1.0, a * vAlpha * 0.9 * uLevel);
 }"""
 
         private const val BG_FS = """#version 300 es

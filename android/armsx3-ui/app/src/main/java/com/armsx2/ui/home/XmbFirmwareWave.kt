@@ -331,6 +331,56 @@ internal class XmbFirmwareWave(context: Context, private val mood: XmbWaveFirmwa
         return t[0]
     }
 
+    // For band(): sums per slot across the screen.
+    private var bandSum = FloatArray(0)
+    private var bandSumSq = FloatArray(0)
+    private var bandCount = IntArray(0)
+
+    /**
+     * Where the band is across the screen, for the sparkles that gather about it: at [outY].size
+     * evenly spaced x from -1.2 to 1.2 (clip space), its middle in [outY] and its half-height in
+     * [outH], from the control points of the last [draw] (the surface lies inside them). False
+     * before the first draw.
+     */
+    fun band(outY: FloatArray, outH: FloatArray): Boolean {
+        val n = outY.size
+        if (bandSum.size != n) {
+            bandSum = FloatArray(n)
+            bandSumSq = FloatArray(n)
+            bandCount = IntArray(n)
+        }
+        bandSum.fill(0f)
+        bandSumSq.fill(0f)
+        bandCount.fill(0)
+        for (i in 0 until XmbWaveModel.N) {
+            val w = ctrl[i * 4 + 3]
+            if (w < 0.05f) continue
+            val t = (ctrl[i * 4] / w + 1.2f) / 2.4f * (n - 1)
+            if (t < -0.5f || t > n - 0.5f) continue
+            val k = (t + 0.5f).toInt().coerceIn(0, n - 1)
+            val y = ctrl[i * 4 + 1] / w
+            bandSum[k] += y
+            bandSumSq[k] += y * y
+            bandCount[k]++
+        }
+        if (bandCount.all { it == 0 }) return false
+        for (k in 0 until n) {
+            // A slot with no control point in it takes the nearest one that has.
+            var src = k
+            var d = 1
+            while (bandCount[src] == 0) {
+                src = if (k - d >= 0 && bandCount[k - d] > 0) k - d
+                else if (k + d < n && bandCount[k + d] > 0) k + d
+                else { d++; continue }
+            }
+            val c = bandCount[src].toFloat()
+            val mean = bandSum[src] / c
+            outY[k] = mean
+            outH[k] = (kotlin.math.sqrt(max(0f, bandSumSq[src] / c - mean * mean)) * 1.4f).coerceIn(0.05f, 0.35f)
+        }
+        return true
+    }
+
     /** The 128x128 samples as (row, column), drawn as strips along each line with restarts between. */
     private fun makeGrid() {
         val verts = FloatArray(GRID * GRID * 2)
