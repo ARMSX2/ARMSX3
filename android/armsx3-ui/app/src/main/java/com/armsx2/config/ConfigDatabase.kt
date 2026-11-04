@@ -276,6 +276,16 @@ object ConfigDatabase {
         "NPUB90567" to "Core:\n  MFC Commands Shuffling Limit: 1\n",
         "NPUB90604" to "Core:\n  MFC Commands Shuffling Limit: 1\n",
 
+        // Naughty Bear: Panic in Paradise: SPU Block Size Mega.
+        //
+        // The game draws through one raw SPU that interprets a command stream of about 1 MB a frame,
+        // tens of thousands of commands, each a few calls into the program's reader, a handler and
+        // its DMA helper. On Safe every call site ends a compiled function, so each call and return
+        // goes back through the dispatcher; Mega assumes calls return and keeps the code after them
+        // in the caller. On Safe that SPU sat at 100% of a core in play and the game dipped to 18-20
+        // fps with the RSX at 28% and the CPU at about 40% overall (Odin 3, 11-04).
+        "NPUB30828" to "Core:\n  SPU Block Size: Mega\n",
+        "NPEB01054" to "Core:\n  SPU Block Size: Mega\n",
     )
 
     /**
