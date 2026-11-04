@@ -417,7 +417,10 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
             bgProg = link(BG_VS, BG_FS)
             waveProg = link(WAVE_VS, WAVE_FS)
             bgVao = makeFullscreenQuad()
-            particles = XmbParticles().also { it.init() }
+            // The sparkles failing to come up must not take the wave down with them.
+            particles = runCatching { XmbParticles().also { it.init() } }
+                .onFailure { Log.w(TAG, "XMB sparkles init failed", it) }
+                .getOrNull()
             makeGrid(100)
             makeSplineTexture()
         }
