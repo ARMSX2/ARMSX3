@@ -292,6 +292,13 @@ object XmbWaveFirmware {
     val line: XmbWaveModel.Line get() = load().first
     val strands: FloatArray get() = load().second
 
+    /**
+     * The colours the console's particles take as they spin (particles/proc_iridescent.tga, a swirl of
+     * gold, white, pink, purple and blue), as 128x128 RGBA; null without the firmware.
+     */
+    @Volatile var iridescent: ByteArray? = null
+        private set
+
     /** The line colour across the screen (BACKGROUND.mnu colours 3 and 4). */
     @Volatile var colour3 = floatArrayOf(0.847347f, 0.846155f, 0.846448f)
     @Volatile var colour4 = floatArrayOf(0.92487f, 0.922603f, 0.922933f)
@@ -390,6 +397,26 @@ object XmbWaveFirmware {
                 FloatArray(512) { i -> (tga[18 + idLen + min(i, w - 1) * bpp + 2].toInt() and 0xff) / 255f }
             }.getOrNull()
         } ?: XmbWaveModel.fallbackStrands()
+        files?.get("particles/proc_iridescent.tga")?.let { tga ->
+            runCatching {
+                val idLen = tga[0].toInt() and 0xff
+                val w = (tga[12].toInt() and 0xff) or ((tga[13].toInt() and 0xff) shl 8)
+                val h = (tga[14].toInt() and 0xff) or ((tga[15].toInt() and 0xff) shl 8)
+                val bpp = (tga[16].toInt() and 0xff) / 8
+                if (w == 128 && h == 128 && bpp >= 3 && tga.size >= 18 + idLen + w * h * bpp) {
+                    iridescent = ByteArray(w * h * 4) { i ->
+                        val texel = 18 + idLen + (i / 4) * bpp
+                        // BGR(A) in the file.
+                        when (i % 4) {
+                            0 -> tga[texel + 2]
+                            1 -> tga[texel + 1]
+                            2 -> tga[texel]
+                            else -> 0xff.toByte()
+                        }
+                    }
+                }
+            }
+        }
         val result = line to strands
         // Only kept once the firmware was there: until the data folder is known, ask again.
         if (files != null) loaded = result

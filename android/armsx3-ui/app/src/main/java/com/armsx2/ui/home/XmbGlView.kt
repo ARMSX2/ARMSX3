@@ -150,6 +150,10 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
         private val bandHNow = FloatArray(BAND_N)
         private var bandReady = false
 
+        // The firmware's iridescent swirl for the sparkles' colours: white until it is read.
+        private var iridTex = 0
+        private var iridLoaded = false
+
         /** XMB mode's wave, as the console's firmware makes it; made the first time XMB mode shows. */
         private var firmwareWave: XmbFirmwareWave? = null
         private var firmwareWaveFailed = false
@@ -332,6 +336,10 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
             GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uShift"), sparkShift)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uOffY"), sparkOffsetY)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uScatter"), sparkScatter)
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, iridescentTexture())
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(sparkProg, "uIrid"), 0)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uTint"), if (iridLoaded) SPARK_TINT else 0f)
             GLES30.glUniform1fv(GLES30.glGetUniformLocation(sparkProg, "uBandY"), BAND_N, bandY, 0)
             GLES30.glUniform1fv(GLES30.glGetUniformLocation(sparkProg, "uBandH"), BAND_N, bandH, 0)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uSize"), height / 450f)
@@ -366,6 +374,31 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
             sparkOffsetY += sparkVelocityY * dt
             sparkScatter = maxOf(sparkScatter * exp(-SPARK_SCATTER_FADE * dt), motion.shake)
             return dt
+        }
+
+        /** The iridescent swirl, uploaded once the firmware has been read (white until then). */
+        private fun iridescentTexture(): Int {
+            if (iridTex == 0) {
+                val t = IntArray(1)
+                GLES30.glGenTextures(1, t, 0)
+                iridTex = t[0]
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, iridTex)
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+                val white = ByteBuffer.allocateDirect(4).put(byteArrayOf(-1, -1, -1, -1)).also { it.position(0) }
+                GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA, 1, 1, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, white)
+            }
+            if (!iridLoaded) {
+                com.armsx2.ui.xmb.XmbWaveFirmware.iridescent?.let { px ->
+                    GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, iridTex)
+                    val buf = ByteBuffer.allocateDirect(px.size).put(px).also { it.position(0) }
+                    GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA, 128, 128, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, buf)
+                    iridLoaded = true
+                }
+            }
+            return iridTex
         }
 
         /**
@@ -475,8 +508,8 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
 
         /**
          * Each speck: where it starts across (clip space), how far from the middle of the wave's band
-         * in half-heights of the band (up positive), its drift, a phase. As on the console, most sit
-         * on the band, a haze reaches above it (and less below), and a few are strewn wide.
+         * in half-heights of the band (up positive), its drift, a phase. As on the console they keep
+         * close to the wave: most on the band, a thin haze just above it (less below), a few further.
          */
         private fun makeSparks(): Int {
             val rnd = java.util.Random(0x5EEDL)
@@ -486,9 +519,9 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
                 val pick = rnd.nextFloat()
                 val g = kotlin.math.abs(rnd.nextGaussian().toFloat())
                 data[i * 4 + 1] = when {
-                    pick < 0.5f -> rnd.nextGaussian().toFloat() * 0.75f
-                    pick < 0.85f -> if (rnd.nextFloat() < 0.75f) 0.6f + g * 2.4f else -(0.6f + g * 1.3f)
-                    else -> rnd.nextFloat() * 9f - 3f
+                    pick < 0.72f -> rnd.nextGaussian().toFloat() * 0.5f
+                    pick < 0.96f -> if (rnd.nextFloat() < 0.75f) 0.45f + g * 0.7f else -(0.45f + g * 0.45f)
+                    else -> rnd.nextFloat() * 5f - 2f
                 }
                 data[i * 4 + 2] = 0.006f + rnd.nextFloat() * 0.018f
                 data[i * 4 + 3] = rnd.nextFloat()
@@ -667,6 +700,9 @@ void main() {
         /** The console's XMB has hundreds of specks about its wave. */
         private const val SPARKS = 640
 
+        /** How far the sparkles take the iridescent swirl's colour over white: a pastel tint, as on the console. */
+        private const val SPARK_TINT = 0.55f
+
         /** Points across the screen at which the wave's band is followed (SPARK_VS has the same). */
         private const val BAND_N = 13
 
@@ -696,8 +732,11 @@ uniform float uOffY;
 uniform float uScatter;
 uniform float uBandY[13];
 uniform float uBandH[13];
+uniform sampler2D uIrid;
+uniform float uTint;
 out float vAlpha;
 out float vSoft;
+out vec3 vColor;
 void main() {
   // Five depths, most of them far: the nearer specks are bigger, softer and dimmer, and move
   // further, by a factor of 0.6 to 1.4 (the CPU keeps uShift within +-6 relying on these steps).
@@ -720,18 +759,25 @@ void main() {
   vAlpha = bright * tw * (1.0 - 0.35 * k / 4.0);
   vSoft = k / 4.0;
   gl_PointSize = uSize * (0.8 + 0.5 * k);
+  // The console's particles spin, and each takes its colour off an iridescent swirl
+  // (particles/proc_iridescent.tga) as it turns, so they shimmer through gold, pink and blue.
+  float spin = aSpark.w * 6.2832 + uTime * (0.25 + 0.5 * fract(aSpark.w * 5.1));
+  float r = 0.12 + 0.3 * fract(aSpark.w * 3.7);
+  vec3 irid = textureLod(uIrid, vec2(0.5) + r * vec2(cos(spin), sin(spin)), 0.0).rgb;
+  vColor = mix(vec3(1.0), irid, uTint);
 }"""
 
         private const val SPARK_FS = """#version 300 es
 precision mediump float;
 in float vAlpha;
 in float vSoft;
+in vec3 vColor;
 out vec4 oColor;
 uniform float uLevel;
 void main() {
   // A far speck is a sharp point; a near one, out of focus, a soft disc.
   float a = 1.0 - smoothstep(mix(0.12, 0.0, vSoft), 0.5, length(gl_PointCoord - vec2(0.5)));
-  oColor = vec4(1.0, 1.0, 1.0, a * vAlpha * 0.9 * uLevel);
+  oColor = vec4(vColor, a * vAlpha * 0.9 * uLevel);
 }"""
 
         private const val BG_FS = """#version 300 es

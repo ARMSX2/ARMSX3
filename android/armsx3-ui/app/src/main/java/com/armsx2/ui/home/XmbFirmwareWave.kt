@@ -376,7 +376,8 @@ internal class XmbFirmwareWave(context: Context, private val mood: XmbWaveFirmwa
             val c = bandCount[src].toFloat()
             val mean = bandSum[src] / c
             outY[k] = mean
-            outH[k] = (kotlin.math.sqrt(max(0f, bandSumSq[src] / c - mean * mean)) * 1.4f).coerceIn(0.05f, 0.35f)
+            // The surface lies well inside its control points, so the band is narrower than their spread.
+            outH[k] = (kotlin.math.sqrt(max(0f, bandSumSq[src] / c - mean * mean)) * 0.9f).coerceIn(0.04f, 0.18f)
         }
         return true
     }
