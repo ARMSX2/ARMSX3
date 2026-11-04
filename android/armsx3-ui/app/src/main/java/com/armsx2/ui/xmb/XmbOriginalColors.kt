@@ -92,6 +92,9 @@ object XmbOriginalColors {
     @Volatile var bootColor = 1f
     @Volatile var bootWave = 1f
 
+    /** The sparkles, which the console keeps out of its boot: 0 until the XMB's icons come in. */
+    @Volatile var bootSparkles = 1f
+
     // Read by the GL thread every frame, so the calendar is consulted at most once a minute.
     @Volatile private var cached: Gradient? = null
     @Volatile private var cachedAt = 0L

@@ -314,7 +314,8 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
 
         /**
          * The console's sparkles (XmbParticles): born on the wave's surface as it is this frame, moved
-         * on, and drawn over it, coming up with the wave in XMB mode's boot.
+         * on, and drawn over it. Kept out of XMB mode's boot, as the console keeps them out of its own:
+         * they come in with the icons.
          */
         private fun drawParticles() {
             val dt = stepSparkMotion()
@@ -327,7 +328,8 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
             p.setWave(wave.controlPoints, sx, sy)
             // The wind, from clip-space units a second into world ones at the field's middle depth.
             p.step(dt, sparkVelocity * FIELD_DEPTH / sx, sparkVelocityY * FIELD_DEPTH / sy, sparkScatter)
-            p.draw(sx, sy, com.armsx2.ui.xmb.XmbOriginalColors.bootWave, iridescentTexture(), if (iridLoaded) 1f else 0f)
+            val level = com.armsx2.ui.xmb.XmbOriginalColors.bootWave * com.armsx2.ui.xmb.XmbOriginalColors.bootSparkles
+            p.draw(sx, sy, level, iridescentTexture(), if (iridLoaded) 1f else 0f)
         }
 
         /**

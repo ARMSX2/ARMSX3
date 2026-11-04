@@ -109,11 +109,13 @@ fun XmbBoot(onProgress: (Float) -> Unit, onFinished: () -> Unit) {
         XmbBootMusic.hold()
         XmbOriginalColors.bootWave = 0f
         XmbOriginalColors.bootColor = 0f
+        XmbOriginalColors.bootSparkles = 0f
         onDispose {
             XmbInput.blocked = false
             XmbInput.skip = null
             XmbOriginalColors.bootWave = 1f
             XmbOriginalColors.bootColor = 1f
+            XmbOriginalColors.bootSparkles = 1f
             // The sound plays on past the animation, as the console's does; with none, the music
             // comes in now.
             if (ready?.sound == null) XmbBootMusic.release()
@@ -128,6 +130,7 @@ fun XmbBoot(onProgress: (Float) -> Unit, onFinished: () -> Unit) {
         if (r.layers == null) {
             XmbOriginalColors.bootWave = 1f
             XmbOriginalColors.bootColor = 1f
+            XmbOriginalColors.bootSparkles = 1f
             finished()
             return@LaunchedEffect
         }
@@ -142,6 +145,8 @@ fun XmbBoot(onProgress: (Float) -> Unit, onFinished: () -> Unit) {
             t = seconds
             XmbOriginalColors.bootWave = XmbBootTimeline.wave(seconds)
             XmbOriginalColors.bootColor = XmbBootTimeline.color(seconds)
+            // No sparkles in the boot: they come in with the XMB's icons.
+            XmbOriginalColors.bootSparkles = XmbBootTimeline.reveal(seconds)
             progress(seconds)
             if (seconds >= XmbBootTimeline.END) break
         }

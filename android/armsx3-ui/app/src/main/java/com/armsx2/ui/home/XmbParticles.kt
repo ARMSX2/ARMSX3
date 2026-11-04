@@ -360,7 +360,9 @@ void main() {
   // Near and large flakes turn to face the camera; the glare always does, 5.44 times the size.
   float face = clamp(ang * NEAR.x + nearP * NEAR.z + rampC, 0.0, 1.0);
   vec4 qf = uGlare > 0.5 ? vec4(0.0, 0.0, 0.0, 1.0) : normalize(mix(q, vec4(0.0, 0.0, 0.0, 1.0), face));
-  float s = uGlare > 0.5 ? size * GLARE_SIZE : size;
+  // Half the particle size across: the console's flakes measure that (3.6 px across at the median
+  // in its frame dumps, 7.1 when drawn at the full size), and so does its glare.
+  float s = 0.5 * (uGlare > 0.5 ? size * GLARE_SIZE : size);
   mat3 R = quatMat(qf);
   vec2 c = aCorner - 0.5;
   vec3 world = pos + (R[0] * c.x + R[1] * c.y) * s;
@@ -414,11 +416,13 @@ void main() {
     float disc = 1.0 - t * t * (3.0 - 2.0 * t);
     float fuzz = vBlur.x * (NEAR_FUZZINESS - 0.85) + 0.85;
     float profile = disc + blur * (1.0 - disc - exp(-disc * fuzz));
+    // Round to the end: a very blurred flake's soft edge would otherwise show the square's corners.
+    profile *= 1.0 - smoothstep(0.45, 0.5, r);
     vec3 light = abs(dot(N, L)) * LAMBERT + spec * SPECULAR * irid;
     col = (1.0 - exp(-light * EXPOSURE)) * profile * vAlpha;
   } else {
     // The flash's glare: only the highlight, in a glow from the middle.
-    float glow = exp(-pow(clamp(r, 0.0, 1.0), 0.99) * GLARE.y);
+    float glow = exp(-pow(clamp(r, 0.0, 1.0), 0.99) * GLARE.y) * (1.0 - smoothstep(0.35, 0.5, r));
     col = (1.0 - exp(-spec * SPECULAR * irid * EXPOSURE)) * vAlpha * glow * GLARE.x;
   }
   oColor = vec4(col * uLevel, 0.0);
