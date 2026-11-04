@@ -18,34 +18,6 @@ import kotlin.math.exp
 import kotlin.math.sqrt
 
 /**
- * Moving through the XMB nudges its sparkles, as on the console: lines.qrc's PARTICLES_UI.mnu turns
- * the field with the D-pad across the categories ("dpad rot max", "dpad scale x" 1, "dpad scale y"
- * 0) and blows it up and down as the icons scroll ("icon wind", "icon wind scl x" 0, "scl y" 1).
- * The sparkles go the way the icons go. Called on the main thread by the XMB's cursor; the wave's
- * render thread takes what has gathered once a frame.
- */
-object XmbSparkles {
-    private var x = 0f
-    private var y = 0f
-
-    /** The icons slid [dx] columns sideways (right positive) or [dy] rows (up positive). */
-    @Synchronized
-    fun nudge(dx: Float, dy: Float) {
-        x = (x + dx).coerceIn(-4f, 4f)
-        y = (y + dy).coerceIn(-4f, 4f)
-    }
-
-    /** What gathered since the last call into [out] (x, y), and start again. */
-    @Synchronized
-    internal fun take(out: FloatArray) {
-        out[0] = x
-        out[1] = y
-        x = 0f
-        y = 0f
-    }
-}
-
-/**
  * Moving the controller moves the XMB's sparkles, as on the console.
  *
  * The PS3 pushes its wave's particles with the SIXAXIS: lines.qrc's PARTICLES_UI.mnu tunes it with a

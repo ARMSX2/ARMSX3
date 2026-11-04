@@ -130,13 +130,12 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
         private val cp = FloatArray(28)
         private var startNanos = 0L
 
-        // The wind on the sparkles from moving the controller or the XMB's cursor, in clip-space units
-        // a second across and up, and how scattered a hard shake has left them.
+        // The wind on the sparkles from moving the controller, in clip-space units a second across,
+        // and how scattered a hard shake has left them. Only the controller's motion: the console's
+        // sparkles take no notice of the D-pad or the sticks (user, against the real XMB, 11-04).
         private var sparkVelocity = 0f
-        private var sparkVelocityY = 0f
         private var sparkScatter = 0f
         private var sparkLastNanos = 0L
-        private val sparkNudge = FloatArray(2)
 
         // The firmware's iridescent swirl for the sparkles' colours: white until it is read.
         private var iridTex = 0
@@ -327,7 +326,7 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
             val sy = sx * aspect
             p.setWave(wave.controlPoints, sx, sy)
             // The wind, from clip-space units a second into world ones at the field's middle depth.
-            p.step(dt, sparkVelocity * FIELD_DEPTH / sx, sparkVelocityY * FIELD_DEPTH / sy, sparkScatter)
+            p.step(dt, sparkVelocity * FIELD_DEPTH / sx, 0f, sparkScatter)
             val level = com.armsx2.ui.xmb.XmbOriginalColors.bootWave * com.armsx2.ui.xmb.XmbOriginalColors.bootSparkles
             p.draw(sx, sy, level, iridescentTexture(), if (iridLoaded) 1f else 0f)
         }
@@ -341,13 +340,8 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
             val now = System.nanoTime()
             val dt = if (sparkLastNanos == 0L) 0f else ((now - sparkLastNanos) / 1e9f).coerceIn(0f, 0.1f)
             sparkLastNanos = now
-            // Moving through the XMB: a kick the way the icons slid (XmbSparkles).
-            com.armsx2.ui.xmb.XmbSparkles.take(sparkNudge)
-            sparkVelocity += sparkNudge[0] * SPARK_NUDGE_X
-            sparkVelocityY += sparkNudge[1] * SPARK_NUDGE_Y
             sparkVelocity = ((sparkVelocity + motion.push * SPARK_PUSH * dt) * exp(-SPARK_FRICTION * dt))
                 .coerceIn(-SPARK_MAX_SPEED, SPARK_MAX_SPEED)
-            sparkVelocityY = (sparkVelocityY * exp(-SPARK_FRICTION * dt)).coerceIn(-SPARK_MAX_SPEED, SPARK_MAX_SPEED)
             sparkScatter = maxOf(sparkScatter * exp(-SPARK_SCATTER_FADE * dt), motion.shake)
             return dt
         }
@@ -630,11 +624,6 @@ void main() {
         private const val SPARK_FRICTION = 1.2f
         private const val SPARK_MAX_SPEED = 0.9f
         private const val SPARK_SCATTER_FADE = 2.5f
-
-        // Moving through the XMB (XmbSparkles): a column across, or a row up or down, gusts the
-        // field the way the icons went.
-        private const val SPARK_NUDGE_X = 0.22f
-        private const val SPARK_NUDGE_Y = 0.16f
 
         /** XmbWaveModel's projection height (its SY), which the particles' camera shares. */
         private const val WAVE_SY = 2.0057f
