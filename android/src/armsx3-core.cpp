@@ -894,6 +894,10 @@ static std::pair<std::string, std::u32string> g_strings[] = {
     MAKE_STRING(RSX_OVERLAYS_TROPHY_PLATINUM,
                 "You have earned a platinum trophy.\n%0"),
     MAKE_STRING(RSX_OVERLAYS_COMPILING_SHADERS, "Compiling shaders"),
+    MAKE_STRING(RSX_OVERLAYS_COMPILING_SHADERS_TITLE, "Shader Compilation"),
+    MAKE_STRING(RSX_OVERLAYS_COMPILING_SHADERS_VULKAN, "Building base variant %0..."),
+    MAKE_STRING(RSX_OVERLAYS_COMPILING_SHADERS_OPENGL_BUILD, "Building variant %0..."),
+    MAKE_STRING(RSX_OVERLAYS_COMPILING_SHADERS_OPENGL_LINK, "Linking variant %0..."),
     MAKE_STRING(RSX_OVERLAYS_COMPILING_PPU_MODULES, "Compiling PPU Modules"),
     MAKE_STRING(RSX_OVERLAYS_COMPILING_SPU_CODE, "Compiling SPU Code"),
     MAKE_STRING(RSX_OVERLAYS_MSG_DIALOG_YES, "Yes"),
@@ -1183,6 +1187,7 @@ static std::pair<std::string, std::u32string> g_strings[] = {
     MAKE_STRING(HOME_MENU_SETTINGS_AUDIO_TIME_STRETCHING_THRESHOLD,
                 "Time Stretching Threshold"),
     MAKE_STRING(HOME_MENU_SETTINGS_VIDEO, "Video"),
+    MAKE_STRING(HOME_MENU_SETTINGS_VIDEO_RENDERER, "Graphics Renderer"),
     MAKE_STRING(HOME_MENU_SETTINGS_VIDEO_VSYNC, "VSync"),
     MAKE_STRING(HOME_MENU_SETTINGS_VIDEO_FRAME_LIMIT, "Frame Limit"),
     MAKE_STRING(HOME_MENU_SETTINGS_VIDEO_ANISOTROPIC_OVERRIDE,
@@ -1384,6 +1389,21 @@ static std::pair<std::string, std::u32string> g_strings[] = {
     MAKE_STRING(SAVESTATE_FAILED_DUE_TO_MISSING_SPU_SETTING,
                 "SaveState failed: turn on Allow save states in the Performance "
                 "settings, then try again."),
+    // Upstream's home menu and Big Picture Mode strings. Neither screen is reached on Android today,
+    // but an id left out of this table reads as an empty string wherever it does turn up.
+    MAKE_STRING(HOME_MENU_SETTINGS_SYSTEM_START_BIG_PICTURE_MODE, "Open Big Picture Mode On Boot"),
+    MAKE_STRING(HOME_MENU_TROPHY_SYNC_TROPHIES, "Sync trophies"),
+    MAKE_STRING(HOME_MENU_TROPHY_SYNCING_TROPHIES, "Syncing..."),
+    MAKE_STRING(HOME_MENU_TROPHY_SYNC_SUCCESS, "Synced!"),
+    MAKE_STRING(HOME_MENU_TROPHY_SYNC_FAILED, "Sync failed"),
+    MAKE_STRING(BIG_PICTURE_MODE_TITLE, "Big Picture Mode"),
+    MAKE_STRING(BIG_PICTURE_MENU_GAMES, "Games"),
+    MAKE_STRING(BIG_PICTURE_MENU_EXIT, "Exit Big Picture Mode"),
+    MAKE_STRING(BIG_PICTURE_NO_GAMES_FOUND, "No games found.\nAdd games to ARMSX3's library first."),
+    MAKE_STRING(BIG_PICTURE_LOADING, "Loading games..."),
+    MAKE_STRING(BIG_PICTURE_GAME_DETAILS_START, "Start"),
+    MAKE_STRING(BIG_PICTURE_HINT_BACK, "Back"),
+    MAKE_STRING(BIG_PICTURE_HINT_SELECT, "Select"),
 };
 
 #undef MAKE_STRING
@@ -1394,7 +1414,7 @@ static std::pair<std::string, std::u32string> g_strings[] = {
 static_assert(
     std::size(g_strings) ==
         std::size_t(
-            localized_string_id::SAVESTATE_FAILED_DUE_TO_MISSING_SPU_SETTING) +
+            localized_string_id::BIG_PICTURE_HINT_SELECT) +
             1,
     "localized_string_id grew: add the new string(s) to g_strings and move "
     "this to the new last id");
