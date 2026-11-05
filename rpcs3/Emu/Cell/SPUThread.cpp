@@ -397,6 +397,41 @@ static void rdata_settle_wait()
 		utils::pause();
 	}
 }
+
+// The 3 microsecond wait above covered nearly every case, but Yakuza: Dead Souls still froze once
+// after an hour of play (tester log 62). gs_task, the task that reads the line, fetches its command
+// ring one 128-byte line at a time into LS 0x37780 and takes a line as complete once entry 3's first
+// word is non-zero. For that read the shape is exact: entry 3's first word set while an earlier
+// 32-byte entry is still all zero means the line is still being written, however long its first
+// half takes to land. That read is retried until the line is whole (up to 100 ms), instead of
+// trusting a fixed wait.
+static constexpr u32 c_gs_task_fetch_lsa = 0x37780;
+
+static FORCE_INLINE bool rdata_gs_line_in_flight(const spu_rdata_t& _data)
+{
+	u32 entry3 = 0;
+	std::memcpy(&entry3, _data + 96, sizeof(entry3));
+
+	if (!entry3)
+	{
+		// gs_task does not take the line yet
+		return false;
+	}
+
+	const auto data = reinterpret_cast<const v128*>(_data);
+	return gv_testz(data[0] | data[1]) || gv_testz(data[2] | data[3]) || gv_testz(data[4] | data[5]);
+}
+
+static thread_local bool s_gs_waiting = false;
+static thread_local u32 s_gs_wait_addr = 0;
+static thread_local u64 s_gs_wait_start = 0;
+
+static u64 rdata_tsc_to_ns(u64 ticks)
+{
+	u64 freq = 0;
+	asm volatile("mrs %0, cntfrq_el0" : "=r"(freq));
+	return freq ? ticks * 1'000'000'000 / freq : 0;
+}
 #endif
 
 #if defined(ARCH_X64)
@@ -6021,6 +6056,44 @@ bool spu_thread::process_mfc_cmd()
 		u64 ntime = 0;
 		rsx::reservation_lock rsx_lock(addr, 128);
 
+#if defined(ARCH_ARM64)
+		// See rdata_gs_line_in_flight()
+		const bool gs_fetch = g_spu_getllar_settle.observe() && (ch_mfc_cmd.lsa & 0x3ff80) == c_gs_task_fetch_lsa && addr != spurs_addr;
+		bool gs_checked = false;
+
+		// True while gs_task's line is still being written and worth reading again
+		const auto gs_line_wait = [&]() -> bool
+		{
+			if (!rdata_gs_line_in_flight(rdata))
+			{
+				s_gs_waiting = false;
+				return false;
+			}
+
+			const u64 now = utils::get_tsc();
+
+			if (!s_gs_waiting || s_gs_wait_addr != addr)
+			{
+				s_gs_waiting = true;
+				s_gs_wait_addr = addr;
+				s_gs_wait_start = now;
+
+				// Nothing on the RSX side should wait on this line while its first half lands
+				rsx_lock.unlock();
+			}
+
+			if (rdata_tsc_to_ns(now - s_gs_wait_start) < 100'000'000 && !is_stopped())
+			{
+				return true;
+			}
+
+			s_gs_waiting = false;
+			spu_log.warning("GETLLAR: line 0x%x was still incomplete after %u ms; taken as it is (pc 0x%x)", addr, rdata_tsc_to_ns(now - s_gs_wait_start) / 1'000'000, pc);
+			return false;
+		};
+
+	getllar_reread:
+#endif
 		for (u64 i = 0; i != umax; [&]()
 		{
 			if (state & cpu_flag::pause)
@@ -6086,8 +6159,18 @@ bool spu_thread::process_mfc_cmd()
 			}
 
 #if defined(ARCH_ARM64)
+			if (gs_fetch)
+			{
+				// See rdata_gs_line_in_flight()
+				if (gs_line_wait())
+				{
+					continue;
+				}
+
+				gs_checked = true;
+			}
 			// See rdata_looks_half_landed()
-			if (g_spu_getllar_settle.observe() && rdata_looks_half_landed(rdata) && addr != spurs_addr && !rdata_updated_by_this_spu(addr))
+			else if (g_spu_getllar_settle.observe() && rdata_looks_half_landed(rdata) && addr != spurs_addr && !rdata_updated_by_this_spu(addr))
 			{
 				const u32 hash = compute_rdata_hash32(rdata);
 
@@ -6116,6 +6199,14 @@ bool spu_thread::process_mfc_cmd()
 
 			break;
 		}
+
+#if defined(ARCH_ARM64)
+		// A read taken while every thread was suspended skips the checks in the loop
+		if (gs_fetch && !gs_checked && gs_line_wait())
+		{
+			goto getllar_reread;
+		}
+#endif
 
 		raddr = addr;
 		rtime = ntime;
