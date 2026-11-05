@@ -41,7 +41,19 @@ namespace vk
 		std::unique_ptr<vk::viewable_image> managed_texture = nullptr;
 
 		// DMA relevant data
-		std::unique_ptr<vk::event> dma_fence;
+		// Shared rather than unique so a guest thread can keep waiting on it outside the texture
+		// cache lock (texture_cache::flush_all_unlocked_wait) even if the section disposes of it
+		// meanwhile. The section itself still only ever releases it through dispose_dma_fence().
+		std::shared_ptr<vk::event> dma_fence;
+
+		// ARMSX3_X_WCBPREWAIT: the DMA staging range the last dma_transfer wrote (tile-aligned for
+		// tiled regions, so it can reach past the section)
+		utils::address_range32 dma_footprint;
+
+		// ARMSX3_X_WCBPREWAIT: journal tag after which a load_dma may land on top of that readback
+		// rather than under it. sync_timestamp by default; the journal mark taken just before the
+		// submission when the copy was part of a flush_set_transfer batch.
+		u64 readback_staging_since = 0;
 
 		// Set by dma_transfer when the readback byteswap was deferred to the CPU instead of run as
 		// a compute dispatch. Zero means the GPU already did it (or none was needed).
@@ -96,6 +108,7 @@ namespace vk
 			{
 				// Even if we are managing the same vram section, we cannot guarantee contents are static
 				// The create method is only invoked when a new managed session is required
+				clear_unlocked_wait_tag();
 				release_dma_resources();
 				synchronized = false;
 				flushed = false;
@@ -126,12 +139,20 @@ namespace vk
 			create(w, h, depth, mipmaps, image, rsx_pitch, managed, gcm_format, swap_bytes);
 		}
 
+		// Deferred release of the section's reference, exactly as disposing the unique_ptr was: the
+		// event is destroyed once the GPU has completed the work submitted around it, or later if a
+		// waiter (wait_dma_ref) still holds its own reference then.
+		void dispose_dma_fence()
+		{
+			auto holder = std::make_unique<std::shared_ptr<vk::event>>(std::move(dma_fence));
+			vk::get_resource_manager()->dispose(holder);
+		}
+
 		void release_dma_resources()
 		{
 			if (dma_fence)
 			{
-				auto gc = vk::get_resource_manager();
-				gc->dispose(dma_fence);
+				dispose_dma_fence();
 			}
 		}
 
@@ -142,7 +163,165 @@ namespace vk
 			ensure(synchronized);
 			ensure(!flushed);
 			ensure(dma_fence);
-			vk::get_resource_manager()->dispose(dma_fence);
+			dispose_dma_fence();
+		}
+
+		/**
+		 * ARMSX3_X_WCBPREWAIT: the GPU side of the readback, for waiting on it outside the texture
+		 * cache lock (texture_cache::flush_all_unlocked_wait).
+		 */
+		using dma_wait_ref = std::shared_ptr<vk::event>;
+
+		// The readback event imp_flush() would still have to wait for, or null. Call under the cache lock.
+		dma_wait_ref get_pending_dma_ref() const
+		{
+			if (!synchronized || !dma_fence || dma_fence->status() != VK_EVENT_RESET)
+			{
+				// Done already, or an error imp_flush() reports as it always did
+				return {};
+			}
+
+			return dma_fence;
+		}
+
+		// Whether imp_flush() would find the readback complete. Call under the cache lock.
+		bool dma_ready() const
+		{
+			return synchronized && dma_fence && dma_fence->status() == VK_EVENT_SET;
+		}
+
+		// Waits with no lock held. Dropping the reference here is safe: if it is the last one, the
+		// section has disposed of its own and that deferred release already ran, which only happens
+		// once the GPU completed work submitted after the signal.
+		static void wait_dma_ref(dma_wait_ref& ref)
+		{
+			vk::wait_for_event(ref.get(), GENERAL_WAIT_TIMEOUT);
+			ref.reset();
+		}
+
+		// The section range imp_flush() works on, and how many bytes from its start it copies out of
+		// DMA staging (flush_dma). imp_flush() and get_flush_range() both use this.
+		std::pair<utils::address_range32, u32> get_flush_extent() const
+		{
+			// For framebuffers, the raster region is enough
+			const auto range = (context == rsx::texture_upload_context::framebuffer_storage) ? get_section_range() : get_confirmed_range();
+			auto flush_length = range.length();
+
+			const auto tiled_region = rsx::get_current_renderer()->get_tiled_memory_region(range);
+			if (tiled_region)
+			{
+				const auto available_tile_size = tiled_region.tile->size - (range.start - tiled_region.base_address);
+				const auto max_content_size = tiled_region.tile->pitch * utils::align(height, 64);
+				flush_length = std::min(max_content_size, available_tile_size);
+			}
+
+			return { range, flush_length };
+		}
+
+		// The guest range imp_flush() copies out of DMA staging
+		utils::address_range32 get_flush_range() const
+		{
+			const auto flush_extent = get_flush_extent();
+			return utils::address_range32::start_length(flush_extent.first.start, flush_extent.second);
+		}
+
+		/**
+		 * ARMSX3_X_WCBPREWAIT hooks (rsx::cached_texture_section has the defaults and the contract).
+		 * All under the cache lock.
+		 */
+
+		// Staging bytes the last dma_transfer wrote: dma_sync_region (all its load_dma touches),
+		// stretched to the end of the last row its GPU copy writes at rsx_pitch when that ends past
+		// it (dma_footprint)
+		utils::address_range32 get_readback_write_range() const
+		{
+			return dma_footprint.valid() ? dma_footprint : get_section_range();
+		}
+
+		// Of those, the bytes imp_flush() copies to guest memory. Staging bytes outside them are
+		// either not read by the flush, or not written by a new copy either, so their content
+		// can never be a reason to copy this section again.
+		utils::address_range32 get_readback_check_range() const
+		{
+			return get_flush_range().get_intersect(get_readback_write_range());
+		}
+
+		// The staging bytes the next copy_texture() -> dma_transfer() will write: the confirmed range
+		// (dma_sync_region), tile-aligned when a tile region covers it. A confirmed range that is not
+		// the whole section can end mid-row, and the rows are copied whole, so the section range is
+		// added then: copy_texture() never writes outside its rows.
+		utils::address_range32 get_predicted_readback_footprint() const
+		{
+			const auto section_range = get_section_range();
+			auto valid_range = get_confirmed_range();
+
+			if (valid_range != section_range)
+			{
+				valid_range = valid_range.get_min_max(section_range);
+			}
+
+			if (const auto tiled_region = rsx::get_current_renderer()->get_tiled_memory_region(valid_range))
+			{
+				return tiled_region.tile_align(valid_range);
+			}
+
+			return valid_range;
+		}
+
+		// Whether the next dma_transfer() may call load_dma: tiled regions, a confirmed range that
+		// is not the whole section, or a GPU transform (format conversion, byteswap) with rows
+		// narrower than the pitch. Without a transform the image is copied straight into staging
+		// (dma_sync(false)) whatever the pitch. True when in doubt.
+		bool readback_may_reload_staging() const
+		{
+			const auto valid_range = get_confirmed_range();
+			if (valid_range != get_section_range() || !vram_texture ||
+				rsx::get_current_renderer()->get_tiled_memory_region(valid_range))
+			{
+				return true;
+			}
+
+			// As dma_transfer() decides require_gpu_transform (the copy source has this format)
+			const auto format = vram_texture->format();
+			const bool format_conversion = !!(vram_texture->aspect() & VK_IMAGE_ASPECT_STENCIL_BIT) || format == VK_FORMAT_D32_SFLOAT;
+			if (!format_conversion && !pack_unpack_swap_bytes)
+			{
+				return false;
+			}
+
+			u32 samples_x = 1;
+			if (context == rsx::texture_upload_context::framebuffer_storage)
+			{
+				samples_x = vk::as_rtt(vram_texture)->samples_x;
+			}
+
+			return vk::get_format_texel_width(format) * width * samples_x != rsx_pitch;
+		}
+
+		// Whether guest memory was loaded over get_readback_check_range() after this readback could
+		// no longer land on top of it (vk::dma_staging_reloaded_since): loads after its submission
+		// (readback_staging_since), re-chains after its map_dma (sync_timestamp, which follows it).
+		rsx::readback_staging_state readback_staging_reloaded() const
+		{
+			switch (vk::dma_staging_reloaded_since(get_readback_check_range(), readback_staging_since, get_sync_timestamp()))
+			{
+			case vk::staging_reload_check::none: return rsx::readback_staging_state::intact;
+			case vk::staging_reload_check::reloaded: return rsx::readback_staging_state::reloaded;
+			default: return rsx::readback_staging_state::unknown;
+			}
+		}
+
+		static u64 readback_journal_mark()
+		{
+			return vk::dma_staging_journal_mark();
+		}
+
+		// Every load_dma journaled before 'mark' was done before this section's copy is submitted
+		void note_readback_batch_recorded(u64 mark)
+		{
+			// The mark is taken after the copy on the same thread, so it is the larger tag; the
+			// comparison only keeps the conservative value should that ever not hold
+			readback_staging_since = (mark > sync_timestamp) ? mark : sync_timestamp;
 		}
 
 		void destroy()
@@ -310,16 +489,10 @@ namespace vk
 			vk::wait_for_event(dma_fence.get(), GENERAL_WAIT_TIMEOUT);
 
 			// Calculate smallest range to flush - for framebuffers, the raster region is enough
-			const auto range = (context == rsx::texture_upload_context::framebuffer_storage) ? get_section_range() : get_confirmed_range();
-			auto flush_length = range.length();
-
-			const auto tiled_region = rsx::get_current_renderer()->get_tiled_memory_region(range);
-			if (tiled_region)
-			{
-				const auto available_tile_size = tiled_region.tile->size - (range.start - tiled_region.base_address);
-				const auto max_content_size = tiled_region.tile->pitch * utils::align(height, 64);
-				flush_length = std::min(max_content_size, available_tile_size);
-			}
+			// (shared with the ARMSX3_X_WCBPREWAIT checks through get_flush_range)
+			const auto flush_extent = get_flush_extent();
+			const auto range = flush_extent.first;
+			const auto flush_length = flush_extent.second;
 
 			vk::flush_dma(range.start, flush_length);
 

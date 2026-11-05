@@ -1194,13 +1194,21 @@ vk::viewable_image* VKGSRender::get_present_source(/* inout */ vk::present_surfa
 		const auto range = utils::address_range32::start_length(info->address, info->pitch * info->height);
 		const u32  lookup_mask = rsx::texture_upload_context::blit_engine_dst | rsx::texture_upload_context::framebuffer_storage;
 		const auto overlap = res()->texture_cache.find_texture_from_range<true>(range, 0, lookup_mask);
+		rsx::simple_array<vk::cached_texture_section*> copied;
 
 		for (const auto & section : overlap)
 		{
 			if (!section->is_synchronized())
 			{
 				section->copy_texture(*m_current_command_buffer, true);
+				copied.push_back(section);
 			}
+		}
+
+		if (!copied.empty())
+		{
+			// ARMSX3_X_WCBPREWAIT: logged like the cache's own copies, before the submission below
+			res()->texture_cache.log_external_readbacks(copied);
 		}
 
 		if (m_current_command_buffer->flags & vk::command_buffer::cb_has_dma_transfer)

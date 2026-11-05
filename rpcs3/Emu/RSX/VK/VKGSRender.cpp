@@ -10,6 +10,7 @@
 #include "VKGSRender.h"
 #include "VKFrameGen.h"
 #include "Emu/RSX/rsx_profiler.h"
+#include "Emu/RSX/Utils/env_switch.h"
 #include "vkutils/gpu_timer.h"
 #include "VKHelpers.h"
 #include "VKRenderPass.h"
@@ -1098,25 +1099,61 @@ bool VKGSRender::on_access_violation(rsx::context* ctx, u32 address, bool is_wri
 		return false;
 	}
 
-	vk::texture_cache::thrashed_set result;
-	{
-		const rsx::invalidation_cause cause = is_writing ? rsx::invalidation_cause::deferred_write : rsx::invalidation_cause::deferred_read;
-		result = resources->texture_cache.invalidate_address(*m_secondary_cb_list.get(), address, cause);
-	}
+	// ARMSX3: wait for WCB readbacks without holding the texture cache lock.
+	//
+	// A guest thread faulting on a protected render target used to wait for the GPU copy inside
+	// flush_all(), holding the texture cache lock exclusively. In LittleBigPlanet (WCB on, as its
+	// config requires) that wait averaged 3.5 ms, and behind it queued every other faulting SPU
+	// thread -- even on unrelated pages -- and the RSX thread itself (do_update, texture lookups and
+	// set_memory_read_flags: 3.6 ms/frame on the lock, plus 1.8 ms/frame in do_local_task waiting
+	// for faulting threads to record their copies), which therefore stopped feeding the GPU it was
+	// waiting for. Guest threads lost 12.7 ms/frame in this handler.
+	//
+	// flush_all_unlocked_wait() takes that wait outside the lock and decides afresh, under the
+	// lock, before writing guest memory; anything it cannot finish exactly as flush_all would goes
+	// round again on the regular path. Faults on sections another thread is already waiting for
+	// wait for that thread instead of sending one more flush request each (ARMSX3_X_WCBFOLLOW).
+	// Guest threads only (the RSX thread's own faults keep the regular path).
+	// Both on by default; ARMSX3_X_WCBPREWAIT=0 disables both, ARMSX3_X_WCBFOLLOW=0 the second.
+	static const bool s_unlocked_wait = rsx::env_switch("ARMSX3_X_WCBPREWAIT");
+	static const bool s_follow = rsx::env_switch("ARMSX3_X_WCBFOLLOW");
 
-	if (result.invalidate_samplers)
-	{
-		std::lock_guard lock(m_sampler_mutex);
-		m_samplers_dirty.store(true);
-	}
+	bool unlocked_wait = s_unlocked_wait && !RSX(m_ctx)->is_current_thread();
+	const u32 max_follower_waits = s_follow ? 3 : 0;
+	u32 follower_waits = 0;
+	bool handled = false;
 
-	if (!result.violation_handled)
+	// Each pass examines the fault from scratch, as a new fault would. Passes after the first
+	// follow a wait for another thread or a retry, and both are bounded: at most 3 follower waits,
+	// and a retry turns the unlocked wait off, so the last pass is the regular path as it always was.
+	while (true)
 	{
-		return false;
-	}
+		vk::texture_cache::thrashed_set result;
+		{
+			const rsx::invalidation_cause cause = is_writing ? rsx::invalidation_cause::deferred_write : rsx::invalidation_cause::deferred_read;
+			result = resources->texture_cache.invalidate_address(*m_secondary_cb_list.get(), address, cause);
+		}
 
-	if (result.num_flushable > 0)
-	{
+		if (result.invalidate_samplers)
+		{
+			std::lock_guard lock(m_sampler_mutex);
+			m_samplers_dirty.store(true);
+		}
+
+		if (!result.violation_handled)
+		{
+			// On a later pass, another thread resolved the fault meanwhile. flush_all reports that
+			// case as handled too.
+			return handled;
+		}
+
+		handled = true;
+
+		if (result.num_flushable <= 0)
+		{
+			return true;
+		}
+
 		if (g_fxo->get<rsx::dma_manager>().is_current_thread())
 		{
 			// The offloader thread cannot handle flush requests
@@ -1138,6 +1175,25 @@ bool VKGSRender::on_access_violation(rsx::context* ctx, u32 address, bool is_wri
 
 			g_fxo->get<rsx::dma_manager>().clear_mem_fault_flag();
 			return true;
+		}
+
+		if (unlocked_wait && follower_waits < max_follower_waits)
+		{
+			vm::temporary_unlock();
+
+			const u64 follower_start = rsx::prof::enabled() ? utils::get_tsc() : 0;
+
+			if (resources->texture_cache.wait_for_unlocked_flush(result))
+			{
+				if (follower_start)
+				{
+					rsx::prof::g_wcb_unlocked[rsx::prof::wcb_follows].fetch_add(1, std::memory_order_relaxed);
+					rsx::prof::g_wcb_unlocked[rsx::prof::wcb_follow_tsc].fetch_add(utils::get_tsc() - follower_start, std::memory_order_relaxed);
+				}
+
+				follower_waits++;
+				continue;
+			}
 		}
 
 		bool has_queue_ref = false;
@@ -1177,6 +1233,46 @@ bool VKGSRender::on_access_violation(rsx::context* ctx, u32 address, bool is_wri
 			};
 		}
 
+		if (unlocked_wait && has_queue_ref)
+		{
+			const auto outcome = resources->texture_cache.flush_all_unlocked_wait(*m_secondary_cb_list.next(), result, data_transfer_completed_callback, rsx::prof::enabled());
+
+			if (has_queue_ref)
+			{
+				// Release RSX thread if it's still locked
+				m_flush_requests.remove_one();
+			}
+
+			if (rsx::prof::enabled()) [[unlikely]]
+			{
+				if (outcome.waited)
+				{
+					rsx::prof::g_wcb_unlocked[rsx::prof::wcb_waits].fetch_add(1, std::memory_order_relaxed);
+					rsx::prof::g_wcb_unlocked[rsx::prof::wcb_wait_tsc].fetch_add(outcome.wait_tsc, std::memory_order_relaxed);
+				}
+
+				if (outcome.retry)
+				{
+					rsx::prof::g_wcb_unlocked[rsx::prof::wcb_retries].fetch_add(1, std::memory_order_relaxed);
+				}
+
+				if (outcome.bound_target)
+				{
+					rsx::prof::g_wcb_unlocked[rsx::prof::wcb_bound_target].fetch_add(1, std::memory_order_relaxed);
+				}
+			}
+
+			if (outcome.retry)
+			{
+				// Nothing was flushed. Go round once more on the regular path, which records the
+				// copy that is now needed.
+				unlocked_wait = false;
+				continue;
+			}
+
+			return true;
+		}
+
 		resources->texture_cache.flush_all(*m_secondary_cb_list.next(), result, data_transfer_completed_callback);
 
 		if (has_queue_ref)
@@ -1184,9 +1280,9 @@ bool VKGSRender::on_access_violation(rsx::context* ctx, u32 address, bool is_wri
 			// Release RSX thread if it's still locked
 			m_flush_requests.remove_one();
 		}
-	}
 
-	return true;
+		return true;
+	}
 }
 
 void VKGSRender::on_invalidate_memory_range(rsx::context* ctx, const utils::address_range32 &range, rsx::invalidation_cause cause)

@@ -20,6 +20,14 @@ namespace rsx
 		confirmed_range
 	};
 
+	// ARMSX3_X_WCBPREWAIT: cached_texture_section::readback_staging_reloaded()
+	enum class readback_staging_state : u8
+	{
+		intact,    // No load or re-chain since the readback could have touched the bytes its flush reads
+		reloaded,  // One did
+		unknown    // The backend's journal no longer reaches back far enough: assume reloaded
+	};
+
 	enum section_protection_strategy
 	{
 		lock,
@@ -1097,6 +1105,21 @@ namespace rsx
 		u64 cache_tag = 0;
 		u64 last_write_tag = 0;
 
+		// ARMSX3_X_WCBPREWAIT: sync_timestamp of the readback a guest thread waited for outside the
+		// texture cache lock (texture_cache::flush_all_unlocked_wait). Only written and read under
+		// that lock, and only meaningful while it equals sync_timestamp of a synchronized section;
+		// sync_timestamp comes from rsx::get_shared_tag(), so each readback has its own.
+		// Cleared (clear_unlocked_wait_tag) as soon as that readback is written to guest memory,
+		// copied again or dropped, so a tag never outlives the readback it was set for.
+		u64 unlocked_wait_sync_tag = 0;
+
+		// ARMSX3_X_WCBPREWAIT: forget the tag. Call under the cache lock, before the state change
+		// that ends the readback.
+		void clear_unlocked_wait_tag()
+		{
+			unlocked_wait_sync_tag = 0;
+		}
+
 		~cached_texture_section()
 		{
 			AUDIT(!exists());
@@ -1145,6 +1168,8 @@ namespace rsx
 			gcm_format = 0;
 			pack_unpack_swap_bytes = false;
 			swizzled = false;
+
+			clear_unlocked_wait_tag();
 
 			sync_timestamp = 0ull;
 			synchronized = false;
@@ -1415,6 +1440,10 @@ namespace rsx
 
 		inline void discard(bool set_dirty = true)
 		{
+			// Unprotected without a flush (after one, flush() has cleared it already): the readback
+			// will never be written, and the section must be relocked, which resets it, to be flushed
+			clear_unlocked_wait_tag();
+
 			utils::protection old_prot = get_protection();
 			rsx::buffered_section::discard();
 			post_protect(old_prot, utils::protection::rw);
@@ -1427,6 +1456,8 @@ namespace rsx
 
 		void reprotect(const utils::protection prot)
 		{
+			clear_unlocked_wait_tag();
+
 			if (synchronized && !flushed)
 			{
 				// Abort enqueued transfer
@@ -1443,6 +1474,8 @@ namespace rsx
 
 		void reprotect(const utils::protection prot, const std::pair<u32, u32>& range)
 		{
+			clear_unlocked_wait_tag();
+
 			if (synchronized && !flushed)
 			{
 				// Abort enqueued transfer
@@ -1646,6 +1679,9 @@ namespace rsx
 
 			auto cleanup_flush = [&]()
 			{
+				// The readback has been consumed (or had nothing to write): no longer pending
+				clear_unlocked_wait_tag();
+
 				flushed = true;
 				flush_exclusions.clear();
 				on_flush();
@@ -1670,6 +1706,86 @@ namespace rsx
 			derived()->finish_flush();
 			cleanup_flush();
 		}
+
+		// Whether flush() would get as far as imp_flush(), i.e. read the readback and so wait for
+		// the GPU copy. The negation of flush()'s early outs above; call under the cache lock.
+		bool flush_needs_data() const
+		{
+			return !flushed && should_flush() && !get_confirmed_range().inside(flush_exclusions);
+		}
+
+		// Whether the GPU wrote to the render target after this section's readback was recorded, as
+		// far as the surface's write tag tells (blits always set it, draws on the first write after a
+		// bind). Both tags come from rsx::get_shared_tag(). Framebuffer sections only.
+		bool written_since_sync() const
+		{
+			return context == rsx::texture_upload_context::framebuffer_storage &&
+				derived()->get_render_target()->last_use_tag > sync_timestamp;
+		}
+
+		// ARMSX3_X_WCBPREWAIT: whether the pending readback is one a guest thread waited for outside
+		// the texture cache lock. Such a readback stays pending while the RSX thread and other faults
+		// run, so it can go stale before anyone flushes it (texture_cache::flush_needs_transfer).
+		// Never true with the switch off: the tag is only ever set by flush_all_unlocked_wait().
+		bool readback_waited_unlocked() const
+		{
+			return synchronized && !flushed &&
+				unlocked_wait_sync_tag != 0 && unlocked_wait_sync_tag == sync_timestamp;
+		}
+
+		// ARMSX3_X_WCBPREWAIT: backend hooks for the checks on readbacks waited for outside the lock
+		// (texture_cache::tagged_readback_stale and the batch rule in flush_set_transfer). Defaults
+		// for backends that do not share readback staging between sections; Vulkan hides them all
+		// (vk::cached_texture_section). Call under the cache lock.
+
+		// Staging bytes the last readback wrote (GPU) or loaded (CPU): every one of them, including
+		// a partial last row written past the confirmed range. Only that copy's own bytes, which
+		// is what the readback log needs; for a null-region blit (DMA) section that is the last
+		// blit rectangle, not all of its flush range, which is why those are never tagged.
+		address_range32 get_readback_write_range() const
+		{
+			return get_section_range();
+		}
+
+		// The part of those that flush() copies to guest memory: the only bytes whose staging
+		// content decides what this readback writes. A new copy rewrites nothing outside them
+		// that the flush reads, so a hazard outside them is never a reason to copy again.
+		address_range32 get_readback_check_range() const
+		{
+			return get_section_range();
+		}
+
+		// Staging bytes the next copy_texture() is expected to write. Only steers the batch rule;
+		// the check after recording (flush_set_transfer) does not rely on it.
+		address_range32 get_predicted_readback_footprint() const
+		{
+			return get_section_range();
+		}
+
+		// Whether the next copy_texture() may load guest memory into staging (pitch padding, tile
+		// rows) rather than only write this section's own data. Same status as the prediction.
+		bool readback_may_reload_staging() const
+		{
+			return false;
+		}
+
+		// Whether guest memory may have been loaded over get_readback_check_range() since the bytes
+		// were last defined by this section's copy
+		readback_staging_state readback_staging_reloaded() const
+		{
+			return readback_staging_state::intact;
+		}
+
+		// The copies of one batch were all recorded and are about to be submitted. 'mark' comes from
+		// readback_journal_mark(), taken then: every staging load the backend journaled before it
+		// happened before these copies can land (see vk::dma_staging_journal_mark).
+		static u64 readback_journal_mark()
+		{
+			return 0;
+		}
+
+		void note_readback_batch_recorded(u64 /*mark*/)
+		{}
 
 		void add_flush_exclusion(const address_range32& rng)
 		{

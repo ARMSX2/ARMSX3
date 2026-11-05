@@ -77,12 +77,15 @@ namespace vk
 			m_device = &cmd.get_command_pool().get_owner();
 		}
 
+		// A new readback replaces the one a guest thread may have waited for outside the lock
+		clear_unlocked_wait_tag();
+
 		if (dma_fence)
 		{
 			// NOTE: This can be reached if previously synchronized, or a special path happens.
 			// If a hard flush occurred while this surface was flush_always the cache would have reset its protection afterwards.
 			// DMA resource would still be present but already used to flush previously.
-			vk::get_resource_manager()->dispose(dma_fence);
+			dispose_dma_fence();
 		}
 
 		if (vk::is_renderpass_open(cmd))
@@ -105,6 +108,7 @@ namespace vk
 
 		auto dma_sync_region = valid_range;
 		dma_mapping_handle dma_mapping = { 0, nullptr };
+		u32 write_length = 0; // ARMSX3_X_WCBPREWAIT: row copies' extent from dma_sync_region.start, if longer
 
 		auto dma_sync = [&](bool load, bool force = false)
 		{
@@ -410,6 +414,11 @@ namespace vk
 				}
 
 				vkCmdCopyBuffer(cmd, working_buffer->value, dma_mapping.second->value, transfer_height, copy.data());
+
+				if (transfer_height)
+				{
+					write_length = std::max(write_length, (transfer_height - 1) * rsx_pitch + transfer_pitch);
+				}
 			}
 		}
 		else
@@ -424,6 +433,11 @@ namespace vk
 
 			region.bufferOffset = dma_mapping.first;
 			vkCmdCopyImageToBuffer(cmd, src->value, src->current_layout, dma_mapping.second->value, 1, &region);
+
+			if (transfer_height)
+			{
+				write_length = std::max(write_length, (transfer_height - 1) * region.bufferRowLength * internal_bpp + transfer_width * internal_bpp);
+			}
 		}
 
 		// Post-transfer barrier on dma layer
@@ -449,7 +463,7 @@ namespace vk
 		};
 
 		// Create event object for this transfer and queue signal op
-		dma_fence = std::make_unique<vk::event>(*m_device, sync_domain::host);
+		dma_fence = std::make_shared<vk::event>(*m_device, sync_domain::host);
 		dma_fence->signal(cmd,
 		{
 			.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
@@ -475,8 +489,17 @@ namespace vk
 			}
 		}
 
+		// ARMSX3_X_WCBPREWAIT: every staging byte this readback defines (get_readback_write_range):
+		// dma_sync_region, which is all load_dma touches, plus a partial last row the row copies
+		// write past it when the range ends mid-row
+		dma_footprint = utils::address_range32::start_length(dma_sync_region.start, std::max(write_length, dma_sync_region.length()));
 		synchronized = true;
 		sync_timestamp = rsx::get_shared_tag();
+
+		// Submitted at some later point the cache does not track: loads journaled after this
+		// readback was recorded may land after it. flush_set_transfer narrows this to its
+		// submission (note_readback_batch_recorded).
+		readback_staging_since = sync_timestamp;
 	}
 
 	void texture_cache::on_section_destroyed(cached_texture_section& tex)

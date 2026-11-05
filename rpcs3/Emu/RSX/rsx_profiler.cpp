@@ -658,6 +658,7 @@ namespace rsx::prof
 	u64 g_mprotect_bytes = 0;
 	u64 g_access_violations = 0;
 	std::atomic<u64> g_access_violation_tsc{0};
+	std::atomic<u64> g_wcb_unlocked[wcb_unlocked_slots] = {};
 	u64 g_rp_sites[rp_site_count] = {};
 	const char* g_rp_site_names[rp_site_count] = {
 		"Draw:1044",
@@ -2191,6 +2192,23 @@ namespace rsx::prof
 		}
 
 		g_access_violation_tsc.store(0);
+
+		if (const u64 events = g_wcb_unlocked[wcb_waits].load() + g_wcb_unlocked[wcb_follows].load() + g_wcb_unlocked[wcb_bound_target].load(); events && utils::get_tsc_freq())
+		{
+			const double tsc_to_ms = 1000.0 / utils::get_tsc_freq();
+			prof_log.success("\tWCB unlocked   %.2f GPU waits/frame (%.3f ms/frame), %.2f follower waits/frame (%.3f ms/frame), %.2f retries/frame, %.2f kept locked (bound target)/frame",
+				static_cast<double>(g_wcb_unlocked[wcb_waits].load()) / frames,
+				static_cast<double>(g_wcb_unlocked[wcb_wait_tsc].load()) * tsc_to_ms / frames,
+				static_cast<double>(g_wcb_unlocked[wcb_follows].load()) / frames,
+				static_cast<double>(g_wcb_unlocked[wcb_follow_tsc].load()) * tsc_to_ms / frames,
+				static_cast<double>(g_wcb_unlocked[wcb_retries].load()) / frames,
+				static_cast<double>(g_wcb_unlocked[wcb_bound_target].load()) / frames);
+		}
+
+		for (auto& c : g_wcb_unlocked)
+		{
+			c.store(0);
+		}
 
 			fmt::append(report, "\n\trender passes   %.1f/frame",
 				static_cast<double>(g_render_passes) / frames);

@@ -475,6 +475,21 @@ namespace rsx::prof
 	// buckets only accumulate on the RSX thread, and this handler never runs there.
 	extern std::atomic<u64> g_access_violation_tsc;
 
+	// ARMSX3_X_WCBPREWAIT, counted on guest threads
+	enum wcb_unlocked_slot : u32
+	{
+		wcb_waits,        // Readback waits taken outside the texture cache lock
+		wcb_wait_tsc,     // Their length in TSC ticks
+		wcb_retries,      // Faults that then had to start over on the regular path
+		wcb_follows,      // Faults that waited for another thread's readback instead of sending a flush request
+		wcb_follow_tsc,   // The length of those waits in TSC ticks
+		wcb_bound_target, // Readback waits left under the lock because a section was a bound render target (flush_always)
+
+		wcb_unlocked_slots
+	};
+
+	extern std::atomic<u64> g_wcb_unlocked[wcb_unlocked_slots];
+
 	// Which site tore the pass down. Every one of these is a tile store and reload on a
 	// tiler, so the distribution decides what is worth batching or deferring.
 	inline constexpr u32 rp_site_count = 20;

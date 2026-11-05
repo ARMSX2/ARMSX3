@@ -1,5 +1,6 @@
 #pragma once
 #include "vkutils/buffer_object.h"
+#include "Utilities/address_range.h"
 
 namespace vk
 {
@@ -9,6 +10,25 @@ namespace vk
 	void load_dma(u32 local_address, u32 length);
 	void flush_dma(u32 local_address, u32 length);
 	void unmap_dma(u32 local_address, u32 length);
+
+	// ARMSX3_X_WCBPREWAIT: whether staging bytes of 'range' were reloaded from guest memory after
+	// the given journal tags: by load_dma after 'load_since', or by a re-chain (a new block that
+	// starts as a copy of guest memory, while copies recorded earlier write the block it replaced)
+	// after 'rechain_since'. 'unknown' once the journal no longer reaches back that far.
+	enum class staging_reload_check : u8
+	{
+		none,
+		reloaded,
+		unknown
+	};
+
+	staging_reload_check dma_staging_reloaded_since(const utils::address_range32& range, u64 load_since, u64 rechain_since);
+
+	// ARMSX3_X_WCBPREWAIT: a tag ordered with the journal: a load journaled with a smaller tag had
+	// finished copying guest memory before this call. Taken after a batch of readback copies is
+	// recorded and before it is submitted, it separates the loads the GPU copies will land on top
+	// of from those that may land on top of the GPU copies.
+	u64 dma_staging_journal_mark();
 
 	void clear_dma_resources();
 

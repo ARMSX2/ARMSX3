@@ -8,6 +8,7 @@
 #include "Utilities/mutex.h"
 
 #include "util/asm.hpp"
+#include <array>
 #include <unordered_map>
 
 namespace vk
@@ -20,6 +21,101 @@ namespace vk
 
 	// Validation
 	atomic_t<u64> s_allocated_dma_pool_size{ 0 };
+
+	// ARMSX3_X_WCBPREWAIT: journal of staging bytes reloaded from guest memory, tagged with
+	// rsx::get_shared_tag() once the reload is done. A readback that a guest thread waited for
+	// outside the texture cache lock stays pending while other copies and uploads run, and any of
+	// these reloads replaces its bytes, whatever the age of the data that caused it
+	// (vk::cached_texture_section::readback_staging_reloaded).
+	//
+	// Two kinds, because they hurt from different points on:
+	//  - load_dma copies guest memory over staging bytes on the CPU, at once. A GPU copy submitted
+	//    after it lands on top, so only loads after the readback's submission can replace it.
+	//  - A re-chain (map_dma) swaps the block for a new one filled from guest memory. Copies
+	//    recorded before it still write the old block, which flush_dma no longer reads, so any
+	//    re-chain after the readback's map_dma loses it, submitted or not.
+	// Tags are taken inside the mutex, so their order is the order of the critical sections and
+	// a tag from dma_staging_journal_mark() orders every load journaled before it. That is the
+	// only ordering relied on: loads and re-chains come from texture cache work under its lock,
+	// but also from the RSX thread's surface cache outside it (render_target::load_memory ->
+	// detile_memory_block). A re-chain by the RSX thread between a flusher's check and its
+	// flush_dma is not seen, as flush_all() does not see it either (the RSX thread is released
+	// before flush_set_complete).
+	// The tags also increase along the ring, so a scan goes newest first and stops at 'since'.
+	struct staging_reload_entry
+	{
+		u32 start = 0;
+		u32 end = 0;
+		u64 tag_kind = 0; // tag << 1 | 1 for a re-chain; 16 bytes an entry
+
+		u64 tag() const { return tag_kind >> 1; }
+		bool rechain() const { return tag_kind & 1; }
+	};
+
+	static constexpr u32 s_staging_reload_log_size = 1024; // Divides 2^32: the index wraps consistently
+	std::array<staging_reload_entry, s_staging_reload_log_size> g_staging_reload_log{};
+	u32 g_staging_reload_next = 0;
+	u64 g_staging_reload_floor[2] = {}; // Highest tag dropped from the journal, per kind (load, re-chain)
+	shared_mutex g_staging_reload_mutex;
+
+	static void note_staging_reload(u32 start, u32 end, bool rechain)
+	{
+		std::lock_guard lock(g_staging_reload_mutex);
+		const u64 tag = rsx::get_shared_tag();
+
+		auto& slot = g_staging_reload_log[g_staging_reload_next++ % s_staging_reload_log_size];
+
+		if (slot.tag_kind)
+		{
+			auto& floor = g_staging_reload_floor[slot.rechain() ? 1 : 0];
+			floor = std::max(floor, slot.tag());
+		}
+
+		slot = { start, end, (tag << 1) | (rechain ? 1 : 0) };
+	}
+
+	u64 dma_staging_journal_mark()
+	{
+		std::lock_guard lock(g_staging_reload_mutex);
+		return rsx::get_shared_tag();
+	}
+
+	staging_reload_check dma_staging_reloaded_since(const utils::address_range32& range, u64 load_since, u64 rechain_since)
+	{
+		if (!range.valid())
+		{
+			// The flush reads no byte the readback defined
+			return staging_reload_check::none;
+		}
+
+		reader_lock lock(g_staging_reload_mutex);
+
+		if (load_since < g_staging_reload_floor[0] || rechain_since < g_staging_reload_floor[1])
+		{
+			return staging_reload_check::unknown;
+		}
+
+		const u64 since = std::min(load_since, rechain_since);
+
+		for (u32 n = 1; n <= s_staging_reload_log_size; n++)
+		{
+			const auto& e = g_staging_reload_log[(g_staging_reload_next - n) % s_staging_reload_log_size];
+			const u64 tag = e.tag();
+
+			if (tag <= since)
+			{
+				// Neither this entry nor any older one is late enough (slots never written hold 0)
+				break;
+			}
+
+			if (tag > (e.rechain() ? rechain_since : load_since) && e.start <= range.end && range.start <= e.end)
+			{
+				return staging_reload_check::reloaded;
+			}
+		}
+
+		return staging_reload_check::none;
+	}
 
 	dma_block::~dma_block()
 	{
@@ -404,6 +500,9 @@ namespace vk
 		stale_references.clear();
 		ensure(s_allocated_dma_pool_size == g_dma_pool.size() * s_dma_block_length);
 
+		// The new head was filled from guest memory, and the blocks it replaced are gone
+		note_staging_reload(first_block, last_block + static_cast<u32>(s_dma_block_length) - 1, true);
+
 		ensure(block_head);
 		return block_head->get(map_range);
 	}
@@ -490,6 +589,11 @@ namespace vk
 	void load_dma(u32 local_address, u32 length)
 	{
 		sync_dma_impl<true>(local_address, length);
+
+		if (length)
+		{
+			note_staging_reload(local_address, local_address + length - 1, false);
+		}
 	}
 
 	void flush_dma(u32 local_address, u32 length)

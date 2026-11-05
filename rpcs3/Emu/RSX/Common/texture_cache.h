@@ -10,6 +10,11 @@
 #include "texture_cache_helpers.h"
 #include "texture_cache_blit_helpers.h"
 
+#include "util/asm.hpp"
+#include "util/tsc.hpp"
+
+#include <chrono>
+#include <thread>
 #include <unordered_map>
 
 #define RSX_GCM_FORMAT_IGNORED 0
@@ -658,6 +663,41 @@ namespace rsx
 
 		atomic_t<u64> m_cache_update_tag = {0};
 
+		// ARMSX3_X_WCBPREWAIT: guest threads inside flush_all_unlocked_wait()'s unlocked GPU wait,
+		// and a counter bumped (under m_cache_mutex) each time one of them is done with its fault.
+		atomic_t<u32> m_unlocked_flushes = {0};
+		atomic_t<u64> m_unlocked_flush_epoch = {0};
+
+		// ARMSX3_X_WCBPREWAIT: the last readback copies queued, under m_cache_mutex, oldest first out.
+		// Readbacks land in DMA staging memory that is shared per guest address (VKDMA), so a copy of
+		// an overlapping section queued after a readback that is still pending overwrites the bytes
+		// that readback's flush() will copy out. flush_all() never left one pending across other
+		// cache work; a readback waited for outside the lock does, so its flush checks this log
+		// (tagged_readback_stale) and copies again when an older surface's data replaced its own.
+		// The ranges are the staging bytes the copies wrote (get_readback_write_range).
+		// Copies made outside the cache are logged through log_external_readbacks().
+		struct readback_log_entry
+		{
+			address_range32 range;
+			u64 sync_tag = 0;   // the copy's sync_timestamp
+			u64 write_tag = 0;  // last_write_tag of its section, i.e. how new its data is
+			u64 max_sync_tag = 0; // Highest sync_tag of this entry and of every entry logged before it
+		};
+
+		// Large enough that the floor (assume the worst) is not reached by a readback that is only
+		// a few frames old. Scanned newest first, and only back to the readback checked
+		// (max_sync_tag), so its size costs nothing.
+		static constexpr u32 readback_log_size = 256;
+		std::array<readback_log_entry, readback_log_size> m_readback_log{};
+		u32 m_readback_log_next = 0;  // Wraps consistently: readback_log_size divides 2^32
+		u64 m_readback_log_floor = 0; // Highest sync_tag dropped from the log
+		u64 m_readback_log_max = 0;   // Highest sync_tag logged so far
+
+		// ARMSX3_X_WCBPREWAIT: set (under m_cache_mutex, exclusive) once a readback has been waited
+		// for outside the lock. Until then no section is tagged, and flush_set_transfer skips the
+		// staging journal mark: with the switch off it never runs.
+		bool m_readbacks_waited_unlocked = false;
+
 		address_range32 read_only_range;
 		address_range32 no_access_range;
 
@@ -792,44 +832,352 @@ namespace rsx
 		 * Section invalidation
 		 */
 	private:
-		template <typename ...Args>
-		void flush_set(commandbuffer_type& cmd, thrashed_set& data, std::function<void()> on_data_transfer_completed, Args&&... extras)
-		{
-			AUDIT(!data.flushed);
+		// flush_set in two halves. flush_all_unlocked_wait() runs them apart, with the GPU wait
+		// between them taken outside m_cache_mutex; flush_set() runs them back to back as before.
 
+		void sort_flush_set(thrashed_set& data)
+		{
 			if (data.sections_to_flush.size() > 1)
 			{
 				// Sort with oldest data first
 				// Ensures that new data tramples older data
 				std::sort(data.sections_to_flush.begin(), data.sections_to_flush.end(), FN(x->last_write_tag < y->last_write_tag));
 			}
+		}
 
-			rsx::simple_array<section_storage_type*> sections_to_transfer;
-			for (auto &surface : data.sections_to_flush)
+		// ARMSX3_X_WCBPREWAIT: record a readback copy just queued (call under m_cache_mutex, exclusive)
+		void log_readback(const section_storage_type& section)
+		{
+			auto& slot = m_readback_log[m_readback_log_next++ % readback_log_size];
+			m_readback_log_floor = std::max(m_readback_log_floor, slot.sync_tag);
+
+			const u64 sync_tag = section.get_sync_timestamp();
+			m_readback_log_max = std::max(m_readback_log_max, sync_tag);
+			slot = { section.get_readback_write_range(), sync_tag, section.last_write_tag, m_readback_log_max };
+		}
+
+		// ARMSX3_X_WCBPREWAIT: whether a copy of an older section than 'section' that overlaps
+		// 'range' was logged after 'section's readback (sync_tag > since)
+		bool older_copy_logged_since(const section_storage_type& section, const address_range32& range) const
+		{
+			const u64 since = section.get_sync_timestamp();
+
+			for (u32 n = 1; n <= readback_log_size; n++)
 			{
-				if (!surface->is_synchronized())
+				const auto& e = m_readback_log[(m_readback_log_next - n) % readback_log_size];
+				if (e.max_sync_tag <= since)
 				{
-					sections_to_transfer.push_back(surface);
+					// Neither this entry nor any logged before it was queued after the readback
+					// (slots never written hold 0)
+					break;
 				}
-				else if (surface->get_memory_read_flags() == rsx::memory_read_flags::flush_always)
+
+				// Strictly older only, as flush_set_complete() excludes a flushed surface's range
+				// from strictly older ones: an equal tag behaves like newer data there.
+				if (e.sync_tag > since && e.write_tag < section.last_write_tag && e.range.valid() && e.range.overlaps(range))
 				{
-					// This region is set to always read from itself (unavoidable hard sync)
-					const auto ROP_timestamp = m_ctx->ROP_sync_timestamp;
-					if (ROP_timestamp > surface->get_sync_timestamp())
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		// Why a flush has to copy a section first. The first three are flush_all()'s own reasons,
+		// the rest only apply to readbacks waited for outside the lock (ARMSX3_X_WCBPREWAIT).
+		enum class transfer_reason : u8
+		{
+			none,
+			unsynchronized, // No readback recorded
+			rop,            // flush_always target drawn into since its readback
+			written,        // Tagged: render target written since the readback (a blit)
+			log,            // Tagged: an older overlapping section's copy landed since
+			log_floor,      // Tagged: the readback log no longer reaches back to it
+			journal,        // Tagged: guest memory loaded over its staging bytes since
+			journal_floor,  // Tagged: the staging journal no longer reaches back to it
+			batch,          // Tagged: a copy in the same batch may overwrite its staging bytes
+		};
+
+		// Whether a copy made for this reason is one flush_all() would not have made
+		static bool is_extra_transfer(transfer_reason reason)
+		{
+			return reason != transfer_reason::none && reason != transfer_reason::unsynchronized && reason != transfer_reason::rop;
+		}
+
+		// ARMSX3_X_WCBPREWAIT: whether a tagged readback may no longer give what flush_all() would
+		// have written, i.e. the render target as it is now, read through staging bytes nothing
+		// replaced. Only the bytes that matter are examined: get_readback_check_range(), the staging
+		// bytes this readback defined that flush() copies out. A change anywhere else is either
+		// never read by the flush or not rewritten by a new copy, so copying again could not
+		// change what the guest gets. Ways it goes stale:
+		//  - The render target was written after the readback (a blit leaves the section locked
+		//    and synchronized, so nothing else notices).
+		//  - The GPU copy of a section with older data, queued after this readback, wrote over
+		//    those bytes. Newer data landing there is harmless: it is what memory must end up
+		//    holding anyway, and its own section stays protected until it is flushed.
+		//  - Guest memory was loaded over them after the readback could no longer land on top
+		//    (backend journal): the pitch padding or tile rows another copy loads, a texture
+		//    upload, a re-chained staging block.
+		// The log and the journal assume the worst once they no longer reach back far enough.
+		// Accepted gaps, all shared with flush_all() or the model above:
+		//  - "Newer data is harmless" assumes the newer section's own flush later writes those
+		//    bytes; it does not if that section is dropped unflushed (discard_framebuffer_memory_region,
+		//    superseded_by_fbo) or its range is fully excluded.
+		//  - A tiled copy that loads nothing writes its tile-aligned tail from scratch rows; a
+		//    speculative copy recorded on the primary command buffer before, but submitted after,
+		//    a guest thread's copy carries the smaller sync tag; a re-chain later in the same batch
+		//    loses copies recorded into the old block (dma_block::allocate TODO).
+		//  - A re-chain by the RSX thread outside the cache lock (render_target::load_memory) after
+		//    this check but before flush_dma reads staging; flush_all() has the same window, as the
+		//    RSX thread is released before flush_set_complete().
+		// Never called for null-region blit (DMA) sections: they are never tagged (no image to copy
+		// again, see flush_all_unlocked_wait).
+		transfer_reason tagged_readback_stale(const section_storage_type& section) const
+		{
+			if (!section.flush_needs_data())
+			{
+				// flush() takes its early out and reads no staging at all
+				return transfer_reason::none;
+			}
+
+			if (section.written_since_sync())
+			{
+				return transfer_reason::written;
+			}
+
+			const auto range = section.get_readback_check_range();
+			if (!range.valid())
+			{
+				// The flush reads no byte this readback wrote: a new copy would not change it either
+				return transfer_reason::none;
+			}
+
+			if (section.get_sync_timestamp() < m_readback_log_floor)
+			{
+				return transfer_reason::log_floor;
+			}
+
+			if (older_copy_logged_since(section, range))
+			{
+				return transfer_reason::log;
+			}
+
+			switch (section.readback_staging_reloaded())
+			{
+			case readback_staging_state::intact: return transfer_reason::none;
+			case readback_staging_state::reloaded: return transfer_reason::journal;
+			default: return transfer_reason::journal_floor;
+			}
+		}
+
+		// Whether, and why, flushing this section first needs a new GPU copy
+		transfer_reason get_transfer_reason(section_storage_type* surface) const
+		{
+			if (!surface->is_synchronized())
+			{
+				return transfer_reason::unsynchronized;
+			}
+
+			if (surface->get_memory_read_flags() == rsx::memory_read_flags::flush_always)
+			{
+				// This region is set to always read from itself (unavoidable hard sync)
+				const auto ROP_timestamp = m_ctx->ROP_sync_timestamp;
+				if (ROP_timestamp > surface->get_sync_timestamp())
+				{
+					return transfer_reason::rop;
+				}
+			}
+
+			// ARMSX3_X_WCBPREWAIT: a readback that stayed pending while a guest thread waited for it
+			// outside the lock goes stale in ways flush_all() could never see: it queued and flushed
+			// a readback without letting go of the lock (tagged_readback_stale). So whoever flushes
+			// such a section next -- the faulting thread's own retry, another fault, or the RSX
+			// thread -- copies it again. Never anything but none with the switch off.
+			if (surface->readback_waited_unlocked())
+			{
+				return tagged_readback_stale(*surface);
+			}
+
+			return transfer_reason::none;
+		}
+
+		bool flush_needs_transfer(section_storage_type* surface) const
+		{
+			return get_transfer_reason(surface) != transfer_reason::none;
+		}
+
+		// ARMSX3_X_WCBPREWAIT: a tagged readback this batch keeps, i.e. flushes without copying it
+		// first, that reads staging
+		static bool is_kept_waited_readback(const section_storage_type& section)
+		{
+			return section.readback_waited_unlocked() && section.flush_needs_data();
+		}
+
+		// First half: queue the GPU copies still needed, then report that no more commands follow
+		template <typename ...Args>
+		void flush_set_transfer(commandbuffer_type& cmd, thrashed_set& data, const std::function<void()>& on_data_transfer_completed, Args&&... extras)
+		{
+			AUDIT(!data.flushed);
+
+			sort_flush_set(data);
+
+			// What each section needs, in flush order (oldest data first). simple_array keeps small
+			// sets inline: no heap allocation under the exclusive lock.
+			const u32 count = static_cast<u32>(data.sections_to_flush.size());
+			rsx::simple_array<transfer_reason> reasons(count, transfer_reason::none);
+			bool any_transfer = false;
+			bool any_kept_waited = false;
+
+			for (u32 i = 0; i < count; i++)
+			{
+				reasons[i] = get_transfer_reason(data.sections_to_flush[i]);
+				any_transfer |= (reasons[i] != transfer_reason::none);
+				any_kept_waited |= (reasons[i] == transfer_reason::none && is_kept_waited_readback(*data.sections_to_flush[i]));
+			}
+
+			if (any_transfer && any_kept_waited)
+			{
+				// ARMSX3_X_WCBPREWAIT batch rule: a readback left pending outside the lock shares DMA
+				// staging with the copies queued below, which the decision above could not see. A
+				// copy C queued here can change the staging bytes a kept readback K reads
+				// (get_readback_check_range) only by writing or loading them, and only within its own
+				// footprint (get_predicted_readback_footprint):
+				//  - C before K in flush order (older data): C's GPU write lands after K's earlier
+				//    readback, and C is flushed first, waiting for that write, so K's flush surely
+				//    reads C's stale bytes. The order decides, not the tags: with equal tags the sort
+				//    may still put C first.
+				//  - C after K (newer data) that only writes its own image data: newer data on those
+				//    bytes, which C's own flush writes over K's anyway -- later in this pass, or, when
+				//    this batch is step 1 of flush_all_unlocked_wait and step 3 flushes K without C,
+				//    whenever C is flushed (the accepted "newer data is harmless" model, see
+				//    tagged_readback_stale). Exactly what a recopied K would give, since K's new
+				//    write would land under C's.
+				//  - C after K whose copy may load guest memory (pitch padding, tile rows): the load
+				//    replaces K's bytes on the CPU, before submission.
+				// K is then copied again in its sorted place, which gives exactly the result of a
+				// flush_set where K was unsynchronized: older copies land under it, newer ones on
+				// top, and every load of this batch happens before any GPU write of it. A recopied K
+				// is itself a copy that may overwrite other kept readbacks, hence the repeat.
+				// The prediction only decides which readbacks to copy up front: the check after
+				// recording below catches anything it misses.
+				for (bool changed = true; changed;)
+				{
+					changed = false;
+
+					for (u32 k = 0; k < count; k++)
 					{
-						sections_to_transfer.push_back(surface);
+						const auto* kept = data.sections_to_flush[k];
+						if (reasons[k] != transfer_reason::none || !is_kept_waited_readback(*kept))
+						{
+							continue;
+						}
+
+						const auto check_range = kept->get_readback_check_range();
+						if (!check_range.valid())
+						{
+							continue;
+						}
+
+						for (u32 c = 0; c < count; c++)
+						{
+							const auto* other = data.sections_to_flush[c];
+							if (c == k || reasons[c] == transfer_reason::none)
+							{
+								continue;
+							}
+
+							const auto footprint = other->get_predicted_readback_footprint();
+							if (!footprint.valid() || !footprint.overlaps(check_range))
+							{
+								continue;
+							}
+
+							if (c < k || other->readback_may_reload_staging())
+							{
+								reasons[k] = transfer_reason::batch;
+								changed = true;
+								break;
+							}
+						}
 					}
 				}
 			}
 
-			if (!sections_to_transfer.empty())
+			if (any_transfer)
 			{
 				// Batch all hard faults together
 				prepare_for_dma_transfers(cmd);
 
-				for (auto &surface : sections_to_transfer)
+				rsx::simple_array<section_storage_type*> copied;
+				copied.reserve(count);
+
+				auto copy_section = [&](section_storage_type* surface, bool extra)
 				{
+					if (extra)
+					{
+						// Copies beyond flush_all()'s own reasons only ever concern tagged readbacks
+						// (and, in the fallback below, sections the first pass copied already). A
+						// null-region blit (DMA) section has no image to copy from and is never tagged.
+						ensure(surface->get_context() != texture_upload_context::dma);
+					}
+
 					surface->copy_texture(cmd, true, std::forward<Args>(extras)...);
+					log_readback(*surface);
+					copied.push_back(surface);
+				};
+
+				for (u32 i = 0; i < count; i++)
+				{
+					if (reasons[i] == transfer_reason::none)
+					{
+						continue;
+					}
+
+					copy_section(data.sections_to_flush[i], is_extra_transfer(reasons[i]));
+				}
+
+				if (any_kept_waited)
+				{
+					// ARMSX3_X_WCBPREWAIT: every copy of this batch is now recorded, logged and
+					// journaled. A readback still kept must pass the same check a flusher applies,
+					// or its flush would read what this batch put over it (a load or re-chain the
+					// prediction did not foresee). Should one fail, copy the batch again in order
+					// with every tagged readback in it: the result of a flush_set on sections that
+					// were all unsynchronized, since the second pass lands on top of the first.
+					bool stale = false;
+					for (u32 i = 0; i < count && !stale; i++)
+					{
+						const auto* kept = data.sections_to_flush[i];
+						stale = reasons[i] == transfer_reason::none && is_kept_waited_readback(*kept) &&
+							tagged_readback_stale(*kept) != transfer_reason::none;
+					}
+
+					if (stale)
+					{
+						for (u32 i = 0; i < count; i++)
+						{
+							auto* surface = data.sections_to_flush[i];
+
+							if (reasons[i] != transfer_reason::none || surface->readback_waited_unlocked())
+							{
+								// None of these second copies is one flush_all() would make
+								copy_section(surface, true);
+							}
+						}
+					}
+				}
+
+				if (m_readbacks_waited_unlocked)
+				{
+					// ARMSX3_X_WCBPREWAIT: the batch is submitted right below; every load journaled
+					// until now happened before any of these copies can land. Before any readback
+					// was ever waited for outside the lock nothing reads this: the copies keep the
+					// conservative default (their own sync_timestamp).
+					const u64 journal_mark = section_storage_type::readback_journal_mark();
+					for (auto* surface : copied)
+					{
+						surface->note_readback_batch_recorded(journal_mark);
+					}
 				}
 
 				cleanup_after_dma_transfers(cmd);
@@ -839,7 +1187,18 @@ namespace rsx
 			{
 				on_data_transfer_completed();
 			}
+		}
 
+		template <typename ...Args>
+		void flush_set(commandbuffer_type& cmd, thrashed_set& data, std::function<void()> on_data_transfer_completed, Args&&... extras)
+		{
+			flush_set_transfer(cmd, data, on_data_transfer_completed, std::forward<Args>(extras)...);
+			flush_set_complete(data);
+		}
+
+		// Second half: write the readbacks to guest memory (waiting for the GPU where needed)
+		void flush_set_complete(thrashed_set& data)
+		{
 			for (auto &surface : data.sections_to_flush)
 			{
 				surface->flush();
@@ -2051,11 +2410,25 @@ namespace rsx
 		template <typename ...Args>
 		void discard_framebuffer_memory_region(commandbuffer_type& /*cmd*/, const address_range32& rsx_range, Args&&... /*extras*/)
 		{
+			// ARMSX3: under the cache lock, and a structural change like any other discard.
+			//
+			// This ran unlocked. It got away with it because on_framebuffer_bound() calls
+			// set_memory_read_flags() first, which used to block for as long as a guest thread sat
+			// in flush_all() waiting for its readback. With that wait taken outside the lock
+			// (ARMSX3_X_WCBPREWAIT) the RSX thread gets here while the guest thread is about to
+			// relock and flush, and both would discard and unprotect the same section at once
+			// (ensure(is_locked) in merge_protected_ranges / has_flushable_data, or a double
+			// on_unlock on the render target). Bumping the cache tag makes a deferred fault that
+			// examined this section before the discard redo its invalidation instead of flushing a
+			// section that is no longer locked.
+			std::lock_guard lock(m_cache_mutex);
+
 			auto* region_ptr = find_cached_texture(rsx_range, { .gcm_format = RSX_GCM_FORMAT_IGNORED }, false, false, false);
 			if (region_ptr && region_ptr->is_locked() && region_ptr->get_context() == texture_upload_context::framebuffer_storage)
 			{
 				ensure(region_ptr->get_protection() == utils::protection::no);
 				region_ptr->discard(false);
+				update_cache_tag();
 			}
 		}
 
@@ -2187,6 +2560,282 @@ namespace rsx
 			return true;
 		}
 
+		/**
+		 * ARMSX3_X_WCBPREWAIT: flush_all() for a fault on a guest thread, minus holding m_cache_mutex
+		 * across the GPU wait. Used by the Vulkan backend only (it relies on the section's
+		 * dma_wait_ref / get_pending_dma_ref / wait_dma_ref / dma_ready).
+		 *
+		 * flush_all() keeps the lock exclusively from the copy decision to the end of the memcpy,
+		 * i.e. for as long as the GPU takes to reach the readback through everything queued before
+		 * it: 3.5 ms on average in LittleBigPlanet with Write Color Buffers on (Adreno 740). For all
+		 * that time every other fault queues on the lock, even on unrelated pages, and so does the
+		 * RSX thread (do_update, texture lookups, set_memory_read_flags) -- which then stops feeding
+		 * the very GPU everyone waits for.
+		 *
+		 * Here the work is cut at that wait:
+		 *  1. Locked, once the caller's flush request has been serviced, as for flush_all: flush_all's
+		 *     own decision and copies (flush_set's first half), then on_data_transfer_completed.
+		 *     If nothing is left to wait for, or a section is a bound target (flush_always) or a
+		 *     null-region blit (DMA) section, it finishes right here exactly as flush_all does.
+		 *  2. Unlocked: wait for every readback flush_set's second half would wait for. Each wait
+		 *     holds its own reference to the event, so a section disposing it meanwhile is harmless.
+		 *  3. Locked again: work out the flush from scratch, with the same deferred invalidation
+		 *     flush_all's fallback performs, and complete it (flush_set's second half, then
+		 *     unprotect_set) only if it needs no new GPU copy, no target was written since its
+		 *     readback, and every readback it reads is done. That is precisely what flush_all's
+		 *     fallback would do at this point, with its waits already over. Otherwise nothing is
+		 *     written and the caller starts over on the regular path (retry), which records
+		 *     whatever copy is now needed exactly as flush_all does.
+		 * Guest memory is only written in step 3, under the lock, while the pages are still
+		 * protected, from a readback that still matches the render target as the RSX thread has
+		 * left it -- the same data flush_all would have written.
+		 *
+		 * What flush_all never had to handle is a readback left pending while other cache work
+		 * runs: a blit into the target (the section stays locked and synchronized), a copy of an
+		 * older overlapping surface into the same DMA staging bytes, or guest memory loaded over
+		 * them (another copy's padding or tile rows, a texture upload, a re-chained staging block).
+		 * The sections waited for here are tagged (unlocked_wait_sync_tag) and flush_needs_transfer()
+		 * recopies a tagged readback that went stale any of these ways, for every flusher: step 3,
+		 * the retry, other faults and the RSX thread; a batch whose copies may overwrite the staging
+		 * bytes a tagged readback in it reads copies that readback again too, in its sorted place
+		 * (flush_set_transfer). Without that, the retry's flush_all (synchronized, not flush_always:
+		 * no new copy) would write the pre-blit data and unprotect the pages, losing the blit.
+		 * Only the staging bytes the flush actually copies out and the readback defined count
+		 * (get_readback_check_range), and a tag is cleared as soon as its readback is flushed,
+		 * copied again or dropped.
+		 */
+		struct unlocked_flush_result
+		{
+			bool retry = false;         // Nothing was flushed: run the regular path (flush request + flush_all)
+			bool waited = false;        // Step 2 ran
+			bool bound_target = false;  // A GPU wait was left under the lock because of a flush_always section
+			u64 wait_tsc = 0;           // Step 2's length, when measuring was asked for
+		};
+
+		unlocked_flush_result flush_all_unlocked_wait(commandbuffer_type& cmd, thrashed_set& data, std::function<void()> on_data_transfer_completed, bool measure)
+		{
+			unlocked_flush_result outcome{};
+			std::unique_lock lock(m_cache_mutex);
+
+			AUDIT(data.cause.deferred_flush());
+			AUDIT(!data.flushed);
+
+			thrashed_set current;
+			thrashed_set* work = &data;
+
+			if (m_cache_update_tag.load() != data.cache_tag)
+			{
+				// The cache changed since the fault was examined. flush_all then repeats the
+				// invalidation undeferred; repeating it deferred selects the same sections and leaves
+				// their flush to the code below. Without flushables it does all the work inline.
+				current = invalidate_range_impl_base(cmd, data.fault_range, data.cause);
+				if (!current.violation_handled || current.num_flushable <= 0)
+				{
+					return outcome;
+				}
+
+				work = &current;
+			}
+
+			// 1. Copies, as flush_all makes them
+			flush_set_transfer(cmd, *work, on_data_transfer_completed);
+
+			std::vector<typename section_storage_type::dma_wait_ref> pending;
+			bool bound_target = false;
+			bool dma_section = false;
+
+			for (auto* surface : work->sections_to_flush)
+			{
+				// A flush_always section is a bound render target: the RSX thread would keep drawing
+				// into it during an unlocked wait, step 3 would then find the readback outdated and
+				// the fault would pay for a second one. Those keep flush_all's behaviour.
+				bound_target |= (surface->get_memory_read_flags() == rsx::memory_read_flags::flush_always);
+
+				// So does a null-region blit (DMA) section: it has no image, so a readback of it that
+				// went stale while left pending (a copy or a load over its staging bytes) could never
+				// be copied again. Its flush range also spans every blit attached to it since it was
+				// created, while its readback only covers the last one.
+				dma_section |= (surface->get_context() == texture_upload_context::dma);
+
+				if (!surface->flush_needs_data())
+				{
+					continue;
+				}
+
+				if (auto ref = surface->get_pending_dma_ref())
+				{
+					pending.push_back(std::move(ref));
+				}
+			}
+
+			if (pending.empty() || bound_target || dma_section)
+			{
+				// Finish exactly as flush_all does
+				outcome.bound_target = bound_target && !pending.empty();
+				pending.clear();
+
+				flush_set_complete(*work);
+				unprotect_set(*work);
+				return outcome;
+			}
+
+			for (auto* surface : work->sections_to_flush)
+			{
+				// Lets further faults on these sections wait for this thread (wait_for_unlocked_flush)
+				// rather than each send a flush request of its own. The tag lives until the readback
+				// is flushed, copied again or dropped (clear_unlocked_wait_tag).
+				surface->unlocked_wait_sync_tag = surface->get_sync_timestamp();
+			}
+
+			m_readbacks_waited_unlocked = true;
+
+			// 2. The GPU wait, unlocked
+			m_unlocked_flushes++;
+
+			// Wakes the threads waiting in wait_for_unlocked_flush() on every way out; normally while
+			// the lock is held again, as it is declared after the lock and so released before it.
+			struct release_followers_t
+			{
+				texture_cache* cache;
+
+				~release_followers_t()
+				{
+					cache->m_unlocked_flushes--;
+					cache->m_unlocked_flush_epoch++;
+				}
+			} release_followers{ this };
+
+			lock.unlock();
+			{
+				const u64 wait_start = measure ? utils::get_tsc() : 0;
+
+				for (auto& ref : pending)
+				{
+					section_storage_type::wait_dma_ref(ref);
+				}
+
+				if (measure)
+				{
+					outcome.wait_tsc = utils::get_tsc() - wait_start;
+				}
+
+				outcome.waited = true;
+				pending.clear();
+			}
+			lock.lock();
+
+			// 3. Decide again from scratch: 'work' may be stale by now
+			thrashed_set fresh = invalidate_range_impl_base(cmd, data.fault_range, data.cause);
+			if (!fresh.violation_handled || fresh.num_flushable <= 0)
+			{
+				// Already flushed by another thread, or only left to unprotect (done inline)
+				return outcome;
+			}
+
+			for (auto* surface : fresh.sections_to_flush)
+			{
+				if (flush_needs_transfer(surface) ||
+					surface->written_since_sync() ||
+					(surface->flush_needs_data() && !surface->dma_ready()))
+				{
+					// Needs a new copy, or would wait under the lock for a copy not known to be
+					// submitted. Both belong to the regular path.
+					//
+					// The tags stay. A readback this thread waited for remains pending until somebody
+					// flushes or recopies it, and flush_needs_transfer() relies on the tag to recopy it
+					// if the target is written, or its staging bytes replaced, in the meantime --
+					// including before the regular path's flush request has been serviced.
+					// Clearing them here would let that flush write the stale readback (a blit into
+					// the target in between would never reach guest memory).
+					outcome.retry = true;
+					return outcome;
+				}
+			}
+
+			sort_flush_set(fresh);
+			flush_set_complete(fresh);
+			unprotect_set(fresh);
+			return outcome;
+		}
+
+		/**
+		 * ARMSX3_X_WCBPREWAIT: if every section a deferred fault would flush is read back by a thread
+		 * waiting in flush_all_unlocked_wait(), wait until such a thread is done with its fault
+		 * instead of sending a flush request of its own: by then those pages are unprotected, or the
+		 * faulting thread has handed over to the regular path. Returns false, without waiting, when
+		 * that is not the case, and after 2 s without progress (a stuck readback), so the caller
+		 * takes the regular path. Touches no cache state; the caller re-examines its fault either way.
+		 */
+		bool wait_for_unlocked_flush(const thrashed_set& data)
+		{
+			if (!m_unlocked_flushes)
+			{
+				// Common case, decided without the lock
+				return false;
+			}
+
+			u64 epoch = 0;
+			{
+				reader_lock lock(m_cache_mutex);
+
+				if (!m_unlocked_flushes || data.sections_to_flush.empty() || m_cache_update_tag.load() != data.cache_tag)
+				{
+					return false;
+				}
+
+				for (auto* surface : data.sections_to_flush)
+				{
+					if (flush_needs_transfer(surface) ||
+						!surface->unlocked_wait_sync_tag ||
+						surface->unlocked_wait_sync_tag != surface->get_sync_timestamp())
+					{
+						return false;
+					}
+				}
+
+				epoch = m_unlocked_flush_epoch.load();
+			}
+
+			// Hot briefly, then 50us sleeps; given up after 2 s without progress. Measured on a clock
+			// rather than counted in sleeps, which timer slack stretches.
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+
+			for (u32 polls = 0; m_unlocked_flush_epoch.load() == epoch; polls++)
+			{
+				if (polls < 512)
+				{
+					utils::pause();
+					continue;
+				}
+
+				if (std::chrono::steady_clock::now() >= deadline)
+				{
+					return false;
+				}
+
+				std::this_thread::sleep_for(std::chrono::microseconds(50));
+			}
+
+			return true;
+		}
+
+		/**
+		 * ARMSX3_X_WCBPREWAIT: log readback copies a caller made outside the cache's own paths
+		 * (VKGSRender's present-from-memory fallback calls copy_texture() directly), as the cache
+		 * logs its own. Call after recording them and before they are submitted: a readback waited
+		 * for outside the lock must see an older surface's copy that lands on its staging bytes.
+		 */
+		template <typename List>
+		void log_external_readbacks(const List& sections)
+		{
+			std::lock_guard lock(m_cache_mutex);
+
+			for (const auto* section : sections)
+			{
+				log_readback(*section);
+			}
+		}
+
 		template <typename ...Args>
 		bool flush_if_cache_miss_likely(commandbuffer_type& cmd, const address_range32 &range, Args&&... extras)
 		{
@@ -2220,6 +2869,7 @@ namespace rsx
 				lock.upgrade();
 
 				region.copy_texture(cmd, false, std::forward<Args>(extras)...);
+				log_readback(region);
 				result = true;
 
 				cur_flushes_this_frame++;
@@ -3818,6 +4468,7 @@ namespace rsx
 			else if (cached_dest)
 			{
 				cached_dest->dma_transfer(cmd, vram_texture, src_area, dst_range, dst.pitch);
+				log_readback(*cached_dest);
 			}
 
 			if (cached_src)
