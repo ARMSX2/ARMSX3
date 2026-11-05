@@ -3383,6 +3383,18 @@ ppu_thread::ppu_thread(utils::serial& ar)
 
 	const u32 status = ar.pop<u32>();
 
+	// A savestate can catch a thread inside sys_cond_wait or _sys_lwcond_queue_wait while it already
+	// sits in the run queue: its timeout expired just before the save, so it was woken but had not yet
+	// left the wait. Restore it like a sleeping thread: do not re-queue it, replay the wait, and do not
+	// start the scheduler before the replayed wait has slept.
+	// Only LLE callers stopped on the sc instruction are detected. HLE wrappers (sysPrxForUser
+	// sys_lwcond_wait, codec modules) also keep state in optional_savestate_state, but they sit on an
+	// HLE stub and the sc check leaves them alone.
+	const bool replay_wait = (status == PPU_THREAD_STATUS_RUNNABLE || status == PPU_THREAD_STATUS_ONPROC) &&
+		!optional_savestate_state->data.empty() &&
+		(gpr[11] == 107 /* sys_cond_wait */ || gpr[11] == 113 /* _sys_lwcond_queue_wait */) &&
+		vm::check_addr(cia) && vm::read32(cia) == ppu_instructions::SC(0);
+
 	switch (status)
 	{
 	case PPU_THREAD_STATUS_IDLE:
@@ -3404,7 +3416,8 @@ ppu_thread::ppu_thread(utils::serial& ar)
 				std::map<u32, ppu_thread*> awake_ppus;
 			};
 
-			g_fxo->get<awake_pushed>().awake_ppus[order] = this;
+			// A replayed wait is not re-queued; its slot stays (as nullptr) so the saved orders remain contiguous
+			g_fxo->get<awake_pushed>().awake_ppus[order] = replay_wait ? nullptr : this;
 
 			if (!std::exchange(g_fxo->get<awake_pushed>().pushed, true))
 			{
@@ -3416,14 +3429,18 @@ ppu_thread::ppu_thread(utils::serial& ar)
 					{
 						ensure(prev + 1 == ppu.first);
 						prev = ppu.first;
-						lv2_obj::awake(ppu.second);
+
+						if (ppu.second)
+						{
+							lv2_obj::awake(ppu.second);
+						}
 					}
 
 					g_fxo->get<awake_pushed>().awake_ppus.clear();
 				});
 			}
 		}
-		else
+		else if (!replay_wait)
 		{
 			lv2_obj::awake(this);
 		}
@@ -3464,8 +3481,13 @@ ppu_thread::ppu_thread(utils::serial& ar)
 			});
 		}
 
-		if (status == PPU_THREAD_STATUS_SLEEP)
+		if (status == PPU_THREAD_STATUS_SLEEP || replay_wait)
 		{
+			if (replay_wait)
+			{
+				ppu_log.notice("Loading PPU Thread [0x%x]: saved %s inside a blocking wait, replaying the wait", id, ppu_thread_status{status});
+			}
+
 			cmd_list
 			({
 				{ppu_cmd::ptr_call, 0},
