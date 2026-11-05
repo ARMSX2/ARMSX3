@@ -58,6 +58,12 @@ atomic_t<bool> g_user_asked_for_screenshot = false;
 atomic_t<bool> g_user_asked_for_frame_capture = false;
 atomic_t<bool> g_disable_frame_limit = false;
 atomic_t<bool> g_gpu_device_lost = false;
+
+// Set before the emulator pauses (Android: pause menu, app sent to the background). The next
+// flip writes the renderer's driver pipeline cache to disk and bumps the generation.
+atomic_t<bool> g_flush_pipeline_cache_requested = false;
+atomic_t<u64> g_pipeline_cache_flush_generation = 0;
+
 rsx::frame_trace_data frame_debug;
 rsx::frame_capture_data frame_capture;
 

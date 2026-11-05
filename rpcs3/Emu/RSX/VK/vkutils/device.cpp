@@ -1481,6 +1481,9 @@ namespace vk
 			return;
 		}
 
+		// Called on the RSX thread (flush_pipeline_cache, on a pause request) and from destroy(),
+		// which only runs once the RSX thread has exited, so the two never overlap. Pipeline
+		// compiler threads may still add to the cache meanwhile; the driver synchronises that.
 		usz data_size = 0;
 
 		if (vkGetPipelineCacheData(dev, m_pipeline_cache, &data_size, nullptr) != VK_SUCCESS || !data_size)
@@ -1503,7 +1506,11 @@ namespace vk
 
 		std::vector<u8> blob(data_size);
 
-		if (vkGetPipelineCacheData(dev, m_pipeline_cache, &data_size, blob.data()) != VK_SUCCESS)
+		// The cache can grow between the two calls while compiler threads add pipelines. The driver
+		// then returns VK_INCOMPLETE with as many whole entries as fit, which is still valid initial
+		// data; the size check above makes the next save write the rest.
+		if (const VkResult res = vkGetPipelineCacheData(dev, m_pipeline_cache, &data_size, blob.data());
+			(res != VK_SUCCESS && res != VK_INCOMPLETE) || !data_size)
 		{
 			return;
 		}
@@ -1519,14 +1526,33 @@ namespace vk
 
 		fs::create_path(fs::get_cache_dir());
 
-		if (fs::file out{path, fs::rewrite})
+		// Write a temporary file and rename it over the old one, so a process killed in the
+		// middle of the write leaves the previous cache intact instead of a truncated one. Synced
+		// before the rename, as fs::pending_file does, so the rename cannot reach the disk ahead
+		// of the data.
+		const std::string tmp_path = path + ".tmp";
+		bool written = false;
+
+		if (fs::file out{tmp_path, fs::rewrite})
 		{
-			if (out.write(&hdr, sizeof(hdr)) == sizeof(hdr) &&
-				(blob.empty() || out.write(blob.data(), blob.size()) == blob.size()))
+			written = out.write(&hdr, sizeof(hdr)) == sizeof(hdr) &&
+				(blob.empty() || out.write(blob.data(), blob.size()) == blob.size());
+
+			if (written)
 			{
-				m_pipeline_cache_saved_size = data_size;
-				rsx_log.notice("vk: wrote %zu bytes of driver pipeline cache.", data_size);
+				out.sync();
 			}
+		}
+
+		if (written && fs::rename(tmp_path, path, true))
+		{
+			m_pipeline_cache_saved_size = data_size;
+			rsx_log.notice("vk: wrote %zu bytes of driver pipeline cache.", data_size);
+		}
+		else
+		{
+			rsx_log.warning("vk: could not write the driver pipeline cache to '%s' (%s).", path, fs::g_tls_error);
+			fs::remove_file(tmp_path);
 		}
 	}
 

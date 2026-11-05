@@ -244,6 +244,12 @@ namespace vk
 		// the spec only requires external synchronisation on a cache created with
 		// VK_PIPELINE_CACHE_CREATE_EXTERNALLY_SYNCHRONIZED_BIT_EXT, which this is not.
 		VkPipelineCache get_pipeline_cache() const { return m_pipeline_cache; }
+
+		// Writes the driver pipeline cache to disk now if it grew since the last write. The
+		// cache is otherwise only written when the device is destroyed, which an Android
+		// process killed from the background never reaches. RSX thread only.
+		void flush_pipeline_cache() const { save_pipeline_cache(); }
+
 		const gpu_shader_types_support& get_shader_types_support() const { return pgpu->shader_types_support; }
 		const custom_border_color_features& get_custom_border_color_support() const { return pgpu->custom_border_color_support; }
 		bool get_unsized_array_support() const { return pgpu->unsized_array_support; }
