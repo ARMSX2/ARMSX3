@@ -287,6 +287,22 @@ object ConfigDatabase {
         "NPUB30828" to "Core:\n  SPU Block Size: Mega\n",
         "NPEB01054" to "Core:\n  SPU Block Size: Mega\n",
 
+        // Final Fantasy XIII: SPU Block Size Mega and Stub PPU Traps 20.
+        //
+        // Mega: see Naughty Bear above. Stub PPU Traps N makes a PPU trap skip N instructions and
+        // carry on instead of stopping the game with "PPU Trap!" (ppu_trap in PPUThread.cpp). It
+        // sits here with the block size rather than in GameDefaults: this layer is applied over
+        // config.yml, so it beats the stock 0 GameDefaults writes there on every boot.
+        //
+        // MRTC00003 is the title ID the US disc reports, and the only one RPCS3's patch file knows
+        // the game by. The others are the serials RPCS3's compatibility list gives it (US, EU, JP,
+        // Asia).
+        "MRTC00003" to "Core:\n  SPU Block Size: Mega\n  Stub PPU Traps: 20\n",
+        "BLUS30416" to "Core:\n  SPU Block Size: Mega\n  Stub PPU Traps: 20\n",
+        "BLES00783" to "Core:\n  SPU Block Size: Mega\n  Stub PPU Traps: 20\n",
+        "BLJM67005" to "Core:\n  SPU Block Size: Mega\n  Stub PPU Traps: 20\n",
+        "BCAS25005" to "Core:\n  SPU Block Size: Mega\n  Stub PPU Traps: 20\n",
+
         // Ratchet & Clank Future: Tools of Destruction and Quest for Booty, and Ratchet & Clank:
         // Into the Nexus: Thread Scheduler Mode RPCS3 Scheduler and SPU GETLLAR Busy Waiting
         // Percentage 0.

@@ -21,9 +21,32 @@ object GameDefaults {
     private val BY_SERIAL: Map<String, Map<String, String>> = mapOf(
         // Uncharted 3. Dies on its own "PS3 application has crashed" path; skipping the
         // trap gets it past that. Confirmed on device by a tester, who found it by setting
-        // the node by hand.
+        // the node by hand. Every serial RPCS3's patch file lists for the game: the discs,
+        // the Game of the Year editions and the PSN releases.
         "BCUS98233" to mapOf("Core@@Stub PPU Traps" to "1"),
         "BCES01175" to mapOf("Core@@Stub PPU Traps" to "1"),
+        "BCES01176" to mapOf("Core@@Stub PPU Traps" to "1"),
+        "BCJS37004" to mapOf("Core@@Stub PPU Traps" to "1"),
+        "BCAS25009" to mapOf("Core@@Stub PPU Traps" to "1"),
+        "BCUS99086" to mapOf("Core@@Stub PPU Traps" to "1"),
+        "BCES01670" to mapOf("Core@@Stub PPU Traps" to "1"),
+        "BCES01692" to mapOf("Core@@Stub PPU Traps" to "1"),
+        "BCAS25014" to mapOf("Core@@Stub PPU Traps" to "1"),
+        "NPUA80858" to mapOf("Core@@Stub PPU Traps" to "1"),
+        "NPEA00422" to mapOf("Core@@Stub PPU Traps" to "1"),
+
+        // God of War: Ascension: Stub PPU Traps 1, as for Uncharted 3. At 0 a PPU trap stops
+        // the game ("PPU Trap!"); at 1 the trapping instruction is skipped and the game carries
+        // on (ppu_trap in PPUThread.cpp). Every serial RPCS3's patch file lists for the game:
+        // the discs (US, EU, Asia, JP) and the PSN releases (US, EU, Asia).
+        "BCUS98232" to mapOf("Core@@Stub PPU Traps" to "1"),
+        "BCES01741" to mapOf("Core@@Stub PPU Traps" to "1"),
+        "BCES01742" to mapOf("Core@@Stub PPU Traps" to "1"),
+        "BCAS25016" to mapOf("Core@@Stub PPU Traps" to "1"),
+        "BCJS37008" to mapOf("Core@@Stub PPU Traps" to "1"),
+        "NPUA80918" to mapOf("Core@@Stub PPU Traps" to "1"),
+        "NPEA00445" to mapOf("Core@@Stub PPU Traps" to "1"),
+        "NPHA80258" to mapOf("Core@@Stub PPU Traps" to "1"),
 
         // Yakuza: Dead Souls. Runs at 1fps with FIFO reordering on -- not slowly, but in
         // one-second steps: the RSX blocks on nv406e::semaphore_acquire until the wait times
