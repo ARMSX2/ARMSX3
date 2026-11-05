@@ -12,6 +12,10 @@ Version: 1.2
 # and shipping them would fork a database we would then have to maintain.
 #
 # Ps3PatchRepo.BUNDLED must list every patch here, or it is imported but never enabled.
+#
+# One deliberate exception: database options re-keyed for an executable the database does not
+# know (LittleBigPlanet 2 patched for online play, at the end). Those fix nothing, so they are
+# offered in the patch list but left off, as the database's own are, and BUNDLED leaves them out.
 
 # SONIC THE HEDGEHOG (2006) -- upstream RPCS3 issue #4122, open since 2018.
 #
@@ -1016,3 +1020,76 @@ SPU-9001b44fd7278b5a6fa5385939fe928a0e549394: # SPUNAME: 'PS3_Release/edgepost-m
     Patch:
       - [ be32, 0x000031f4, 0x40800003 ] # il r3 0
       - [ be32, 0x0000349c, 0x40800017 ] # il r23 0
+
+# LITTLEBIGPLANET 2 v01.33 (BCUS98245), the executable patched for online play with Refresher --
+# the database's own LBP2 01.33 patches, re-keyed. RPCS3's database keys them to the stock 01.33
+# executable (PPU-a74423ca913fc18e46cfe926db1d48e41f9858a9) only, and patching the EBOOT for a
+# community server gives it a new hash, so none of them matched and the patch list stayed empty.
+#
+# Same addresses as the stock entries: the patcher leaves the code where it was. Re-keyed by the
+# tester Harry, who ran Disable MLAA and Disable Score Bubble FX on this executable (the second
+# replaces a function's first instruction with a return) and played normally (ARMSX3 1.6.3 log,
+# 11-05).
+#
+# Unlike the rest of this file these fix nothing; they are the database's options, carried over for
+# an executable the database does not know. So they are offered but left OFF, as the stock ones are:
+# not listed in Ps3PatchRepo.BUNDLED on purpose.
+PPU-5af0f0d7824157a0aace48f5d0b06f6efe02fe4e:
+  "Disable MLAA":
+    Games:
+      "LittleBigPlanet 2":
+        BCUS98245: [ 01.33 ]
+    Author: "illusiony"
+    Notes: "For the 01.33 executable patched for online play."
+    Patch Version: 1.0
+    Patch:
+      - [ byte, 0x00db8208, 0x00 ]
+      - [ be32, 0x00e3e114, 0x00000001 ]
+  "Aspect Ratio":
+    Games:
+      "LittleBigPlanet 2":
+        BCUS98245: [ 01.33 ]
+    Author: "slashiee"
+    Notes: "For the 01.33 executable patched for online play. Requires \"Stretch To Display Area\" checked in the GPU settings."
+    Configurable Values:
+      "Aspect Ratio":
+        Type: double_enum
+        Value: 3.555555555555556
+        Allowed Values:
+          "32:9": 3.555555555555556
+          "21:9 (3840x1600)": 2.4
+          "21:9 (3440x1440)": 2.388888888888889
+          "21:9 (2560x1080)": 2.37037037037037
+          "16:10": 1.6
+          "4:3": 1.333333333333333
+          "5:4": 1.25
+    Patch Version: 1.0
+    Patch:
+      - [ bef32, 0x00d9c8ec, "Aspect Ratio" ]
+  "Create Mode Everywhere":
+    Games:
+      "LittleBigPlanet 2":
+        BCUS98245: [ 01.33 ]
+    Author: "Aphelion"
+    Notes: "For the 01.33 executable patched for online play."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x00156f00, 0x38000001 ]
+  "Disable Score Bubble FX":
+    Games:
+      "LittleBigPlanet 2":
+        BCUS98245: [ 01.33 ]
+    Author: "ennuo"
+    Notes: "For the 01.33 executable patched for online play. Disables score bubble effects for extra performance."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x002f4fb4, 0x4e800020 ]
+  "Disable Motion Blur":
+    Games:
+      "LittleBigPlanet 2":
+        BCUS98245: [ 01.33 ]
+    Author: "Hasster"
+    Notes: "For the 01.33 executable patched for online play. Disables Motion Blur. Doesn't affect performance."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x0032897c, 0x4e800020 ]
