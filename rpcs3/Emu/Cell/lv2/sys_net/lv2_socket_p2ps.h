@@ -65,6 +65,7 @@ public:
 	lv2_socket_p2ps(socket_type socket, u16 port, u16 vport, u32 op_addr, u16 op_port, u16 op_vport, u64 cur_seq, u64 data_beg_seq, s32 so_nbio, s32 so_rcvbuf);
 	lv2_socket_p2ps(utils::serial& ar, lv2_socket_type type);
 	void save(utils::serial& ar);
+	void restore_binding() override;
 
 	p2ps_stream_status get_status() const;
 	void set_status(p2ps_stream_status new_status);

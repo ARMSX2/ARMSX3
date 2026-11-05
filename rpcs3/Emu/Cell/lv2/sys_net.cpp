@@ -291,8 +291,20 @@ std::function<void(void*)> lv2_socket::load(utils::serial& ar)
 		break;
 	}
 	case SYS_NET_SOCK_RAW: sock_lv2 = make_shared<lv2_socket_raw>(ar, type); break;
-	case SYS_NET_SOCK_DGRAM_P2P: sock_lv2 = make_shared<lv2_socket_p2p>(ar, type); break;
-	case SYS_NET_SOCK_STREAM_P2P: sock_lv2 = make_shared<lv2_socket_p2ps>(ar, type); break;
+	case SYS_NET_SOCK_DGRAM_P2P:
+	{
+		auto lv2_p2p = make_shared<lv2_socket_p2p>(ar, type);
+		lv2_p2p->restore_binding();
+		sock_lv2 = std::move(lv2_p2p);
+		break;
+	}
+	case SYS_NET_SOCK_STREAM_P2P:
+	{
+		auto lv2_p2ps = make_shared<lv2_socket_p2ps>(ar, type);
+		lv2_p2ps->restore_binding();
+		sock_lv2 = std::move(lv2_p2ps);
+		break;
+	}
 	}
 
 	if (std::memcmp(&sock_lv2->last_bound_addr, std::array<u8, 16>{}.data(), 16))

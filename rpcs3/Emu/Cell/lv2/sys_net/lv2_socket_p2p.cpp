@@ -57,6 +57,30 @@ void lv2_socket_p2p::save(utils::serial& ar)
 	ar(data_dequeue);
 }
 
+void lv2_socket_p2p::restore_binding()
+{
+	// bind() always assigns a vport, a socket without one was never bound
+	if (!vport)
+	{
+		return;
+	}
+
+	auto& nc = g_fxo->get<p2p_context>();
+	std::lock_guard list_lock(nc.list_p2p_ports_mutex);
+
+	nc.create_p2p_port(port);
+	auto& pport = ::at32(nc.list_p2p_ports, port);
+
+	std::lock_guard vport_lock(pport.bound_p2p_vports_mutex);
+	std::lock_guard lock(mutex);
+
+	// The address was validated by bind() before saving, socket options needed by the reuse checks are not serialized anyway
+	pport.bound_p2p_vports[vport].insert(lv2_id);
+	native_socket = pport.p2p_socket;
+
+	sys_net.notice("[P2P] Restored binding of socket %d to port %d, vport %d", lv2_id, port, vport);
+}
+
 void lv2_socket_p2p::handle_new_data(sys_net_sockaddr_in_p2p p2p_addr, std::vector<u8> p2p_data)
 {
 	std::lock_guard lock(mutex);
