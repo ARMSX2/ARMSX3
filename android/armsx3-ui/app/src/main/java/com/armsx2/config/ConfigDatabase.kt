@@ -286,6 +286,38 @@ object ConfigDatabase {
         // fps with the RSX at 28% and the CPU at about 40% overall (Odin 3, 11-04).
         "NPUB30828" to "Core:\n  SPU Block Size: Mega\n",
         "NPEB01054" to "Core:\n  SPU Block Size: Mega\n",
+
+        // Ratchet & Clank Future: Tools of Destruction and Quest for Booty, and Ratchet & Clank:
+        // Into the Nexus: Thread Scheduler Mode RPCS3 Scheduler and SPU GETLLAR Busy Waiting
+        // Percentage 0.
+        //
+        // In combat the main PPU thread is the limit; in ToD the RSX thread waits 16-20 ms a frame
+        // on an empty FIFO. The scheduler's big.LITTLE mask puts the SPU threads on the middle
+        // cores and leaves the prime core to RSX, and GETLLAR 0 lets an SPU polling an unchanged
+        // reservation wait in the OS instead of spinning on a core the PPU needs. Frames over 50 ms
+        // in 20 s of combat, two runs each, stock -> these (Retroid Pocket 6, Turnip, 11-04): ToD
+        // 109/69 -> 23/14, QfB 52/53 -> 22/27, Nexus 67/41 -> 7/10.
+        //
+        // This is the mask KEY_AFFINITY_OS took off the global default, where six busy SPU threads
+        // share four cores; these games measured better with it, so it is per title. Tested on the
+        // EU discs (BCES00052, BCES00301, BCES01908); the other serials are the same games.
+        // NPEA00106 and NPJA00033 are listed as Quest for Booty only in RPCS3's patch file.
+        "BCES00052" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
+        "BCUS98127" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
+        "BCJS30014" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
+        "NPEA00452" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
+        "NPUA80965" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
+        "BCES00301" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
+        "BCAS20052" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
+        "NPEA00088" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
+        "NPUA80145" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
+        "NPEA00106" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
+        "NPJA00033" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
+        "BCES01908" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
+        "BCES01949" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
+        "BCUS99245" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
+        "NPEA00457" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
+        "NPUA80908" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
     )
 
     /**
