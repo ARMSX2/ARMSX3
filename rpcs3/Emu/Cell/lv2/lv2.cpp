@@ -1677,6 +1677,14 @@ public:
 
 extern void ppu_execute_syscall(ppu_thread& ppu, u64 code)
 {
+	extern bool ppu_nb_stream_lock_enabled();
+	extern void ppu_nb_stream_unlock_at_syscall(ppu_thread&);
+
+	if (ppu_nb_stream_lock_enabled()) [[unlikely]]
+	{
+		ppu_nb_stream_unlock_at_syscall(ppu);
+	}
+
 	if (g_cfg.core.ppu_decoder == ppu_decoder_type::llvm)
 	{
 		code = ppu.gpr[11];

@@ -2128,6 +2128,14 @@ bool ppu_load_exec(const ppu_exec_object& elf, bool virtual_load, const std::str
 		return false;
 	}
 
+	if (!virtual_load)
+	{
+		// Naughty Bear: Panic in Paradise trials: see ppu_nb_stream_lock in PPUThread.cpp
+		extern void ppu_nb_stream_lock_reset(bool on);
+		const std::string& title = Emu.GetTitleID();
+		ppu_nb_stream_lock_reset(title == "NPUB30828" || title == "NPEB01054");
+	}
+
 	// Check if it is a standalone executable first
 	for (const auto& prog : elf.progs)
 	{
