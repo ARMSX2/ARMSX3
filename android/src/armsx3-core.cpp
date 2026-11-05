@@ -8594,12 +8594,22 @@ extern "C" bool _armsx3_settingsSet(std::string_view path,
     decoded.assign(valueString);
   }
 
-  // Clocks scale is read on every guest clock read, against an offset taken at boot with the
-  // boot-time scale (initialize_timebased_time). Changed under a running game the clock jumps:
-  // lowered, it drops below that offset and wraps to ~2^64 (convert_to_timebased_time then fails
-  // its ensure); raised, it leaps ahead by most of the device's uptime. RPCS3 keeps it to the
-  // boot for that reason. The app remembers the edit and applies it before the next boot.
-  if (root == &g_cfg.core.clocks_scale && !Emu.IsStopped(true) && decoded != root->to_string()) {
+  // A setting RPCS3 reads only at boot (an entry with its dynamic flag off) waits for the next
+  // boot while a game runs. Desktop RPCS3 greys these out in-game, but a leaf's from_string()
+  // ignores the flag it is handed, so every in-game menu here used to write them live and the
+  // game went on half on the old value: code compiled before the change keeps it, code compiled
+  // after gets the new one (issue #228, crashes after changing options mid-game). Clocks scale
+  // shows how bad it gets: it is read on every guest clock read, against an offset taken at boot
+  // with the boot-time scale (initialize_timebased_time), so changed under a running game the
+  // clock jumps: lowered, it drops below that offset and wraps to ~2^64
+  // (convert_to_timebased_time then fails its ensure); raised, it leaps ahead by most of the
+  // device's uptime.
+  //
+  // The app has remembered the edit, and its launch push applies it before the next boot (Apply &
+  // Restart), the same as the libraries list above. An unchanged value goes through: the app
+  // re-pushes every remembered value on each settings change. The live-applied nodes below
+  // (overlays, the audio backend) are all dynamic, so they are unaffected.
+  if (!root->get_is_dynamic() && !Emu.IsStopped(true) && decoded != root->to_string()) {
     armsx3_android.notice("settingsSet: %s changes at the next boot, not under a running game", path);
     return false;
   }
