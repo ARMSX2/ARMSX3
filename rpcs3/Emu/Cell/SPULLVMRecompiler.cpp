@@ -6093,7 +6093,7 @@ public:
 					// copy wrote that far past the local-store base and killed the app with SIGSEGV.
 					// A transfer that starts near the end runs on into the mirror map_ls puts after the
 					// local store and wraps to LS 0, exactly as the copy in do_dma_transfer does. With the
-					// 16 KB cap below, the copy never reaches past ls + 0x43fff.
+					// 16 KB cap below, the copy never reaches past ls + 0x43fff. Contributed by k1r4ct (PR #225).
 					llvm::Value* src = _ptr(m_lsptr, zext<u64>(lsa & 0x3ffff).eval(m_ir));
 					llvm::Value* dst = _ptr(m_memptr, zext<u64>(eal).eval(m_ir));
 
