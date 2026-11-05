@@ -520,6 +520,10 @@ private fun MenuPage(
                     EmulationMenuTab.Fixes -> {
                         DatabaseSection()
                         com.armsx2.ui.settings.FixesTab(InGameOverlay.settingsState)
+                        // Most fixes are read when the game boots, and the core keeps a change
+                        // to one for the next boot (issue #228). In-game only, as here.
+                        Spacer(Modifier.height(8.dp))
+                        CompactAction(str("backend.applyRestart"), "↻", Modifier.fillMaxWidth(), MainActivityRuntime::restart)
                     }
                     EmulationMenuTab.Performance -> PerformancePane(state, viewModel)
                     EmulationMenuTab.Controls -> ControlsPane(state, viewModel)
@@ -1151,6 +1155,10 @@ private fun GraphicsPaneRest(settings: com.armsx2.config.Settings, viewModel: Em
         MenuSwitchRow(str("renderer.readColorBuffers.label"), settings.ps3.readColorBuffers) { v ->
             viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(readColorBuffers = v)) }
         }
+        // Shader Mode, Relaxed ZCULL Sync and Read Color Buffers are read when the game boots; the
+        // core keeps a change to them for the next boot (issue #228). This applies them now.
+        Spacer(Modifier.height(6.dp))
+        CompactAction(str("backend.applyRestart"), "↻", Modifier.fillMaxWidth(), MainActivityRuntime::restart)
         Spacer(Modifier.height(6.dp))
         // GPU Turbo in-game: the whole point is A/B-ing it against a scene that is actually
         // stuttering, which is impossible if you have to quit to Settings to flip it. Applied
@@ -1368,6 +1376,11 @@ private fun PerformancePane(state: EmulationMenuUiState, viewModel: EmulationMen
             selected = settings.ps3.clocksScale,
             onSelect = { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(clocksScale = v)) } },
         )
+        // Everything in this card but Preferred SPU Threads is read when the game boots, and the
+        // core keeps a change to it for the next boot rather than switching a running game half
+        // over (issue #228). This restarts the game to apply it.
+        Spacer(Modifier.height(8.dp))
+        CompactAction(str("backend.applyRestart"), "↻", Modifier.fillMaxWidth(), MainActivityRuntime::restart)
     }
     // The only way to produce an .rrc on Android. Every graphics bug reported from a phone
     // used to arrive without one, which is the file upstream asks for first and the only
@@ -1601,6 +1614,10 @@ private fun OptionsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVie
     MenuSwitchRow(str("adv.hleLwmutex.label"), settings.ps3.hleLwmutex) {
         viewModel.updateSettings { current -> current.copy(ps3 = current.ps3.copy(hleLwmutex = it)) }
     }
+    // Strict Rendering, Multithreaded RSX, the color and depth buffer switches and HLE lwmutex are
+    // read when the game boots; the core keeps a change to them for the next boot (issue #228).
+    Spacer(Modifier.height(6.dp))
+    CompactAction(str("backend.applyRestart"), "↻", Modifier.fillMaxWidth(), MainActivityRuntime::restart)
 }
 
 @Composable
@@ -2325,6 +2342,8 @@ internal fun XmbPauseTab(tab: EmulationMenuTab) {
         EmulationMenuTab.Fixes -> {
             DatabaseSection()
             com.armsx2.ui.settings.FixesTab(InGameOverlay.settingsState)
+            // The same Apply & Restart the pause menu's Fixes tab ends with (issue #228).
+            CompactAction(str("backend.applyRestart"), "↻", Modifier.fillMaxWidth(), MainActivityRuntime::restart)
         }
         else -> Unit
     }
