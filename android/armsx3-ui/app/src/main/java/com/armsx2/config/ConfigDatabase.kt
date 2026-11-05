@@ -302,6 +302,7 @@ object ConfigDatabase {
         // share four cores; these games measured better with it, so it is per title. Tested on the
         // EU discs (BCES00052, BCES00301, BCES01908); the other serials are the same games.
         // NPEA00106 and NPJA00033 are listed as Quest for Booty only in RPCS3's patch file.
+        // Contributed by k1r4ct (PR #226).
         "BCES00052" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
         "BCUS98127" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
         "BCJS30014" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",

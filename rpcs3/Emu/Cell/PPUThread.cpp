@@ -3390,6 +3390,7 @@ ppu_thread::ppu_thread(utils::serial& ar)
 	// Only LLE callers stopped on the sc instruction are detected. HLE wrappers (sysPrxForUser
 	// sys_lwcond_wait, codec modules) also keep state in optional_savestate_state, but they sit on an
 	// HLE stub and the sc check leaves them alone.
+	// Contributed by k1r4ct (PR #219).
 	const bool replay_wait = (status == PPU_THREAD_STATUS_RUNNABLE || status == PPU_THREAD_STATUS_ONPROC) &&
 		!optional_savestate_state->data.empty() &&
 		(gpr[11] == 107 /* sys_cond_wait */ || gpr[11] == 113 /* _sys_lwcond_queue_wait */) &&

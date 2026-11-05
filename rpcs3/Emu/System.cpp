@@ -586,7 +586,7 @@ void Emulator::Init()
 {
 	// The games list was first read when the global Emulator was constructed. Where the config directory is only
 	// known later (Android sets it before calling Init), that read found nothing: reload it now, unless entries
-	// added since then are still waiting to be saved.
+	// added since then are still waiting to be saved. Contributed by k1r4ct (PR #221).
 	if (!m_games_config.is_dirty())
 	{
 		m_games_config.load();

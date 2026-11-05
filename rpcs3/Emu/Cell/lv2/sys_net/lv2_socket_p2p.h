@@ -10,6 +10,7 @@ public:
 	void save(utils::serial& ar);
 
 	// Registers a socket loaded from a savestate with p2p_context again, as bind() would have (p2p_context is not serialized)
+	// Contributed by k1r4ct (PR #222).
 	virtual void restore_binding();
 
 	std::tuple<bool, s32, shared_ptr<lv2_socket>, sys_net_sockaddr> accept(bool is_lock = true) override;
