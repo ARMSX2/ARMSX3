@@ -45,6 +45,10 @@ namespace vk
 		u32 m_height = 0;
 		VkFormat m_surface_format = VK_FORMAT_B8G8R8A8_UNORM;
 
+		// Pre-rotation (see swapchain_WSI::init): clockwise quarter turns the images were created
+		// with as their preTransform. 0 = not turned, the images are the window's own shape.
+		u32 m_pre_rotation = 0;
+
 		virtual void init_swapchain_images(render_device& dev, u32 count) = 0;
 
 	public:
@@ -89,6 +93,32 @@ namespace vk
 		u32 get_height() const
 		{
 			return m_height;
+		}
+
+		// Pre-rotation. get_width()/get_height() stay the window's own shape, which is what the
+		// frame is laid out and assembled in; a pre-rotated swapchain's IMAGES are turned, and a
+		// quarter turn swaps their axes. Only what writes into a swapchain image directly needs
+		// these (see VKGSRender::flip).
+		u32 get_pre_rotation() const
+		{
+			return m_pre_rotation;
+		}
+
+		u32 get_image_width() const
+		{
+			return (m_pre_rotation & 1) ? m_height : m_width;
+		}
+
+		u32 get_image_height() const
+		{
+			return (m_pre_rotation & 1) ? m_width : m_height;
+		}
+
+		// Whether the surface now asks for a different rotation than it did when this swapchain was
+		// built (the device was turned from one landscape to the other, which keeps the size).
+		virtual bool surface_rotation_changed()
+		{
+			return false;
 		}
 
 		const vk::render_device& get_device()
@@ -219,6 +249,10 @@ namespace vk
 
 		bool m_wm_reports_flag = false;
 
+		// The surface's currentTransform when this swapchain was built, whether or not it could be
+		// pre-rotated to it. See surface_rotation_changed().
+		VkSurfaceTransformFlagBitsKHR m_built_for_transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+
 	protected:
 		void init_swapchain_images(render_device& dev, u32 preferred_count = 0) override;
 
@@ -241,6 +275,8 @@ namespace vk
 		{
 			return m_wm_reports_flag;
 		}
+
+		bool surface_rotation_changed() override;
 
 		VkResult acquire_next_swapchain_image(VkSemaphore semaphore, u64 timeout, u32* result, VkFence fence) override
 		{

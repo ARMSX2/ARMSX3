@@ -161,6 +161,12 @@ struct cfg_root : cfg::node
 		cfg::_int<0, 4000> display_aspect_permille{ this, "Display Aspect Override", 0, true };
 		cfg::_bool force_high_precision_z_buffer{ this, "Force High Precision Z buffer" };
 		cfg::_bool strict_rendering_mode{ this, "Strict Rendering Mode" };
+		// ARMSX3: on a screen mounted sideways to the picture (a phone held in landscape, the Odin 3
+		// and most handhelds, whose panels are portrait), the Vulkan swapchain is created already
+		// turned (preTransform = the surface's currentTransform) and the frame is turned into it as
+		// the last pass, so the compositor does not have to turn every frame on the GPU. On hands the
+		// turning back to the compositor, as before. Dynamic: the swapchain is rebuilt on a change.
+		cfg::_bool disable_swapchain_prerotation{ this, "Disable Swap Chain Pre-Rotation", false, true };
 		cfg::_enum<framebuffer_aliasing_bias> fb_aliasing_bias{ this, "Framebuffer Aliasing Heuristic Bias", framebuffer_aliasing_bias::_auto, true };
 		cfg::_bool disable_zcull_queries{ this, "Disable ZCull Occlusion Queries", false, true };
 		cfg::_bool disable_video_output{ this, "Disable Video Output", false, true };

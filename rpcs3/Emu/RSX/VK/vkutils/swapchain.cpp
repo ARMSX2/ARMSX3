@@ -230,6 +230,7 @@ namespace vk
 		}
 
 		m_surface_is_lost = false;
+		m_pre_rotation = 0;
 
 		VkSwapchainKHR old_swapchain = m_vk_swapchain;
 		vk::physical_device& gpu = const_cast<vk::physical_device&>(dev.gpu());
@@ -383,23 +384,63 @@ namespace vk
 			surface_descriptors.minImageCount, surface_descriptors.maxImageCount,
 			extra_for_framegen ? ", deeper for frame generation" : "");
 
+		// Pre-rotation.
+		//
+		// Upstream declares IDENTITY whenever the surface supports it, which on a rotated surface
+		// hands the turning of every frame to the presentation engine. On Android that is
+		// SurfaceFlinger, and where the display hardware cannot turn a linear buffer it composes the
+		// game layer on the GPU instead: bmd measured 16-17% of an RG 55G1's GPU for it in ARMSX2,
+		// which pre-rotates since 2.9.1. Phones in landscape and the Odin 3 (a portrait panel) are
+		// all rotated surfaces, and the presents of such a swapchain come back SUBOPTIMAL for as long
+		// as it lives.
+		//
+		// So when the surface reports a 90 or 180 degree turn, the images are created turned
+		// (preTransform = currentTransform, axes swapped for a quarter turn), and VKGSRender::flip
+		// turns the finished frame into them as its last pass. m_width/m_height stay the window's
+		// shape: the frame is still laid out and assembled in it. A 270 degree turn is left to the
+		// compositor, as PPSSPP leaves it (its issue 15773: corruption on some devices), and so is a
+		// turn the surface's image size limits refuse, and everything when the user turned it off.
+		m_built_for_transform = surface_descriptors.currentTransform;
+
 		VkSurfaceTransformFlagBitsKHR pre_transform = surface_descriptors.currentTransform;
 		if (surface_descriptors.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
 			pre_transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
 
-		// Declaring IDENTITY when the surface is actually rotated hands the rotation to the
-		// compositor, which on Android can mean a full screen pass per frame and images held
-		// longer before they are released back for acquire. That would show up as time in
-		// check_present_status waiting on acquire_next_swapchain_image, which is where 30% of
-		// this game's frame currently goes.
-		//
-		// Logged rather than changed: matching currentTransform means applying the rotation
-		// ourselves across both the blit and the overlay pass, and it is only worth doing if
-		// the two actually differ here.
-		if (pre_transform != surface_descriptors.currentTransform)
+		const u32 surface_turns =
+			surface_descriptors.currentTransform == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR ? 1u :
+			surface_descriptors.currentTransform == VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR ? 2u : 0u;
+
+		if (surface_turns && !g_cfg.video.disable_swapchain_prerotation &&
+			(surface_descriptors.supportedTransforms & surface_descriptors.currentTransform))
 		{
-			rsx_log.notice("Swapchain: surface currentTransform=0x%x, overriding with IDENTITY (0x%x). Compositor will rotate.",
-				static_cast<u32>(surface_descriptors.currentTransform), static_cast<u32>(pre_transform));
+			const u32 image_w = (surface_turns & 1) ? m_height : m_width;
+			const u32 image_h = (surface_turns & 1) ? m_width : m_height;
+
+			if (image_w >= surface_descriptors.minImageExtent.width && image_w <= surface_descriptors.maxImageExtent.width &&
+				image_h >= surface_descriptors.minImageExtent.height && image_h <= surface_descriptors.maxImageExtent.height)
+			{
+				m_pre_rotation = surface_turns;
+				pre_transform = surface_descriptors.currentTransform;
+			}
+			else
+			{
+				rsx_log.warning("Swapchain: the surface is turned, but %ux%u images are outside %ux%u..%ux%u; leaving the turn to the compositor.",
+					image_w, image_h, surface_descriptors.minImageExtent.width, surface_descriptors.minImageExtent.height,
+					surface_descriptors.maxImageExtent.width, surface_descriptors.maxImageExtent.height);
+			}
+		}
+
+		if (m_pre_rotation)
+		{
+			rsx_log.notice("Swapchain: pre-rotated %u degrees to the surface's currentTransform=0x%x; images are %ux%u for a %ux%u window.",
+				m_pre_rotation * 90, static_cast<u32>(surface_descriptors.currentTransform),
+				get_image_width(), get_image_height(), m_width, m_height);
+		}
+		else if (pre_transform != surface_descriptors.currentTransform)
+		{
+			rsx_log.notice("Swapchain: surface currentTransform=0x%x, overriding with IDENTITY (0x%x). Compositor will rotate%s.",
+				static_cast<u32>(surface_descriptors.currentTransform), static_cast<u32>(pre_transform),
+				g_cfg.video.disable_swapchain_prerotation ? " (pre-rotation is off in Fixes)" : "");
 		}
 		else
 		{
@@ -510,8 +551,8 @@ namespace vk
 		swap_info.oldSwapchain = old_swapchain;
 		swap_info.clipped = true;
 
-		swap_info.imageExtent.width = std::max(m_width, surface_descriptors.minImageExtent.width);
-		swap_info.imageExtent.height = std::max(m_height, surface_descriptors.minImageExtent.height);
+		swap_info.imageExtent.width = std::max(get_image_width(), surface_descriptors.minImageExtent.width);
+		swap_info.imageExtent.height = std::max(get_image_height(), surface_descriptors.minImageExtent.height);
 
 #ifdef _WIN32
 		VkSurfaceFullScreenExclusiveInfoEXT full_screen_exclusive_info = {};
@@ -544,6 +585,21 @@ namespace vk
 
 		init_swapchain_images(dev);
 		return true;
+	}
+
+	bool swapchain_WSI::surface_rotation_changed()
+	{
+		VkSurfaceCapabilitiesKHR caps = {};
+
+		if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(dev.gpu(), m_surface, &caps) != VK_SUCCESS)
+		{
+			return false;
+		}
+
+		// Against what the surface asked for when this swapchain was built, not against
+		// m_pre_rotation: a turn that was not applied (270, or switched off) would otherwise read as
+		// a change on every frame.
+		return caps.currentTransform != m_built_for_transform;
 	}
 
 	VkResult swapchain_WSI::present(VkSemaphore semaphore, u32 image)

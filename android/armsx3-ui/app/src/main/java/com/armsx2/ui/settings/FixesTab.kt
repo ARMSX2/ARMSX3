@@ -182,6 +182,18 @@ fun FixesTab(state: MutableState<Settings>) {
             ) { apply(s.copy(ps3 = s.ps3.copy(debugConsoleMode = it))) }
         }
 
+        // How the picture reaches the screen. Pre-rotation (on unless switched off here) draws it
+        // already turned for a screen mounted sideways, a phone held in landscape or a handheld
+        // with a portrait panel, so the system does not turn every frame on the GPU. Vulkan only.
+        CollapsibleSection(str("adv.section.display")) {
+            ToggleRow(
+                str("adv.prerotation.label"),
+                s.ps3.disableSwapchainPrerotation,
+                description = str("adv.prerotation.description"),
+                notDefault = s.notDefault { it.ps3.disableSwapchainPrerotation },
+            ) { apply(s.copy(ps3 = s.ps3.copy(disableSwapchainPrerotation = it))) }
+        }
+
         // What the emulated console tells games about itself.
         //
         // These are not app preferences: a multi-language disc picks its text from the console

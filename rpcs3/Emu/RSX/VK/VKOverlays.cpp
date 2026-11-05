@@ -821,6 +821,62 @@ namespace vk
 		overlay_pass::run(cmd, { 0, 0, target->width(), target->height() }, target, std::vector<vk::image_view*>{}, render_pass);
 	}
 
+	present_rotation_pass::present_rotation_pass(u32 quarter_turns)
+	{
+		// Where the swapchain image's pixel at s (normalised, origin top left) takes its colour from in
+		// the upright frame. VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR means the content is turned 90
+		// degrees clockwise: the frame's top left lands in the image's top right, so the image's
+		// (1, 0) reads the frame's (0, 0). Each case is the inverse of a clockwise quarter turn.
+		const char* turn =
+			quarter_turns == 1 ? "vec2(s.y, 1. - s.x)" :
+			quarter_turns == 2 ? "vec2(1. - s.x, 1. - s.y)" :
+			"vec2(1. - s.y, s.x)";
+
+		vs_src =
+			"#version 450\n"
+			"#extension GL_ARB_separate_shader_objects : enable\n"
+			"\n"
+			"layout(location=0) out vec2 tc0;\n"
+			"\n"
+			"void main()\n"
+			"{\n"
+			"	vec2 positions[] = {vec2(-1., -1.), vec2(1., -1.), vec2(-1., 1.), vec2(1., 1.)};\n"
+			"	vec2 coords[] = {vec2(0., 0.), vec2(1., 0.), vec2(0., 1.), vec2(1., 1.)};\n"
+			"	vec2 s = coords[gl_VertexIndex % 4];\n"
+			"	tc0 = " + std::string(turn) + ";\n"
+			"	gl_Position = vec4(positions[gl_VertexIndex % 4], 0., 1.);\n"
+			"}\n";
+
+		fs_src =
+			"#version 420\n"
+			"#extension GL_ARB_separate_shader_objects : enable\n"
+			"layout(set=0, binding=0) uniform sampler2D fs0;\n"
+			"layout(location=0) in vec2 tc0;\n"
+			"layout(location=0) out vec4 ocol;\n"
+			"\n"
+			"void main()\n"
+			"{\n"
+			"	ocol = texture(fs0, tc0);\n"
+			"}\n";
+
+		renderpass_config.set_depth_mask(false);
+		renderpass_config.set_color_mask(0, true, true, true, true);
+		renderpass_config.set_attachment_count(1);
+
+		m_num_usable_samplers = 1;
+		m_num_uniform_buffers = 0;
+
+		// Texel for texel: the frame and the image have the same pixels, only turned.
+		m_sampler_filter = VK_FILTER_NEAREST;
+	}
+
+	void present_rotation_pass::run(vk::command_buffer& cmd, vk::framebuffer* target, vk::viewable_image* src, VkRenderPass render_pass)
+	{
+		// The caller has the frame in SHADER_READ_ONLY_OPTIMAL and the image in COLOR_ATTACHMENT_OPTIMAL.
+		const std::vector<vk::image_view*> views = { src->get_view(rsx::default_remap_vector.with_encoding(VK_REMAP_IDENTITY)) };
+		overlay_pass::run(cmd, { 0, 0, target->width(), target->height() }, target, views, render_pass);
+	}
+
 	stencil_clear_pass::stencil_clear_pass()
 	{
 		vs_src =

@@ -242,6 +242,10 @@ private:
 	// as a VSync change does.
 	bool m_swapchain_framegen = false;
 
+	// Whether pre-rotation was allowed (not switched off in Fixes) when the swapchain was built.
+	// swapchain.cpp reads the setting there, so a change rebuilds it, as above.
+	bool m_swapchain_prerotation = true;
+
 	VkViewport m_viewport {};
 	VkRect2D m_scissor {};
 
@@ -271,6 +275,11 @@ private:
 	std::vector<vk::image*> m_fbo_images;
 
 	std::unique_ptr<vk::image> m_overlay_recording_img;
+
+	// Pre-rotation (swapchain_WSI::init): with a turned swapchain, flip() assembles the frame in
+	// this upright image, exactly as it would in an unturned swapchain image, and turns it into the
+	// swapchain image as its last pass. Window-sized; null while the swapchain is not turned.
+	std::unique_ptr<vk::viewable_image> m_prerotation_frame;
 
 	// ARMSX3 remote play (android/src/remote_play.cpp, Emu/RSX/remote_capture.h). Each captured frame is
 	// drawn on the GPU into a slot and marked done by a GPU-written sequence number; the app's video

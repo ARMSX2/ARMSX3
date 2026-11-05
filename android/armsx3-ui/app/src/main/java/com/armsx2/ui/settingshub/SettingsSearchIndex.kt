@@ -223,6 +223,8 @@ internal val SETTINGS_SEARCH_INDEX: List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry("adv.sleepTimers.label", true, SettingsCategory.Advanced),
     SettingsSearchEntry("adv.hleLwmutex.label", true, SettingsCategory.Advanced),
     SettingsSearchEntry("adv.debugConsole.label", true, SettingsCategory.Advanced),
+    SettingsSearchEntry("adv.section.display", true, SettingsCategory.Advanced),
+    SettingsSearchEntry("adv.prerotation.label", true, SettingsCategory.Advanced),
     SettingsSearchEntry("adv.section.console", true, SettingsCategory.Advanced),
     SettingsSearchEntry("adv.consoleLanguage.label", true, SettingsCategory.Advanced),
     SettingsSearchEntry("adv.consoleRegion.label", true, SettingsCategory.Advanced),

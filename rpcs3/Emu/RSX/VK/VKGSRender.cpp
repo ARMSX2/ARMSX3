@@ -485,6 +485,7 @@ VKGSRender::VKGSRender(rsx::context* ctx, rsx::display_output* output) noexcept 
 
 	// Read with the same setting init() reads to pick the present mode. See m_swapchain_framegen.
 	m_swapchain_framegen = g_cfg.video.frame_generation != frame_generation_mode::off;
+	m_swapchain_prerotation = !g_cfg.video.disable_swapchain_prerotation;
 
 	if (!m_swapchain->init(m_swapchain_dims.width, m_swapchain_dims.height))
 	{
@@ -991,6 +992,11 @@ VKGSRender::~VKGSRender()
 	m_frame_context_storage.clear();
 
 	m_overlay_recording_img.reset();
+	if (m_prerotation_frame)
+	{
+		vk::remove_framebuffers_with_image(m_prerotation_frame->value);
+		m_prerotation_frame.reset();
+	}
 	remote_capture_release(true);
 	m_stencil_mirror_sampler.reset();
 

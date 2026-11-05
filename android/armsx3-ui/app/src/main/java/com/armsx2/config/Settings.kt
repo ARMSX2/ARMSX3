@@ -151,6 +151,9 @@ data class Ps3Settings(
     val readColorBuffers: Boolean = false,
     val readDepthBuffer: Boolean = false,
     val strictRendering: Boolean = false,
+    // Fixes > Display Fixes. Off = the picture is drawn already turned for a screen mounted
+    // sideways (the core's swapchain pre-rotation); on hands the turning back to the system.
+    val disableSwapchainPrerotation: Boolean = false,
     val multithreadedRsx: Boolean = false,
     val disableZcull: Boolean = false,
     /**
@@ -1190,6 +1193,7 @@ data class Settings(
         put("PS3/Video", "Read Color Buffers", "bool", ps3.readColorBuffers.toString())
         put("PS3/Video", "Read Depth Buffer", "bool", ps3.readDepthBuffer.toString())
         put("PS3/Video", "Strict Rendering Mode", "bool", ps3.strictRendering.toString())
+        put("PS3/Video", "Disable Swap Chain Pre-Rotation", "bool", ps3.disableSwapchainPrerotation.toString())
         put("PS3/Video", "Multithreaded RSX", "bool", ps3.multithreadedRsx.toString())
         put("PS3/Video", "Disable ZCull Occlusion Queries", "bool", ps3.disableZcull.toString())
         put("PS3/Video", "Relaxed ZCULL Sync", "bool", ps3.relaxedZcull.toString())
@@ -2213,6 +2217,7 @@ data class Settings(
         put("ps3ReadColorBuffers", ps3.readColorBuffers)
         put("ps3ReadDepthBuffer", ps3.readDepthBuffer)
         put("ps3StrictRendering", ps3.strictRendering)
+        put("ps3DisableSwapchainPrerotation", ps3.disableSwapchainPrerotation)
         put("ps3MultithreadedRsx", ps3.multithreadedRsx)
         put("ps3DisableZcull", ps3.disableZcull)
         put("ps3RelaxedZcull", ps3.relaxedZcull)
@@ -2586,6 +2591,7 @@ data class Settings(
                     readColorBuffers = json.optBoolean("ps3ReadColorBuffers", def.ps3.readColorBuffers),
                     readDepthBuffer = json.optBoolean("ps3ReadDepthBuffer", def.ps3.readDepthBuffer),
                     strictRendering = json.optBoolean("ps3StrictRendering", def.ps3.strictRendering),
+                    disableSwapchainPrerotation = json.optBoolean("ps3DisableSwapchainPrerotation", def.ps3.disableSwapchainPrerotation),
                     multithreadedRsx = json.optBoolean("ps3MultithreadedRsx", def.ps3.multithreadedRsx),
                     disableZcull = json.optBoolean("ps3DisableZcull", def.ps3.disableZcull),
                     relaxedZcull = json.optBoolean("ps3RelaxedZcull", def.ps3.relaxedZcull),
@@ -2933,6 +2939,7 @@ data class Settings(
             if (current.ps3.readColorBuffers != base.ps3.readColorBuffers) j.put("ps3ReadColorBuffers", current.ps3.readColorBuffers)
             if (current.ps3.readDepthBuffer != base.ps3.readDepthBuffer) j.put("ps3ReadDepthBuffer", current.ps3.readDepthBuffer)
             if (current.ps3.strictRendering != base.ps3.strictRendering) j.put("ps3StrictRendering", current.ps3.strictRendering)
+            if (current.ps3.disableSwapchainPrerotation != base.ps3.disableSwapchainPrerotation) j.put("ps3DisableSwapchainPrerotation", current.ps3.disableSwapchainPrerotation)
             if (current.ps3.multithreadedRsx != base.ps3.multithreadedRsx) j.put("ps3MultithreadedRsx", current.ps3.multithreadedRsx)
             if (current.ps3.disableZcull != base.ps3.disableZcull) j.put("ps3DisableZcull", current.ps3.disableZcull)
             if (current.ps3.relaxedZcull != base.ps3.relaxedZcull) j.put("ps3RelaxedZcull", current.ps3.relaxedZcull)
@@ -3256,6 +3263,7 @@ data class Settings(
                     readColorBuffers = if (overrides.has("ps3ReadColorBuffers")) overrides.getBoolean("ps3ReadColorBuffers") else base.ps3.readColorBuffers,
                     readDepthBuffer = if (overrides.has("ps3ReadDepthBuffer")) overrides.getBoolean("ps3ReadDepthBuffer") else base.ps3.readDepthBuffer,
                     strictRendering = if (overrides.has("ps3StrictRendering")) overrides.getBoolean("ps3StrictRendering") else base.ps3.strictRendering,
+                    disableSwapchainPrerotation = if (overrides.has("ps3DisableSwapchainPrerotation")) overrides.getBoolean("ps3DisableSwapchainPrerotation") else base.ps3.disableSwapchainPrerotation,
                     multithreadedRsx = if (overrides.has("ps3MultithreadedRsx")) overrides.getBoolean("ps3MultithreadedRsx") else base.ps3.multithreadedRsx,
                     disableZcull = if (overrides.has("ps3DisableZcull")) overrides.getBoolean("ps3DisableZcull") else base.ps3.disableZcull,
                     relaxedZcull = if (overrides.has("ps3RelaxedZcull")) overrides.getBoolean("ps3RelaxedZcull") else base.ps3.relaxedZcull,

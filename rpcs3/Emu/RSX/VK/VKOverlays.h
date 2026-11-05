@@ -246,6 +246,31 @@ namespace vk
 			bool stereo_enabled, VkRenderPass render_pass);
 	};
 
+	// ARMSX3: the last pass of a pre-rotated present (see swapchain_WSI::init). Draws the finished,
+	// upright frame into the whole swapchain image, turned clockwise by the swapchain's quarter
+	// turns. One instance per turn, since get_overlay_pass builds them without arguments.
+	struct present_rotation_pass : public overlay_pass
+	{
+		explicit present_rotation_pass(u32 quarter_turns);
+
+		void run(vk::command_buffer& cmd, vk::framebuffer* target, vk::viewable_image* src, VkRenderPass render_pass);
+	};
+
+	struct present_rotation_pass_90 : public present_rotation_pass
+	{
+		present_rotation_pass_90() : present_rotation_pass(1) {}
+	};
+
+	struct present_rotation_pass_180 : public present_rotation_pass
+	{
+		present_rotation_pass_180() : present_rotation_pass(2) {}
+	};
+
+	struct present_rotation_pass_270 : public present_rotation_pass
+	{
+		present_rotation_pass_270() : present_rotation_pass(3) {}
+	};
+
 	// TODO: Replace with a proper manager
 	extern std::unordered_map<u32, std::unique_ptr<vk::overlay_pass>> g_overlay_passes;
 

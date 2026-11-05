@@ -194,6 +194,14 @@ bool VKGSRender::reinitialize_swapchain()
 		vk::remove_framebuffers_with_image(m_swapchain->get_image(i));
 	}
 
+	// The upright frame of a turned swapchain is shaped for that swapchain (see flip()); the next
+	// turned flip makes one for the new one. The queues are idle, so it can go now.
+	if (m_prerotation_frame)
+	{
+		vk::remove_framebuffers_with_image(m_prerotation_frame->value);
+		m_prerotation_frame.reset();
+	}
+
 	// Reset frame context storage
 	for (auto& ctx : m_frame_context_storage)
 	{
@@ -212,6 +220,7 @@ bool VKGSRender::reinitialize_swapchain()
 
 	// Read with the same setting init() reads to pick the present mode. See m_swapchain_framegen.
 	m_swapchain_framegen = g_cfg.video.frame_generation != frame_generation_mode::off;
+	m_swapchain_prerotation = !g_cfg.video.disable_swapchain_prerotation;
 
 	// Rebuild swapchain. Old swapchain destruction is handled by the init_swapchain call
 	if (!m_swapchain->init(m_swapchain_dims.width, m_swapchain_dims.height))
@@ -308,6 +317,14 @@ bool VKGSRender::reinitialize_swapchain()
 vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 {
 	if (src == VK_NULL_HANDLE || swapchain_unavailable || m_swapchain->is_headless())
+	{
+		return nullptr;
+	}
+
+	// A turned swapchain takes only frames captured from its own turned images (flip(), the turn).
+	// A frame generated at game resolution would be blitted in unturned: drop it. That can only be
+	// one left over from before the swapchain turned.
+	if (m_swapchain->get_pre_rotation() && vk::frame_gen::generated_at_game_resolution())
 	{
 		return nullptr;
 	}
@@ -488,8 +505,12 @@ vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 		VkImageBlit region = {};
 		region.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
 		region.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-		region.srcOffsets[1] = { s32(m_swapchain_dims.width), s32(m_swapchain_dims.height), 1 };
-		region.dstOffsets[1] = { s32(m_swapchain_dims.width), s32(m_swapchain_dims.height), 1 };
+		// A turned swapchain's images, and the frames captured from them, have the window's axes swapped.
+		const bool turned = m_swapchain->get_pre_rotation() != 0;
+		const s32 copy_w = s32(turned ? m_swapchain->get_image_width() : m_swapchain_dims.width);
+		const s32 copy_h = s32(turned ? m_swapchain->get_image_height() : m_swapchain_dims.height);
+		region.srcOffsets[1] = { copy_w, copy_h, 1 };
+		region.dstOffsets[1] = { copy_w, copy_h, 1 };
 
 		vkCmdBlitImage(*cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 			// NEAREST: source and destination are the same size, so linear filtering buys nothing and
@@ -596,6 +617,19 @@ void VKGSRender::present(vk::frame_context_t *ctx)
 			// be far worse than the problem. So act on it only once it has persisted, and only once
 			// per surface size -- a rebuild that does not clear the condition must not be retried
 			// forever.
+			// Turning the device from one landscape to the other keeps the size, so nothing else
+			// rebuilds for it, and a swapchain pre-rotated for the old turn leaves the compositor
+			// turning every frame again. Rebuild for the new turn at once. Asked only while
+			// pre-rotation is allowed; a turn it does not apply (270, see swapchain.cpp) was what the
+			// surface asked for at build time too, so it does not read as a change.
+			if (m_swapchain_prerotation && m_swapchain->surface_rotation_changed())
+			{
+				rsx_log.notice("Swapchain: the surface turned; rebuilding the swapchain for its new rotation.");
+				m_suboptimal_present_count = 0;
+				should_reinitialize_swapchain = true;
+				break;
+			}
+
 			if (++m_suboptimal_present_count > 8 && m_suboptimal_handled_at != m_swapchain_dims.width)
 			{
 				m_suboptimal_handled_at = m_swapchain_dims.width;
@@ -1382,6 +1416,12 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 		swapchain_unavailable = true;
 	}
 
+	// Pre-rotation is decided when the swapchain is built too (swapchain.cpp): rebuild on a change.
+	if (m_swapchain_prerotation != !g_cfg.video.disable_swapchain_prerotation)
+	{
+		swapchain_unavailable = true;
+	}
+
 	if (swapchain_unavailable || should_reinitialize_swapchain)
 	{
 		// Reinitializing the swapchain is a failable operation. However, not all failures are fatal (e.g minimized window).
@@ -1698,6 +1738,49 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 	VkImageLayout target_layout = m_swapchain->is_headless()
 		? present_layout
 		: VK_IMAGE_LAYOUT_UNDEFINED;
+
+	// Pre-rotation (swapchain_WSI::init). A turned swapchain's images are the window turned on its
+	// side. Everything below assembles the frame exactly as it always has, in the window's own
+	// shape, but into m_prerotation_frame; the frame is turned into the swapchain image as the last
+	// pass before the present. So no writer below (clear, blit, upscalers, calibration, overlays,
+	// frame dump) changes at all. Frame generation is the one thing that moves: see the turn.
+	const u32 pre_rotation = m_swapchain->is_headless() ? 0u : m_swapchain->get_pre_rotation();
+	const VkImage swapchain_image = target_image;
+
+	if (pre_rotation)
+	{
+		// The size every framebuffer and region below is cut to.
+		const u32 frame_w = m_swapchain_dims.width;
+		const u32 frame_h = m_swapchain_dims.height;
+		const VkFormat frame_format = m_swapchain->get_surface_format();
+
+		if (m_prerotation_frame &&
+			(m_prerotation_frame->width() != frame_w || m_prerotation_frame->height() != frame_h || m_prerotation_frame->format() != frame_format))
+		{
+			vk::remove_framebuffers_with_image(m_prerotation_frame->value);
+			vk::get_resource_manager()->dispose(m_prerotation_frame);
+		}
+
+		if (!m_prerotation_frame)
+		{
+			m_prerotation_frame = std::make_unique<vk::viewable_image>(*m_device, m_device->get_memory_mapping().device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				VK_IMAGE_TYPE_2D, frame_format, frame_w, frame_h, 1, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+				VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_TILING_OPTIMAL,
+				VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+				0, VMM_ALLOCATION_POOL_SYSTEM);
+		}
+
+		target_image = m_prerotation_frame->value;
+
+		// The last flip's turn read this image (fragment shader) and its frame dump may have copied
+		// it (transfer). The first write below starts from UNDEFINED, which waits for nothing, so
+		// order it after those reads here.
+		vk::insert_global_memory_barrier(*m_current_command_buffer,
+			VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+			VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT,
+			VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+	}
 
 	VkRenderPass single_target_pass = VK_NULL_HANDLE;
 	vk::framebuffer_holder* direct_fbo = nullptr;
@@ -2141,7 +2224,7 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 	// less by the ratio of the two (720p on a 1080p screen: 2.25x fewer pixels to generate). Every
 	// other output mode renders through passes a generated frame would need a run of its own of,
 	// so those keep capturing the finished screen.
-	const bool framegen_plain_output = image_to_flip && !avconfig.stereo_enabled &&
+	const bool framegen_plain_output = image_to_flip && !pre_rotation && !avconfig.stereo_enabled &&
 		g_cfg.video.full_rgb_range_output.get() && rsx::fcmp(avconfig.gamma, 1.f) &&
 		(m_output_scaling == output_scaling_mode::bilinear || m_output_scaling == output_scaling_mode::nearest);
 
@@ -2154,7 +2237,7 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 			m_framegen_filter = (m_output_scaling == output_scaling_mode::nearest) ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
 		}
 	}
-	else if (image_to_flip)
+	else if (image_to_flip && !pre_rotation)
 	{
 		vk::frame_gen::capture_presented_frame(*m_current_command_buffer, *m_device,
 			// present_layout, NOT target_layout.
@@ -2222,6 +2305,54 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 		}
 
 		dump_cb = m_current_command_buffer;
+	}
+
+	if (pre_rotation)
+	{
+		// The turn: the assembled frame into the swapchain image, turned to the panel.
+		vk::change_image_layout(*m_current_command_buffer, target_image, target_layout, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, subresource_range);
+		m_prerotation_frame->current_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+		// Acquired images are undefined, and the turn writes every pixel of this one.
+		vk::change_image_layout(*m_current_command_buffer, swapchain_image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, subresource_range);
+
+		const auto turn_key = vk::get_renderpass_key(m_swapchain->get_surface_format());
+		const VkRenderPass turn_pass = vk::get_renderpass(*m_device, turn_key);
+		ensure(turn_pass != VK_NULL_HANDLE);
+
+		auto* turn_fbo = vk::get_framebuffer(*m_device, m_swapchain->get_image_width(), m_swapchain->get_image_height(), VK_FALSE,
+			turn_pass, m_swapchain->get_surface_format(), swapchain_image);
+		turn_fbo->add_ref();
+
+		switch (pre_rotation)
+		{
+		case 1:
+			vk::get_overlay_pass<vk::present_rotation_pass_90>()->run(*m_current_command_buffer, turn_fbo, m_prerotation_frame.get(), turn_pass);
+			break;
+		case 2:
+			vk::get_overlay_pass<vk::present_rotation_pass_180>()->run(*m_current_command_buffer, turn_fbo, m_prerotation_frame.get(), turn_pass);
+			break;
+		default:
+			vk::get_overlay_pass<vk::present_rotation_pass_270>()->run(*m_current_command_buffer, turn_fbo, m_prerotation_frame.get(), turn_pass);
+			break;
+		}
+
+		turn_fbo->release();
+
+		target_image = swapchain_image;
+		target_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+		// Frame generation captures the TURNED image: it interpolates turned frames, and
+		// present_generated_frame copies them straight into the swapchain, which then needs no
+		// turning of its own. Its plain path draws into the swapchain unturned, so it is off while
+		// the swapchain is turned (framegen_plain_output). present_layout for the reason given at
+		// the unturned capture above.
+		if (image_to_flip)
+		{
+			vk::frame_gen::capture_presented_frame(*m_current_command_buffer, *m_device,
+				swapchain_image, present_layout, m_swapchain->get_image_width(), m_swapchain->get_image_height(),
+				buffer_width, buffer_height);
+		}
 	}
 
 	if (target_layout != present_layout)
