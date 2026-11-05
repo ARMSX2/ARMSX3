@@ -48,6 +48,12 @@ object XmbMedia {
             XmbMediaCache.dirFor(context, serial)?.let { return it }
             // A disc image keeps its media inside it: taken out once, into the cache.
             if (extract) XmbMediaCache.extract(context, game)?.let { return it }
+            // A disc image not read yet has no answer, rather than its update's folder. The XMB's
+            // first quick pass looks with extract = false and its second only reads the images that
+            // found no folder, so settling for the update here kept the disc's background, music and
+            // animated icon from ever being read: God of War III, an image with its update
+            // installed, showed the theme where its picture belongs.
+            else if (XmbMediaCache.unread(context, game)) return null
             // An installed title keeps its own. A disc game's installed update has a folder too,
             // usually without the disc's background and music, so it comes after the disc's.
             Ps3Sfo.installDir(serial)?.takeIf { d -> MEDIA.any { File(d, it).isFile } || File(d, "ICON0.PNG").isFile }?.let { return it }
@@ -134,6 +140,13 @@ object XmbMediaCache {
 
     fun dirFor(context: Context, serial: String): File? =
         File(root(context), serial).takeIf { File(it, "PIC1.PNG").isFile || File(it, "SND0.AT3").isFile || File(it, "ICON1.PAM").isFile }
+
+    /** True for a disc image whose media has not been read yet: no cache entry, nor a note that it has none. */
+    fun unread(context: Context, game: GameInfo): Boolean {
+        val serial = game.serial?.takeIf { it.isNotBlank() } ?: return false
+        if (game.extension.uppercase() !in IMAGES) return false
+        return dirFor(context, serial) == null && !File(root(context), "$serial.none").isFile
+    }
 
     /** [game]'s media out of its disc image, into the cache; null when it has none. IO thread. */
     fun extract(context: Context, game: GameInfo): File? {
