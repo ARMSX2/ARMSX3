@@ -520,6 +520,10 @@ namespace vm
 			std::atomic<u64> max_detail{0}; // PPU id << 32 | its PC when it parked
 			std::atomic<u32> max_pc0{0};    // and its PC when the wait was first clocked
 			std::atomic<u64> last_report{0};
+			std::atomic<u64> boosted{0};       // long waits whose PPU got the boost
+			std::atomic<u64> boost_skipped{0}; // long waits whose PPU was not at nice 0, so kept its own
+			std::atomic<s32> skipped_nice{0};  // the nice such a PPU was at, the last time
+			std::atomic<u64> slept{0};         // long waits that reached wlock_sleep
 		};
 
 		wlock_wait_stats g_wlock_stats;
@@ -605,6 +609,30 @@ namespace vm
 			return on;
 		}
 
+		// How far into a long wait the waiter starts blocking instead of yielding (wlock_sleep).
+		constexpr u64 k_wlock_sleep_after_ns = 100'000;
+
+		// The case wlock_yield cannot reach. sched_yield hands the core only to a thread of the
+		// waiter's own scheduling class, and a phone's game mode can lift the SPU threads above the
+		// PPU they wait on. OnePlus 12, LittleBigPlanet 2, Game Space on against off in the same
+		// scene: the waited-on PPU queued for a CPU 94-99% of every long wait against 55-92%, the
+		// waits added up to 300-900 ms a second against 50-260, and the game ran at 18 fps against
+		// 30, with the same cores allowed, the same clock limits and the same cpuset both ways. A
+		// blocked waiter leaves its core to whatever is queued there, whatever its class, so past
+		// k_wlock_sleep_after_ns the waiter sleeps 20 us a check (about 50 us with Android's default
+		// timer slack) instead. A shorter wait never sleeps, and the boost and the yield before it
+		// are unchanged. ARMSX3_WLOCK_SLEEP=0 turns it off, for an A/B.
+		bool wlock_sleep()
+		{
+			static const bool on = []
+			{
+				const char* value = std::getenv("ARMSX3_WLOCK_SLEEP");
+				return !(value && value[0] == '0');
+			}();
+
+			return on;
+		}
+
 		void report_long_waits(u64 now)
 		{
 			u64 last = g_wlock_stats.last_report.load(std::memory_order_relaxed);
@@ -630,6 +658,10 @@ namespace vm
 			const u64 max = g_wlock_stats.max_ns.exchange(0, std::memory_order_relaxed);
 			const u64 detail = g_wlock_stats.max_detail.load(std::memory_order_relaxed);
 			const u32 pc0 = g_wlock_stats.max_pc0.load(std::memory_order_relaxed);
+			const u64 boosted = g_wlock_stats.boosted.exchange(0, std::memory_order_relaxed);
+			const u64 boost_skipped = g_wlock_stats.boost_skipped.exchange(0, std::memory_order_relaxed);
+			const s32 skipped_nice = g_wlock_stats.skipped_nice.load(std::memory_order_relaxed);
+			const u64 slept = g_wlock_stats.slept.exchange(0, std::memory_order_relaxed);
 
 			// The first call only opens the window.
 			if (!last)
@@ -642,13 +674,25 @@ namespace vm
 			const f64 ran_pct = sampled ? 100. * ran / sampled : 0.;
 			const f64 queued_pct = sampled ? 100. * queued / sampled : 0.;
 
+			// The boost and sleep counts say what the treatments did: a boost is skipped when the PPU
+			// was not at nice 0 (its own priority, or one the system gave it), and a wait that slept
+			// went past k_wlock_sleep_after_ns.
+			std::string skipped_at;
+
+			if (boost_skipped)
+			{
+				skipped_at = fmt::format(", last at nice %d", skipped_nice);
+			}
+
 			vm_log.notice("writer_lock: %u long PPU waits in %.1fs (~%u barriers), %.2f ms in all, longest %.2f ms"
 				" (PPU 0x%x, pc 0x%x -> 0x%x). Sampled %.2f ms: the waited-on PPU ran %.0f%%, queued for a CPU %.0f%%, slept %.0f%%."
-				" Boost %s, yield %s, after %u spins.",
+				" Boost %s (%u given, %u skipped%s), yield %s, sleep %s (%u waits past %u us), after %u spins.",
 				waits, (now - last) / 1e9, barriers, total_ms, max / 1e6,
 				static_cast<u32>(detail >> 32), pc0, static_cast<u32>(detail),
 				sampled_ms, ran_pct, queued_pct, sampled ? std::max(0., 100. - ran_pct - queued_pct) : 0.,
-				wlock_boost() ? "on" : "off", wlock_yield() ? "on" : "off", wlock_after_spins());
+				wlock_boost() ? "on" : "off", boosted, boost_skipped, skipped_at,
+				wlock_yield() ? "on" : "off", wlock_sleep() ? "on" : "off", slept, k_wlock_sleep_after_ns / 1000,
+				wlock_after_spins());
 
 			// Which SPU loops the barriers come from, every fifth report. Aims the PUTLLC16 whitelist:
 			// it is keyed by loop, and a loop that never reaches the barrier is not worth admitting.
@@ -664,10 +708,26 @@ namespace vm
 			}
 		}
 
-		void note_long_wait(const cpu_thread& ppu, u64 t0, u32 tid, bool sched0, u64 run0, u64 queued0, u32 pc0)
+		void note_long_wait(const cpu_thread& ppu, u64 t0, u32 tid, bool sched0, u64 run0, u64 queued0, u32 pc0,
+			bool boosted, bool boost_skipped, bool slept)
 		{
 			const u64 t1 = steady_ns();
 			const u64 dt = t1 - t0;
+
+			if (boosted)
+			{
+				g_wlock_stats.boosted.fetch_add(1, std::memory_order_relaxed);
+			}
+
+			if (boost_skipped)
+			{
+				g_wlock_stats.boost_skipped.fetch_add(1, std::memory_order_relaxed);
+			}
+
+			if (slept)
+			{
+				g_wlock_stats.slept.fetch_add(1, std::memory_order_relaxed);
+			}
 
 			u64 run1 = 0, queued1 = 0;
 
@@ -884,12 +944,12 @@ namespace vm
 				if (auto ptr = +*lock)
 				{
 #ifdef ANDROID
-					// See wlock_wait_stats, wlock_boost and wlock_yield.
+					// See wlock_wait_stats, wlock_boost, wlock_yield and wlock_sleep.
 					const u64 after_spins = wlock_after_spins();
-					const bool boost = wlock_boost(), yield = wlock_yield();
+					const bool boost = wlock_boost(), yield = wlock_yield(), sleep = wlock_sleep();
 					u64 wait_t0 = 0, run0 = 0, queued0 = 0;
 					u32 wait_tid = 0, wait_pc0 = 0;
-					bool sched0 = false, boosted = false;
+					bool sched0 = false, boosted = false, boost_skipped = false, slept = false;
 #endif
 
 					for (u64 spins = 0; !(ptr->state & cpu_flag::wait); spins++)
@@ -905,12 +965,24 @@ namespace vm
 							thread_local u32 s_long_waits = 0;
 							sched0 = (++s_long_waits & k_schedstat_sample_mask) == 0 && wait_tid && read_schedstat(wait_tid, run0, queued0);
 
-							// Only from the normal weighting: a PPU at another priority set it itself.
+							// Only from the normal weighting: a PPU at another priority set it itself, or
+							// the system did, and either way it keeps it. Counted, with the value, so a
+							// report shows when that is what happened.
 							errno = 0;
 
-							if (boost && wait_tid && getpriority(PRIO_PROCESS, wait_tid) == 0 && !errno)
+							if (boost && wait_tid)
 							{
-								boosted = setpriority(PRIO_PROCESS, wait_tid, -8) == 0;
+								const int nice = getpriority(PRIO_PROCESS, wait_tid);
+
+								if (!errno && nice == 0)
+								{
+									boosted = setpriority(PRIO_PROCESS, wait_tid, -8) == 0;
+								}
+								else if (!errno)
+								{
+									boost_skipped = true;
+									g_wlock_stats.skipped_nice.store(nice, std::memory_order_relaxed);
+								}
 							}
 						}
 #endif
@@ -933,10 +1005,19 @@ namespace vm
 						}
 
 #ifdef ANDROID
-						// See wlock_yield.
+						// See wlock_yield and wlock_sleep.
 						if (yield && spins >= after_spins) [[unlikely]]
 						{
-							std::this_thread::yield();
+							if (sleep && steady_ns() - wait_t0 >= k_wlock_sleep_after_ns)
+							{
+								slept = true;
+								std::this_thread::sleep_for(std::chrono::microseconds(20));
+							}
+							else
+							{
+								std::this_thread::yield();
+							}
+
 							continue;
 						}
 #endif
@@ -980,7 +1061,7 @@ namespace vm
 							setpriority(PRIO_PROCESS, wait_tid, 0);
 						}
 
-						note_long_wait(*ptr, wait_t0, wait_tid, sched0, run0, queued0, wait_pc0);
+						note_long_wait(*ptr, wait_t0, wait_tid, sched0, run0, queued0, wait_pc0, boosted, boost_skipped, slept);
 					}
 #endif
 				}
