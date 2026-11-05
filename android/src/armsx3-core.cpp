@@ -371,7 +371,7 @@ static std::atomic<bool> g_app_pause_in_flight;
 // reaches: every pipeline compiled in that session then has to be compiled again next time,
 // which is stutter. Ask the running renderer to write it at its next flip, before pausing, and
 // wait a bounded time for it. Not serviced in time, the request stays armed for the next flip.
-// Vulkan only: no other renderer services the request.
+// Vulkan only: no other renderer services the request. Contributed by k1r4ct (PR #220).
 static void flush_pipeline_cache_before_pause(int max_wait_ms) {
   if (!Emu.IsRunning() || g_cfg.video.renderer != video_renderer::vulkan) {
     return;
