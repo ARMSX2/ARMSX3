@@ -30,6 +30,8 @@
 #include "Emu/RSX/NV47/HW/context_accessors.define.h"
 
 extern atomic_t<bool> g_user_asked_for_screenshot;
+extern atomic_t<bool> g_flush_pipeline_cache_requested;
+extern atomic_t<u64> g_pipeline_cache_flush_generation;
 extern atomic_t<recording_mode> g_recording_mode;
 // android/src/remote_play.cpp
 extern atomic_t<u32> g_remote_play_max_size;
@@ -1249,6 +1251,14 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 	{
 		// A lost device presents nothing. The core replaces the renderer.
 		return false;
+	}
+
+	// Serviced before the swapchain checks below, so it also runs while the surface is gone
+	// (the app was just sent to the background and the frame will not be presented).
+	if (g_flush_pipeline_cache_requested.exchange(false)) [[unlikely]]
+	{
+		m_device->flush_pipeline_cache();
+		g_pipeline_cache_flush_generation++;
 	}
 
 	if (!info.emu_flip)

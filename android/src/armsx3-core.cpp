@@ -357,6 +357,35 @@ struct LogListener : logs::listener {
 // GSFrameBase::take_screenshot.
 extern atomic_t<bool> g_user_asked_for_screenshot;
 
+// Owned by RSXThread.cpp. Setting it makes the next present write the Vulkan driver pipeline
+// cache to disk; the generation counts completed writes.
+extern atomic_t<bool> g_flush_pipeline_cache_requested;
+extern atomic_t<u64> g_pipeline_cache_flush_generation;
+
+// Set while _armsx3_pause() is on its way into a pause, which the cache write below can stretch
+// to over half a second, so the surface-loss worker does not take that pause for its own.
+static std::atomic<bool> g_app_pause_in_flight;
+
+// The driver pipeline cache is otherwise only written when the renderer is destroyed, which a
+// process killed while in the background (swiped away from recents, reclaimed for memory) never
+// reaches: every pipeline compiled in that session then has to be compiled again next time,
+// which is stutter. Ask the running renderer to write it at its next flip, before pausing, and
+// wait a bounded time for it. Not serviced in time, the request stays armed for the next flip.
+// Vulkan only: no other renderer services the request.
+static void flush_pipeline_cache_before_pause(int max_wait_ms) {
+  if (!Emu.IsRunning() || g_cfg.video.renderer != video_renderer::vulkan) {
+    return;
+  }
+
+  const u64 before = g_pipeline_cache_flush_generation;
+  g_flush_pipeline_cache_requested = true;
+
+  for (int waited = 0; waited < max_wait_ms && g_pipeline_cache_flush_generation == before;
+       waited += 5) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+}
+
 static constexpr u32 kThumbMaxEdge = 320;
 
 // How long a save waits for the renderer to hand over a frame for the slot preview. Two
@@ -5364,6 +5393,8 @@ extern "C" void _armsx3_pause() {
   // Waiting is the whole fix: the screenshot then happens on an ordinary flip of a running
   // emulator, which is the same path a save from a running game has always used safely, and
   // the pause does not start until it has landed.
+  g_app_pause_in_flight = true;
+
   if (Emu.IsRunning()) {
     const u64 before = g_thumb_generation;
     g_user_asked_for_screenshot = true;
@@ -5378,7 +5409,9 @@ extern "C" void _armsx3_pause() {
     g_user_asked_for_screenshot = false;
   }
 
+  flush_pipeline_cache_before_pause(500);
   Emu.Pause();
+  g_app_pause_in_flight = false;
 }
 
 // A screenshot: the frame at its own size, written for the app to turn into a PNG. A running
@@ -6582,6 +6615,15 @@ extern "C" bool _armsx3_surfaceEvent(JNIEnv *env, jobject surface, jint event) {
       std::this_thread::sleep_for(std::chrono::milliseconds(250));
 
       if (g_native_window.load() != nullptr) {
+        return;
+      }
+
+      flush_pipeline_cache_before_pause(500);
+
+      // Checked again after that wait. The surface may have come back meanwhile, and its resume
+      // found no pause of ours to undo. Or the app is pausing on its own (it does when sent to
+      // the background): that pause is not ours, and it is coming anyway.
+      if (g_native_window.load() != nullptr || g_app_pause_in_flight) {
         return;
       }
 
