@@ -1137,8 +1137,11 @@ void cell_audio_thread::operator()()
 				// Underruns SINCE THE LAST LINE, not since boot: what matters is whether the
 				// output is breaking up now, and a running total from a rough patch minutes ago
 				// hides that. Non-zero here is crackling, measured rather than inferred.
+				// A backend opened again (Oboe after ErrorDisconnected) counts from 0, so the
+				// total can drop below the last one; the difference then wrapped and printed
+				// underruns=18446744073709551612.
 				const u64 underruns_total = cfg.backend ? cfg.backend->get_underruns() : 0;
-				const u64 underruns = underruns_total - m_last_underruns;
+				const u64 underruns = underruns_total >= m_last_underruns ? underruns_total - m_last_underruns : underruns_total;
 				m_last_underruns = underruns_total;
 
 				cellAudio.notice("Audio buffer: queued=%.1fms target=%.1fms (%.0f%%) period=%.0f%% "
