@@ -4614,6 +4614,94 @@ static void play_watch_on_prx_loaded(std::string_view vpath) {
   }
 }
 
+// Duplicate savestate history.
+//
+// A numbered slot is a COPY of the state RPCS3 just wrote into its rolling history (armsx3_slot_capture),
+// so every slot save is stored twice. RPCS3 already bounds the history itself (Maximum SaveState Files /
+// Space, clean_savestates), and the home menu can reload its newest entries, which may have been saved
+// from that menu and exist nowhere else - so only history files that are byte-identical to one of the
+// title's slots are removed here. At startup no restart from a just-written state can be pending.
+static bool armsx3_same_file(const std::string& a, const std::string& b, u64 size) {
+  fs::file fa(a), fb(b);
+  if (!fa || !fb || fa.size() != size || fb.size() != size) {
+    return false;
+  }
+
+  std::vector<u8> ba(1 << 20), bb(1 << 20);
+  for (u64 done = 0; done < size;) {
+    const u64 n = std::min<u64>(ba.size(), size - done);
+    if (fa.read(ba.data(), n) != n || fb.read(bb.data(), n) != n ||
+        std::memcmp(ba.data(), bb.data(), n) != 0) {
+      return false;
+    }
+    done += n;
+  }
+  return true;
+}
+
+static void armsx3_prune_state_history() {
+  if (const char* v = std::getenv("ARMSX3_X_PRUNE_STATE_HISTORY"); v && v[0] == '0') {
+    return;
+  }
+
+  const std::string root = fs::get_config_dir() + "/savestates/";
+  u64 freed = 0;
+  usz removed = 0;
+
+  for (const auto& title : fs::dir(root)) {
+    if (!title.is_directory || title.name == "." || title.name == "..") {
+      continue;
+    }
+
+    const std::string tdir = root + title.name + "/";
+    const std::string sdir = tdir + "armsx3_slots/";
+    if (!fs::is_dir(sdir)) {
+      continue; // not managed through slots: leave RPCS3's history alone
+    }
+
+    std::vector<fs::dir_entry> slots, history;
+    for (const auto& e : fs::dir(sdir)) {
+      if (!e.is_directory && e.name.find(".SAVESTAT") != umax) {
+        slots.push_back(e);
+      }
+    }
+    for (const auto& e : fs::dir(tdir)) {
+      if (!e.is_directory && e.name.starts_with(title.name + "_") && e.name.find(".SAVESTAT") != umax) {
+        history.push_back(e);
+      }
+    }
+    if (history.empty()) {
+      continue;
+    }
+
+    for (const auto& h : history) {
+      bool duplicate = false;
+      for (const auto& sl : slots) {
+        if (sl.size == h.size && armsx3_same_file(tdir + h.name, sdir + sl.name, h.size)) {
+          duplicate = true;
+          break;
+        }
+      }
+
+      if (!duplicate) {
+        continue;
+      }
+
+      if (fs::remove_file(tdir + h.name)) {
+        freed += h.size;
+        removed++;
+        armsx3_android.notice("savestate history: removed '%s%s' (copy of a slot)", title.name + "/", h.name);
+      } else {
+        armsx3_android.warning("savestate history: cannot remove '%s' (%s)", tdir + h.name, fs::g_tls_error);
+      }
+    }
+  }
+
+  if (removed) {
+    armsx3_android.success("savestate history: removed %u file(s), %u MB", removed, freed >> 20);
+  }
+}
+
 extern "C" bool _armsx3_initialize(std::string_view rootDir,
                                   std::string_view user) {
   // The compile banner's "N of M" counts the modules a game loads (play_watch_on_prx_loaded).
@@ -4852,6 +4940,8 @@ extern "C" bool _armsx3_initialize(std::string_view rootDir,
   Emu.SetDefaultGraphicsAdapter("Default");
 
   Emu.Init();
+
+  armsx3_prune_state_history();
 
   g_cfg_input.player1.handler.set(pad_handler::virtual_pad);
   g_cfg_input.player1.device.from_string("Virtual");
