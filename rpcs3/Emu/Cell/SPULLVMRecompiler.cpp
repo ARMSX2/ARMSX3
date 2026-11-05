@@ -6087,7 +6087,14 @@ public:
 						csize = -1;
 					}
 
-					llvm::Value* src = _ptr(m_lsptr, zext<u64>(lsa).eval(m_ir));
+					// do_dma_transfer addresses the local store as ls + (lsa & 0x3ffff). MFC_LSA is kept
+					// raw (the C++ path reads the same field and masks it there), so mask it here too:
+					// in LittleBigPlanet 2 an SPU with damaged code put 0x10111213 in MFC_LSA, and this
+					// copy wrote that far past the local-store base and killed the app with SIGSEGV.
+					// A transfer that starts near the end runs on into the mirror map_ls puts after the
+					// local store and wraps to LS 0, exactly as the copy in do_dma_transfer does. With the
+					// 16 KB cap below, the copy never reaches past ls + 0x43fff.
+					llvm::Value* src = _ptr(m_lsptr, zext<u64>(lsa & 0x3ffff).eval(m_ir));
 					llvm::Value* dst = _ptr(m_memptr, zext<u64>(eal).eval(m_ir));
 
 					if (cmd & MFC_GET_CMD)
@@ -6140,16 +6147,28 @@ public:
 							return m_ir->CreateLoad(get_type<u8>(), m_ir->CreateGEP(get_type<u8>(), pages, idx));
 						};
 
+						const auto size32 = m_ir->CreateZExt(size.value, get_type<u32>());
+
 						const auto last = m_ir->CreateAdd(eal.value,
-							m_ir->CreateSub(m_ir->CreateZExt(size.value, get_type<u32>()), m_ir->getInt32(1)));
+							m_ir->CreateSub(size32, m_ir->getInt32(1)));
 
 						const auto both = m_ir->CreateAnd(flags_at(eal.value), flags_at(last));
 
 						const auto unbacked = m_ir->CreateICmpNE(
 							m_ir->CreateAnd(both, m_ir->getInt8(need)), m_ir->getInt8(need));
 
-						const auto to_cpp = m_ir->CreateOr(
-							m_ir->CreateICmpUGE(eal.value, m_ir->getInt32(0xe0000000)), unbacked);
+						// A size above 0x4000 goes to process_mfc_cmd too: it refuses the command ("Unknown
+						// command") where the copy below would go ahead, and the 16 KB cap is what the page
+						// test above assumes. With a constant size, the usual case, the test folds away.
+						// The LSA needs no test here: masked as above, any LSA and any size up to 16 KB stay
+						// inside the local store and its mirror. Do not send odd LSAs to the C++ path for the
+						// wrap either: its copy moves 16 bytes per step (always, on ARM64) and never stops
+						// for a size that is not 1, 2, 4, 8 or a multiple of 16, a size the copy below
+						// handles without leaving the mirror, so it would make a damaged command less safe.
+						const auto bad_size = m_ir->CreateICmpUGT(size32, m_ir->getInt32(0x4000));
+
+						const auto to_cpp = m_ir->CreateOr(m_ir->CreateOr(
+							m_ir->CreateICmpUGE(eal.value, m_ir->getInt32(0xe0000000)), unbacked), bad_size);
 
 						m_ir->CreateCondBr(to_cpp, mmio, copy, m_md_unlikely);
 						m_ir->SetInsertPoint(mmio);
