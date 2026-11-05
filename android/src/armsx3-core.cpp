@@ -4614,6 +4614,10 @@ static void play_watch_on_prx_loaded(std::string_view vpath) {
   }
 }
 
+// Slot saves' history copies, defined with the save slots below.
+static void armsx3_drop_slot_history_copies(std::string_view only_title);
+static void armsx3_drop_old_slot_history_copies_once();
+
 extern "C" bool _armsx3_initialize(std::string_view rootDir,
                                   std::string_view user) {
   // The compile banner's "N of M" counts the modules a game loads (play_watch_on_prx_loaded).
@@ -4852,6 +4856,10 @@ extern "C" bool _armsx3_initialize(std::string_view rootDir,
   Emu.SetDefaultGraphicsAdapter("Default");
 
   Emu.Init();
+
+  // Slot saves' history copies (see armsx3_slot_history_note). No game can be loading yet.
+  armsx3_drop_slot_history_copies({});
+  armsx3_drop_old_slot_history_copies_once();
 
   g_cfg_input.player1.handler.set(pad_handler::virtual_pad);
   g_cfg_input.player1.device.from_string("Virtual");
@@ -5567,6 +5575,164 @@ static std::string armsx3_slot_find(std::string_view title, unsigned int slot) {
   return {};
 }
 
+// The history copy a slot save leaves behind.
+//
+// A slot is a COPY of the state the core writes into its rolling history (below), and the core
+// then restarts from that history file, so it cannot go at once. Before this nothing removed it
+// afterwards: every slot save was stored twice, up to RPCS3's own history limit of four files /
+// 4 GB per title (a tester had 3.5 GB of such copies). Now the capture leaves a note next to the
+// slot naming the history file it copied, and that file is deleted the next time a slot is saved
+// for the title, or at the next start: by then nothing is still loading from it. No file is
+// compared and none but the named one is touched. Raised by k1r4ct (PR #223).
+static std::string armsx3_slot_history_note(std::string_view title,
+                                            unsigned int slot) {
+  return armsx3_slot_dir(title) + "slot" + std::to_string(slot) + ".history";
+}
+
+static void armsx3_drop_slot_history_copies(std::string_view only_title) {
+  const std::string root = fs::get_config_dir() + "/savestates/";
+
+  for (const auto& t : fs::dir(root)) {
+    if (!t.is_directory || t.name == "." || t.name == ".." ||
+        (!only_title.empty() && t.name != only_title)) {
+      continue;
+    }
+
+    const std::string sdir = root + t.name + "/armsx3_slots/";
+
+    for (const auto& e : fs::dir(sdir)) {
+      if (e.is_directory || !e.name.ends_with(".history")) {
+        continue;
+      }
+
+      std::string name;
+      if (fs::file note{sdir + e.name}) {
+        name = note.to_string();
+      }
+
+      // Only a bare file name of this title's own history: never anything else.
+      if (!name.empty() && name.find_first_of("/\\") == umax &&
+          name.starts_with(t.name + "_") && name.find(".SAVESTAT") != umax) {
+        const std::string path = root + t.name + "/" + name;
+
+        if (fs::is_file(path) && !fs::remove_file(path)) {
+          armsx3_android.warning("savestate history: cannot remove '%s' (%s)", path,
+                                fs::g_tls_error);
+          continue; // keep the note and try again next time
+        }
+
+        armsx3_android.notice("savestate history: removed '%s%s', a copy of a slot",
+                             t.name + "/", name);
+      }
+
+      fs::remove_file(sdir + e.name);
+    }
+  }
+}
+
+// Copies made before the notes above existed: removed once, in the background, if they are
+// byte for byte one of the title's slots. Only files older than this start are looked at, so a
+// save made meanwhile is never touched, and the pass stops (to finish next start) the moment a
+// game is booting or running.
+static bool armsx3_same_file(const std::string& a, const std::string& b, u64 size) {
+  fs::file fa(a), fb(b);
+
+  if (!fa || !fb || fa.size() != size || fb.size() != size) {
+    return false;
+  }
+
+  std::vector<u8> ba(1 << 20), bb(1 << 20);
+
+  for (u64 done = 0; done < size;) {
+    const u64 n = std::min<u64>(ba.size(), size - done);
+
+    if (fa.read(ba.data(), n) != n || fb.read(bb.data(), n) != n ||
+        std::memcmp(ba.data(), bb.data(), n) != 0) {
+      return false;
+    }
+
+    done += n;
+  }
+
+  return true;
+}
+
+static void armsx3_drop_old_slot_history_copies_once() {
+  const std::string root = fs::get_config_dir() + "/savestates/";
+  const std::string done_note = root + ".armsx3_slot_history_cleaned";
+
+  if (!fs::is_dir(root) || fs::is_file(done_note)) {
+    return;
+  }
+
+  const s64 started = std::time(nullptr);
+
+  std::thread([root, done_note, started] {
+    u64 freed = 0;
+    usz removed = 0;
+    bool finished = true;
+
+    for (const auto& t : fs::dir(root)) {
+      if (!t.is_directory || t.name == "." || t.name == "..") {
+        continue;
+      }
+
+      const std::string tdir = root + t.name + "/";
+      const std::string sdir = tdir + "armsx3_slots/";
+
+      if (!fs::is_dir(sdir)) {
+        continue; // never saved to a slot: RPCS3's history is all its own
+      }
+
+      std::vector<fs::dir_entry> slots;
+
+      for (const auto& e : fs::dir(sdir)) {
+        if (!e.is_directory && e.name.find(".SAVESTAT") != umax) {
+          slots.push_back(e);
+        }
+      }
+
+      for (const auto& h : fs::dir(tdir)) {
+        if (h.is_directory || !h.name.starts_with(t.name + "_") ||
+            h.name.find(".SAVESTAT") == umax || h.mtime >= started) {
+          continue;
+        }
+
+        const bool copy = std::any_of(slots.begin(), slots.end(), [&](const fs::dir_entry& s) {
+          return s.size == h.size && armsx3_same_file(tdir + h.name, sdir + s.name, h.size);
+        });
+
+        if (!copy) {
+          continue;
+        }
+
+        if (!Emu.IsStopped()) {
+          finished = false; // a game is starting: leave the rest for the next start
+          break;
+        }
+
+        if (fs::remove_file(tdir + h.name)) {
+          freed += h.size;
+          removed++;
+          armsx3_android.notice("savestate history: removed '%s%s', a copy of a slot", t.name + "/", h.name);
+        }
+      }
+
+      if (!finished) {
+        break;
+      }
+    }
+
+    if (removed) {
+      armsx3_android.success("savestate history: removed %u older copies of slots, %u MB", removed, freed >> 20);
+    }
+
+    if (finished) {
+      fs::file(done_note, fs::rewrite);
+    }
+  }).detach();
+}
+
 // Copy the state the core has just written into [slot]. Runs from
 // after_kill_callback, which is the first point the file is complete on disk.
 static void armsx3_slot_capture(unsigned int slot, const std::string& title,
@@ -5614,6 +5780,12 @@ static void armsx3_slot_capture(unsigned int slot, const std::string& title,
     return;
   }
 
+  // Name the history file this slot copied, so it can go once nothing loads from it any more.
+  // See armsx3_slot_history_note.
+  if (fs::file note{armsx3_slot_history_note(title, slot), fs::rewrite}) {
+    note.write(newest.substr(newest.find_last_of('/') + 1));
+  }
+
   // Best effort. A slot with no picture still loads, so a missing frame must not turn a
   // successful save into a failed one.
   if (!armsx3_write_thumbnail(dir + "slot" + std::to_string(slot) + ".thumb")) {
@@ -5651,6 +5823,10 @@ extern "C" bool _armsx3_saveStateToSlot(unsigned int slot) {
     armsx3_android.error("saveState: no title id, cannot address a slot");
     return false;
   }
+
+  // The history copies earlier slot saves left: the game running now was loaded from one of
+  // them long ago, so they can go before this save writes the next.
+  armsx3_drop_slot_history_copies(title);
 
   // Ask for a frame now, while there is still a renderer to draw one. It arrives at
   // take_screenshot and is written out by armsx3_slot_capture once the state is on disk.
