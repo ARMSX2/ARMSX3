@@ -330,6 +330,53 @@ void lv2_socket_p2ps::save(utils::serial& ar)
 	ar(status, max_backlog, backlog, op_port, op_vport, op_addr, data_beg_seq, received_data, cur_seq);
 }
 
+void lv2_socket_p2ps::restore_binding()
+{
+	// bind(), connect() and accepting always assign a vport, a socket without one was never bound
+	if (!vport)
+	{
+		return;
+	}
+
+	auto& nc = g_fxo->get<p2p_context>();
+	std::lock_guard list_lock(nc.list_p2p_ports_mutex);
+
+	nc.create_p2p_port(port);
+	auto& pport = ::at32(nc.list_p2p_ports, port);
+
+	std::lock_guard vport_lock(pport.bound_p2p_vports_mutex);
+	std::lock_guard lock(mutex);
+
+	switch (status)
+	{
+	case p2ps_stream_status::stream_closed:
+	case p2ps_stream_status::stream_listening:
+	{
+		pport.bound_p2ps_vports[vport].insert(lv2_id);
+		break;
+	}
+	case p2ps_stream_status::stream_handshaking:
+	case p2ps_stream_status::stream_connected:
+	{
+		// Same key as connect() and handle_listening(), packets are dispatched to streams by it.
+		// Unlike connect()ed sockets, accepted ones do not reserve their vport (it is the one of their listening socket) and
+		// the two cannot be told apart after a load, so no vport reservation is restored for streams.
+		const u64 key = op_addr | (static_cast<u64>(vport) << 32) | (static_cast<u64>(op_vport) << 48);
+		pport.bound_p2p_streams.emplace(key, lv2_id);
+		break;
+	}
+	case p2ps_stream_status::stream_disconnected:
+	{
+		// close_stream_nl() already removed the stream
+		break;
+	}
+	}
+
+	native_socket = pport.p2p_socket;
+
+	sys_net.notice("[P2PS] Restored binding of socket %d to port %d, vport %d (status %d)", lv2_id, port, vport, static_cast<u8>(status));
+}
+
 void lv2_socket_p2ps::signal_pending_events()
 {
 	const bs_t<lv2_socket::poll_t> pending = get_pending_events();
