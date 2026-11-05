@@ -191,16 +191,24 @@ class EmulationSurface(context: Context) :
     }
 
     /**
-     * Low Latency Mode asks Android 11+ for a high-refresh mode which is an
-     * integer multiple of the emulated game's nominal rate. Thus ~60 fps picks
-     * 120 Hz and PAL 50 fps prefers 100 Hz, while a 90 Hz-only panel falls back
-     * to its ~60 Hz mode instead of introducing 3:2 cadence.
+     * Low Latency Mode and frame generation ask Android 11+ for a high-refresh mode which is an
+     * integer multiple of the emulated game's nominal rate. Thus ~60 fps picks 120 Hz and PAL
+     * 50 fps prefers 100 Hz, while a 90 Hz-only panel falls back to its ~60 Hz mode instead of
+     * introducing 3:2 cadence.
+     *
+     * Frame generation needs the vote even where the panel already runs at 120 Hz. A device can
+     * cap games by default: the Odin 3 sets ro.surface_flinger.game_default_frame_rate_override
+     * to 60, so Android tells an app in the game category 60 Hz and takes 60 frames a second from
+     * it, and a 60 fps game with frame generation x2 showed 60 of its 120 frames. That default is
+     * for games that ask for no rate of their own, so this vote lifts it, the fix ARMSX2 made for
+     * the same cap. Check with `dumpsys display | grep frameRateOverride` while frame generation
+     * runs: the override for this app's uid should be gone or match the vote.
      */
     fun applyFrameRatePreference() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
             !gameActive ||
             !holder.surface.isValid ||
-            !lowLatencyEnabled()
+            !wantsDisplayRate()
         ) {
             clearFrameRatePreference()
             return
@@ -253,11 +261,13 @@ class EmulationSurface(context: Context) :
         lastRequestedFrameRate = Float.NaN
     }
 
-    private fun lowLatencyEnabled(): Boolean = runCatching {
+    /** Low Latency Mode (a vsync queue of 0) or frame generation, as this game is set. The
+     *  monitor polls it, so turning either on or off in-game moves the vote within its period. */
+    private fun wantsDisplayRate(): Boolean = runCatching {
         val settingsKey = MainActivityRuntime.currentGame.value?.settingsKey
             ?: NativeApp.getGameSerial().takeIf { it.isNotBlank() }
-        ConfigStore.resolveForGame(settingsKey)
-            .vsyncQueueSize == 0
+        val settings = ConfigStore.resolveForGame(settingsKey)
+        settings.vsyncQueueSize == 0 || settings.ps3.frameGeneration != 0
     }.getOrDefault(false)
 
     private fun preferredDisplayRefreshRate(nominalRate: Float): Float {
