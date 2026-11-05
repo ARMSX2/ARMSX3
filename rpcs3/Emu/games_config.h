@@ -28,9 +28,11 @@ public:
 	result remove_game(const std::string& key);
 	bool save();
 
+	// (Re)reads games.yml from the config directory.
+	void load();
+
 private:
 	bool save_nl();
-	void load();
 
 	std::map<std::string, std::string> m_games;
 	mutable shared_mutex m_mutex;
