@@ -770,6 +770,72 @@ SPU-93f3b15e03c594d9eaf5a0d8521854fd6eb2a8c7:
     Patch:
       - [ be32, 0x075ac, 0x327fd700 ] # br 0x07464 (was brz r3,0x07464, 0x207fd703): never count toward the park limit
 
+# NAUGHTY BEAR: PANIC IN PARADISE, NPUB30828 and NPEB01054 -- ours. The game draws through one raw
+# SPU that interprets a command stream the PPU builds each frame, and in play that SPU is the frame
+# rate's limit (99-100% busy on an Odin 3, 11-04). A profile of it put about a quarter of its time in
+# two copies its compiler wrote as one byte per pass (lqx, cbx, rotqby, shufb, stqx each byte):
+# - LS 0x9e90 (18%): a handler copying a command's payload out of the stream chunk to a destination
+#   that 0x9e58 has just aligned to 16 bytes. Now 16 bytes a pass: two quadword loads around the
+#   source, rotated and merged with selb, one aligned store; the last bytes, and any unaligned
+#   destination, still go through the original loop.
+# - LS 0x12b8 (9%): 64 bytes from the stack (sp+0x20, always aligned) to r43. Now four quadwords
+#   when r43 is aligned, the original loop otherwise.
+# Both were run against the original loops in an SPU interpreter on 5,000 random cases (lengths
+# 0..600, any source alignment, aligned and unaligned destinations): identical memory every time.
+# The code lives in the main loop's bookmark padding (16 nops after each SPU_Set_Bkmk_Tag write, a
+# channel RPCS3 ignores), which the first bookmark now steps over. Offsets are LS addresses.
+# Ps3PatchRepo.BUNDLED must list these, or they are imported but never enabled.
+SPU-7d3b6a847736ef3198deee3620f00c648e5e9588:
+  "ARMSX3 graphics SPU speed-up":
+    Games:
+      "Naughty Bear: Panic in Paradise":
+        NPUB30828: [ All ]
+        NPEB01054: [ All ]
+    Author: "jpolo1224"
+    Notes: "Copies the graphics SPU's command data 16 bytes at a time instead of one byte at a time, which was about a quarter of that SPU's work in play."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x012b4, 0x32160000 ] # was stqd r3,0x40(sp): copy the 64 bytes as quadwords (was 0x24010083)
+      - [ be32, 0x09e88, 0x32047980 ] # was brz r84,0x9ec0: copy 16 bytes a pass (was 0x20000754)
+      - [ be32, 0x0c250, 0x32001980 ] # was wrch ch69,r50: step over the bookmark padding that holds the copies (was 0x21a022b2)
+      - [ be32, 0x0c254, 0x207b8dd4 ] # nothing to copy (was 0x40200000)
+      - [ be32, 0x0c258, 0x40800006 ] # i = 0 (was 0x40200000)
+      - [ be32, 0x0c25c, 0x1403c393 ] # destination aligned? (was 0x40200000)
+      - [ be32, 0x0c260, 0x217b8613 ] # no: the original loop (was 0x40200000)
+      - [ be32, 0x0c264, 0x1403c419 ] # t = source & 15 (was 0x40200000)
+      - [ be32, 0x0c268, 0x40ffff98 ] # all ones (was 0x40200000)
+      - [ be32, 0x0c26c, 0x1cfc0c9a ] # t - 16 (was 0x40200000)
+      - [ be32, 0x0c270, 0x3ba68c17 ] # mask: the last t bytes (was 0x40200000)
+      - [ be32, 0x0c274, 0x1cfc2a15 ] # count - 16 (was 0x40200000)
+      - [ be32, 0x0c278, 0x48054313 ] # i > count - 16 ? (was 0x40200000)
+      - [ be32, 0x0c27c, 0x21000593 ] # yes: the rest (was 0x40200000)
+      - [ be32, 0x0c280, 0x1802031a ] # s = source + i (was 0x40200000)
+      - [ be32, 0x0c284, 0x38820318 ] # the quadword holding s (was 0x40200000)
+      - [ be32, 0x0c288, 0x1c040d14 ] #  (was 0x40200000)
+      - [ be32, 0x0c28c, 0x34000a16 ] # the next one (was 0x40200000)
+      - [ be32, 0x0c290, 0x3b868c18 ] #  (was 0x40200000)
+      - [ be32, 0x0c294, 0x3b868b16 ] #  (was 0x21a022dd)
+      - [ be32, 0x0c298, 0x82858c17 ] # 16 source bytes from s (was 0x40200000)
+      - [ be32, 0x0c29c, 0x2881c314 ] # to destination + i (was 0x40200000)
+      - [ be32, 0x0c2a0, 0x1c040306 ] # i += 16 (was 0x40200000)
+      - [ be32, 0x0c2a4, 0x327ffa80 ] #  (was 0x40200000)
+      - [ be32, 0x0c2a8, 0x7801aa13 ] # i == count ? (was 0x40200000)
+      - [ be32, 0x0c2ac, 0x217b8293 ] # yes: done (was 0x40200000)
+      - [ be32, 0x0c2b0, 0x327b7c00 ] # the last bytes through the original loop (was 0x40200000)
+      - [ be32, 0x0c2b4, 0x24010083 ] # the instruction this replaced (was 0x40200000)
+      - [ be32, 0x0c2b8, 0x1403d584 ] # destination aligned? (was 0x40200000)
+      - [ be32, 0x0c2bc, 0x2169ff84 ] # no: the original loop (r7 = 0) (was 0x40200000)
+      - [ be32, 0x0c2c0, 0x340080b4 ] #  (was 0x40200000)
+      - [ be32, 0x0c2c4, 0x240015b4 ] #  (was 0x40200000)
+      - [ be32, 0x0c2c8, 0x3400c0b4 ] #  (was 0x40200000)
+      - [ be32, 0x0c2cc, 0x240055b4 ] #  (was 0x40200000)
+      - [ be32, 0x0c2d0, 0x340100b4 ] #  (was 0x40200000)
+      - [ be32, 0x0c2d4, 0x240095b4 ] #  (was 0x40200000)
+      - [ be32, 0x0c2d8, 0x340140b4 ] #  (was 0x21a022de)
+      - [ be32, 0x0c2dc, 0x2400d5b4 ] #  (was 0x40200000)
+      - [ be32, 0x0c2e0, 0x40802007 ] # the loop's final index (was 0x40200000)
+      - [ be32, 0x0c2e4, 0x326a0000 ] # after the loop (was 0x40200000)
+
 # BATMAN: ARKHAM ORIGINS, US releases (BLUS31147, BLUS31207, NPUB31261) update 01.06, multiplayer executable
 # (MP.SELF) -- ours, OFF by default. The US releases run the same MP.SELF.
 #

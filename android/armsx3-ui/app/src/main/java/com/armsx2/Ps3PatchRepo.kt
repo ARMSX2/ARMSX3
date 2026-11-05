@@ -904,6 +904,23 @@ object Ps3PatchRepo {
             appVersion = "All",
             sinceRevision = 24,
         ),
+        // NAUGHTY BEAR: PANIC IN PARADISE -- ours. Its graphics raw SPU, the game's frame rate limit in
+        // play, spent about a quarter of its time in two copies written one byte per pass; the patch
+        // copies 16 bytes a pass. See canary_patches.yml. Revision 27: test builds used 25 and 26.
+        Bundled(
+            hash = "SPU-7d3b6a847736ef3198deee3620f00c648e5e9588",
+            name = "ARMSX3 graphics SPU speed-up",
+            serial = "NPUB30828",
+            appVersion = "All",
+            sinceRevision = 27,
+        ),
+        Bundled(
+            hash = "SPU-7d3b6a847736ef3198deee3620f00c648e5e9588",
+            name = "ARMSX3 graphics SPU speed-up",
+            serial = "NPEB01054",
+            appVersion = "All",
+            sinceRevision = 27,
+        ),
     )
 
     private const val BUNDLED_ASSET = "canary_patches.yml"
@@ -913,7 +930,7 @@ object Ps3PatchRepo {
      * install re-imports and enables the new ones. Not a timestamp: it has to be
      * something a diff of this file makes obvious.
      */
-    private const val BUNDLED_REVISION = 24
+    private const val BUNDLED_REVISION = 27
 
     private const val PREFS_NAME = "ARMSX2"
     private const val KEY_BUNDLED_REVISION = "ps3_bundled_patch_revision"
