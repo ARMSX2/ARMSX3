@@ -571,7 +571,17 @@ namespace vk
 		rsx_log.notice("Swapchain: requesting full screen exclusive mode %d.", static_cast<int>(full_screen_exclusive_info.fullScreenExclusive));
 #endif
 
-		_vkCreateSwapchainKHR(dev, &swap_info, nullptr, &m_vk_swapchain);
+		// Into a local, and checked. The result used to be ignored and the handle written straight
+		// into m_vk_swapchain, which a failed create leaves as it was: the OLD swapchain, destroyed
+		// a few lines down. On Android the window can go while this runs. Leaving the app with a game
+		// up destroys it, and the renderer rebuilds the swapchain at that moment; the loader's
+		// dequeueBuffer then fails with ENODEV and the create with VK_ERROR_SURFACE_LOST_KHR. The
+		// dead handle was read for its images ("getting images for non-active swapchain" in
+		// logcat), and on returning to the app the surface rebuild destroyed it a second time:
+		// scudo "corrupted chunk header" inside vkDestroySwapchainKHR, SIGABRT on rsx::thread
+		// (Odin 3, Super Mario 64 with frame generation, 11-05).
+		VkSwapchainKHR new_swapchain = VK_NULL_HANDLE;
+		const VkResult create_result = _vkCreateSwapchainKHR(dev, &swap_info, nullptr, &new_swapchain);
 
 		if (old_swapchain)
 		{
@@ -580,9 +590,25 @@ namespace vk
 				swapchain_images.clear();
 			}
 
+			// Retired by the create call whether it succeeded or not, and ours to destroy either way.
 			_vkDestroySwapchainKHR(dev, old_swapchain, nullptr);
 		}
 
+		if (create_result != VK_SUCCESS)
+		{
+			m_vk_swapchain = VK_NULL_HANDLE;
+
+			// The caller rebuilds the surface from the next live window when this is set.
+			if (create_result == VK_ERROR_SURFACE_LOST_KHR)
+			{
+				m_surface_is_lost = true;
+			}
+
+			rsx_log.warning("Swapchain: vkCreateSwapchainKHR failed (%d); it will be retried.", static_cast<s32>(create_result));
+			return false;
+		}
+
+		m_vk_swapchain = new_swapchain;
 		init_swapchain_images(dev);
 		return true;
 	}
