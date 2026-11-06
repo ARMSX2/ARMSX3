@@ -329,6 +329,7 @@ object ConfigDatabase {
         // frames record thousands of draws, which the GPU otherwise gets only at the next flush.
         // With vertex fetch specialization on, it took the robots fight from 21.9 to 25.7 FPS
         // (Retroid Pocket 6, Turnip, 11-06); alone it gains nothing there.
+        // Contributed by k1r4ct (PR #232, PR #233).
         "BCES00052" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n",
         "BCUS98127" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n",
         "BCJS30014" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n",

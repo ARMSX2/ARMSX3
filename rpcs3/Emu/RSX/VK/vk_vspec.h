@@ -9,7 +9,7 @@
 #include <memory>
 
 // ARMSX3: vertex fetch specialization, the Vulkan setting "Vertex Fetch Specialization". Off by
-// default; the config database enables it per title.
+// default; the config database enables it per title. Contributed by k1r4ct (PR #232).
 //
 // The generic vertex shader decodes every attribute at run time from its descriptor (type, size,
 // stride, divisor, byte swap). With this on, every compiled vertex program also declares one

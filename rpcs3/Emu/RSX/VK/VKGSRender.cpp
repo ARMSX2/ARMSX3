@@ -2090,7 +2090,7 @@ bool VKGSRender::on_local_task(rsx::FIFO::state state)
 		// flush point, and the GPU can sit idle until then. Once enough draws are recorded and the
 		// GPU has finished the previous submit, submit what we have. While the GPU is still busy,
 		// ask again only after another eighth of the threshold rather than after every draw.
-		// Off (threshold 0), this is never taken.
+		// Off (threshold 0), this is never taken. Contributed by k1r4ct (PR #233).
 		if (m_early_submit_threshold && m_draws_since_submit >= m_early_submit_check_at && !vk::is_uninterruptible())
 		{
 			if (m_primary_cb_list.previous()->poke())

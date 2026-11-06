@@ -5036,7 +5036,9 @@ u64 thread_ctrl::get_affinity_mask(thread_class group)
 				// picked 2 workers for 3 little cores), and where every core reads as
 				// fast (expected on a Snapdragon 8 Elite, not run) they were the whole mask,
 				// which sched_setaffinity rejects with EINVAL, leaving the thread wherever
-				// it was. There it gets the fast cores, which is every core.
+				// it was. There it gets the fast cores, which is every core. Contributed by
+				// k1r4ct (PR #234); the 8 Elite case is confirmed on an Odin 3, whose every boot
+				// logged that EINVAL for both pipeline compiler workers.
 				const u64 helper_mask = slow_mask & present_mask;
 				return helper_mask ? helper_mask : fast_mask;
 			}
