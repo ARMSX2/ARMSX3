@@ -1484,6 +1484,9 @@ class spu_llvm_recompiler : public spu_recompiler_base, public cpu_translator
 					return false;
 				}
 
+				// The line's version this commit replaces: the key its waiters sleep on (see below).
+				u64 replaced_time = 0;
+
 				{
 					rsx::reservation_lock rsx_lock(raddr, 128);
 
@@ -1513,6 +1516,7 @@ class spu_llvm_recompiler : public spu_recompiler_base, public cpu_translator
 					}
 
 					// Success
+					replaced_time = old_res;
 					res.release(old_res + 128);
 				}
 
@@ -1521,7 +1525,9 @@ class spu_llvm_recompiler : public spu_recompiler_base, public cpu_translator
 
 				if (notify)
 				{
-					res.notify_all();
+					// Same wake as do_putllc's: waiters park on vm::reservation_notifier(line, version)'s
+					// wait_flag. res.notify_all() woke waiters on the counter word, and there are none.
+					vm::reservation_notifier_notify(raddr & -128, replaced_time);
 				}
 
 				return true;
@@ -1605,7 +1611,17 @@ class spu_llvm_recompiler : public spu_recompiler_base, public cpu_translator
 
 			m_ir->CreateCondBr(compare_data_change_res, notify_block, notify_next);
 			m_ir->SetInsertPoint(notify_block);
-			call("atomic_wait_engine::notify_all", static_cast<void(*)(const void*)>(atomic_wait_engine::notify_all), rptr);
+
+			// Wake the SPUs and PPUs waiting on this line. They park on the wait_flag of
+			// vm::reservation_notifier(line, version), keyed by the version they observed, which is
+			// rval: the counter this commit replaced (stored above as rval + 128). do_putllc notifies
+			// the same key. This used to notify the counter word itself (rptr), on which nothing
+			// waits, so a PUTLLC16 commit woke no one and every waiter sat out its 50-200 us timeout.
+			call("spu_putllc16_notify", +[](u32 eal, u64 replaced_time)
+			{
+				vm::reservation_notifier_notify(eal & -128, replaced_time);
+			}, _eal, rval);
+
 			m_ir->CreateBr(notify_next);
 			m_ir->SetInsertPoint(notify_next);
 		}
