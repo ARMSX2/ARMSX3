@@ -2447,6 +2447,37 @@ void spu_thread::push_snr(u32 number, u32 value)
 	const u32 event_bit = SPU_EVENT_S1 >> (number & 1);
 	const bool bitor_bit = !!((snr_config >> number) & 1);
 
+	// Upstream gives the SPU time to react to a signal (Elad, d86d677f2 and 3a3ba6139): after a push
+	// to an SPU that was waiting it spin-yields until that SPU wakes, up to 500 us, and then waits 3 us
+	// more on every push. Cheap on a desktop, where a thread wakes in a few microseconds. Not on a
+	// phone, where a wake takes tens of microseconds and longer when the cores are clocked down or
+	// hot: Sonic '06 signals its SPUs about 2,900 times a second, and the main PPU thread spent that
+	// waiting, holding the game under 60 fps (Odin 3, 11-05).
+	//
+	// What the waiting protects against is the game's flicker, RPCS3 #4122: an overwrite-mode SNR
+	// written again while it still holds a value the SPU has not read, so the SPU job feeding the
+	// geometry loses its signal. That needs waiting only then. Before an overwrite-mode push into a
+	// register that is still full, the SPU gets the same 500 us to read it; a register that is already
+	// empty, the usual case, costs nothing. This is the in-code form of WaitForSPUsToEmptySNRs, Elad's
+	// own canary patch for the game, which canary_patches.yml bundles for the US dump; here it covers
+	// every dump and every game.
+	//
+	// ARMSX3_SNR_WAKE_WAIT=1 in driver_env.txt restores upstream's waits instead, for an A/B. Read on
+	// first use, during a game, after driver_env.txt has been applied.
+	static const bool s_wake_wait = []
+	{
+		const char* env = std::getenv("ARMSX3_SNR_WAKE_WAIT");
+		return env && *env == '1';
+	}();
+
+	if (!s_wake_wait && !bitor_bit && channel->get_count())
+	{
+		for (u64 time = get_system_time(), current = time; channel->get_count() && !is_stopped() && current - time < 500; current = get_system_time())
+		{
+			std::this_thread::yield();
+		}
+	}
+
 	// Lock event channel in case it needs event notification
 	ch_events.atomic_op([](ch_events_t& ev)
 	{
@@ -2454,15 +2485,15 @@ void spu_thread::push_snr(u32 number, u32 value)
 	});
 
 	// Check corresponding SNR register settings
-	const u32 old_spu_pc = this->pc; 
+	const u32 old_spu_pc = this->pc;
 	auto push_state = channel->push(value, bitor_bit);
 
 	if (push_state.old_count < push_state.count)
 	{
 		set_events(event_bit);
 
-		// Wait until the thread wakes up (SPU wakes up immediately on realhW)
-		if (push_state.notify)
+		// Wait until the thread wakes up (SPU wakes up immediately on realhW): see s_wake_wait
+		if (s_wake_wait && push_state.notify)
 		{
 			for (u64 time = get_system_time(), current = time; state & cpu_flag::wait && old_spu_pc == atomic_storage<u32>::load(this->pc) && current - time < 500; current = get_system_time())
 			{
@@ -2487,7 +2518,16 @@ void spu_thread::push_snr(u32 number, u32 value)
 
 	// Configueable SPU head start (compnesation)
 	// SPU wakes up immediately on realhW and is faster than PPU
-	thread_ctrl::wait_for_accurate(g_cfg.core.spu_mmio_delay_enabled ? +g_cfg.core.spu_mmio_delay : 3);
+	// Only where a game's settings ask for the MMIO delay (Blitz: The League II's database entry, for
+	// one), or with upstream's waits back on: see s_wake_wait.
+	if (g_cfg.core.spu_mmio_delay_enabled)
+	{
+		thread_ctrl::wait_for_accurate(+g_cfg.core.spu_mmio_delay);
+	}
+	else if (s_wake_wait)
+	{
+		thread_ctrl::wait_for_accurate(3);
+	}
 }
 
 void spu_thread::push_in_mbox(u32 value)
