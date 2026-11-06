@@ -135,6 +135,10 @@ namespace rsx
 		virtual bool release_GCM_label(u32 /*type*/, u32 /*address*/, u32 /*value*/) { return false; }
 		virtual void on_semaphore_acquire_wait() {}
 
+		// The FIFO is still empty and the RSX thread is about to park. Runs on every idle pass, so it
+		// must cost nothing when the backend has nothing waiting on the GPU.
+		virtual void on_fifo_idle() {}
+
 		// Host part of a sync hint. The core forwards the hint to ZCULL first.
 		virtual void on_sync_hint(FIFO::interrupt_hint /*hint*/, reports::sync_hint_payload_t /*payload*/) {}
 

@@ -1226,6 +1226,13 @@ void VKGSRender::on_unmap_memory_range(const utils::address_range32& range)
 
 void VKGSRender::on_semaphore_acquire_wait()
 {
+	// The RSX is waiting on the guest, so this is as good a moment as the idle loop to put a frame
+	// held for frame generation on screen (VKPresent.cpp, present_after_generated).
+	if (m_present_after_generated)
+	{
+		present_after_generated(false);
+	}
+
 	if (m_flush_requests.pending() ||
 		RSX(m_ctx)->display_ctrl().has_flip_request(rsx::thread::flip_request::emu_requested) ||
 		(m_queue_status & flush_queue_state::deadlock))
@@ -2068,6 +2075,13 @@ bool VKGSRender::on_local_task(rsx::FIFO::state state)
 			}
 			m_ctx->graphics_state.clear(rsx::pipeline_state::framebuffer_reads_dirty);
 		}
+	}
+
+	// Once per 64 FIFO commands while the RSX is busy. Not while it waits on a lock another thread
+	// holds: the present takes the queue's submit lock.
+	if (m_present_after_generated && state != rsx::FIFO::state::lock_wait)
+	{
+		present_after_generated(false);
 	}
 
 	return true;

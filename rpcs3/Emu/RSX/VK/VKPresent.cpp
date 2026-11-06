@@ -83,6 +83,11 @@ bool VKGSRender::reinitialize_swapchain()
 		return false;
 	}
 
+	// A frame still held for frame generation goes to the swapchain it was acquired from while that
+	// swapchain still exists; the lost-surface path below destroys it first thing. present() skips
+	// it when the swapchain is already unusable.
+	present_after_generated(true);
+
 	if (m_surface_lost)
 	{
 		// Not while the emulator is stopping. Leaving a game closes its screen, so Android destroys
@@ -218,6 +223,10 @@ bool VKGSRender::reinitialize_swapchain()
 	m_deferred_present_frame = nullptr;
 	m_framegen_blit_cb_count = 0;
 
+	// Presented at the top of this function; cleared again so nothing can point into freed contexts.
+	m_present_after_generated = nullptr;
+	m_held_generated_count = 0;
+
 	// Read with the same setting init() reads to pick the present mode. See m_swapchain_framegen.
 	m_swapchain_framegen = g_cfg.video.frame_generation != frame_generation_mode::off;
 	m_swapchain_prerotation = !g_cfg.video.disable_swapchain_prerotation;
@@ -314,7 +323,7 @@ bool VKGSRender::reinitialize_swapchain()
 // Best-effort throughout. A generated frame is an extra, so every failure path here simply
 // returns and lets the real frame present normally -- dropping an interpolated frame is invisible,
 // while stalling or presenting a torn one is not.
-vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
+vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src, bool hold_present)
 {
 	if (src == VK_NULL_HANDLE || swapchain_unavailable || m_swapchain->is_headless())
 	{
@@ -569,11 +578,114 @@ vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 	// acquired image.
 	cmd->flush();
 
+	if (hold_present && m_held_generated_count < std::size(m_held_generated_presents))
+	{
+		// Goes out from present_after_generated, in order, ahead of the real frame it leads into.
+		m_held_generated_presents[m_held_generated_count++] = { present_sem, image };
+		return cmd;
+	}
+
 	m_swapchain->present(present_sem, image);
 	return cmd;
 }
 
-void VKGSRender::present(vk::frame_context_t *ctx)
+void VKGSRender::present_after_generated(bool wait)
+{
+	vk::frame_context_t* const ctx = m_present_after_generated;
+
+	if (!ctx)
+	{
+		return;
+	}
+
+	const u64 now = get_system_time();
+
+	if (wait)
+	{
+		for (u32 i = 0; i < ctx->framegen_cb_count; ++i)
+		{
+			// A buffer the ring has reset since was waited for by that reset.
+			if (ctx->framegen_cbs[i]->reset_id == m_present_after_generated_ids[i])
+			{
+				ctx->framegen_cbs[i]->wait(FRAME_PRESENT_TIMEOUT);
+			}
+		}
+
+		m_held_presents_forced++;
+		m_held_presents_forced_us += get_system_time() - now;
+	}
+	else
+	{
+		// Polled from the RSX thread's idle and wait loops, which can come round every few
+		// microseconds; one fence query per 100us is plenty for a present. Never from inside a
+		// flush, which is the one state the local task refuses to run in either.
+		if (now - m_present_after_generated_poll < 100 || (m_queue_status & flush_queue_state::flushing))
+		{
+			return;
+		}
+
+		m_present_after_generated_poll = now;
+
+		for (u32 i = 0; i < ctx->framegen_cb_count; ++i)
+		{
+			if (ctx->framegen_cbs[i]->reset_id == m_present_after_generated_ids[i] &&
+				!ctx->framegen_cbs[i]->poke())
+			{
+				return;
+			}
+		}
+
+		m_held_presents_polled++;
+	}
+
+	m_present_after_generated = nullptr;
+
+	// Same order the unheld path presents in: the generated frames, then the real frame they lead
+	// into. The blits behind all of them are finished, so none of these presents waits.
+	if (m_held_generated_count)
+	{
+		if (!swapchain_unavailable)
+		{
+			vk::acquire_global_submit_lock();
+
+			for (u32 i = 0; i < m_held_generated_count; ++i)
+			{
+				m_swapchain->present(m_held_generated_presents[i].semaphore, m_held_generated_presents[i].image);
+			}
+
+			vk::release_global_submit_lock();
+		}
+
+		m_held_generated_count = 0;
+	}
+
+	present(ctx, true);
+
+	if (!m_held_presents_window)
+	{
+		m_held_presents_window = now;
+	}
+	else if (now - m_held_presents_window >= 10'000'000)
+	{
+		rsx_log.notice("Frame generation: %u real frames went out as soon as their generated frames finished, %u at the next flip (%.1f ms waited there), in the last %.0f s.",
+			m_held_presents_polled, m_held_presents_forced, m_held_presents_forced_us / 1000.,
+			(now - m_held_presents_window) / 1'000'000.);
+
+		m_held_presents_window = now;
+		m_held_presents_polled = m_held_presents_forced = 0;
+		m_held_presents_forced_us = 0;
+	}
+}
+
+void VKGSRender::on_fifo_idle()
+{
+	if (m_present_after_generated)
+	{
+		present_after_generated(false);
+	}
+}
+
+void VKGSRender::present(vk::frame_context_t *ctx, bool lock_queue)
 {
 	// Both of these are torn down by frame_context_cleanup, and frame generation's deferred
 	// present is the one caller that can hold a context across the throttle that reclaims them.
@@ -591,7 +703,15 @@ void VKGSRender::present(vk::frame_context_t *ctx)
 
 	if (!swapchain_unavailable)
 	{
-		switch (VkResult error = m_swapchain->present(ctx->present_wait_semaphore, ctx->present_image))
+		// A present frame generation held back goes out mid-frame, while the offloader may be
+		// submitting the next frame's work to this same queue, so it takes the lock the queue's
+		// other users take. Only after the flush above: that can wait on the offloader, and the
+		// offloader on this lock.
+		if (lock_queue) vk::acquire_global_submit_lock();
+		const VkResult present_result = m_swapchain->present(ctx->present_wait_semaphore, ctx->present_image);
+		if (lock_queue) vk::release_global_submit_lock();
+
+		switch (VkResult error = present_result)
 		{
 		case VK_SUCCESS:
 			m_suboptimal_present_count = 0;
@@ -951,9 +1071,45 @@ void VKGSRender::queue_swap_request()
 	// reclaims what they drew their overlays from.
 	m_current_frame->framegen_cb_count = 0;
 
+	// Hold every present of this flip after the first generated one, real frame included, until
+	// the GPU has finished the generated frames.
+	//
+	// Android lets a producer have two buffers queued and makes the third queueBuffer wait for the
+	// one before it to finish rendering ("Throttling EGL Production" in BufferQueueProducer, which
+	// the Vulkan swapchain connects through as well). A generated frame and the real frame it leads
+	// into are queued back to back, and the generated one is only finished once this frame's whole
+	// GPU frame and the interpolation behind it are. So the real frame's present sat in that wait,
+	// on the RSX thread, every frame: profiled on the Odin 3 in Web of Shadows it was 40% of the
+	// RSX thread's time, and with the RSX parked the game could not feed it the next frame. That
+	// is the wait removed further down ("The CPU wait that used to be here is GONE"), back through
+	// the window system instead of through our own fence.
+	//
+	// Held, the RSX thread goes straight on with the next frame, and the presents go out from its
+	// idle and wait loops the moment the blits are done (present_after_generated). Nothing reaches
+	// the screen later than before: the display could not show the frame before the GPU finished
+	// it anyway. ARMSX3_FG_PRESENT_WAIT=1 presents straight away, as before.
+	static const bool s_hold_presents = []
+	{
+		const char* env = std::getenv("ARMSX3_FG_PRESENT_WAIT");
+		const bool hold = !(env && env[0] == '1');
+		rsx_log.notice("Frame generation: %s", hold
+			? "the real frame is presented once its generated frames finish on the GPU, without the RSX thread waiting for them."
+			: "the real frame is presented straight away and the RSX thread waits for the GPU (ARMSX3_FG_PRESENT_WAIT=1).");
+		return hold;
+	}();
+
+	const bool hold_presents = s_hold_presents && !m_framegen_pipelined;
+
+	// The previous flip's held frames go out ahead of this flip's. present_frame has done this
+	// already; repeated so the order cannot depend on it.
+	present_after_generated(true);
+
 	for (u32 i = 0; i < generated; ++i)
 	{
-		auto* cb = present_generated_frame(vk::frame_gen::generated_image(i));
+		// The first one that goes out queues behind the previous real frame, which is long finished,
+		// so it is presented now. Every later one queues behind a frame of this flip.
+		auto* cb = present_generated_frame(vk::frame_gen::generated_image(i),
+			hold_presents && m_current_frame->framegen_cb_count > 0);
 
 		if (cb) { s_fg_shown++; } else { s_fg_dropped++; }
 
@@ -1023,8 +1179,25 @@ void VKGSRender::queue_swap_request()
 			m_deferred_present_frame = nullptr;
 		}
 
-		// Set up a present request for this frame as well
-		present(m_current_frame);
+		if (hold_presents && m_current_frame->framegen_cb_count)
+		{
+			// Held: see above the generated presents. Kept in its context, which nothing reclaims
+			// without presenting it first (frame_context_cleanup), and the next flip presents it
+			// before anything of its own at the latest.
+			m_present_after_generated = m_current_frame;
+
+			for (u32 i = 0; i < m_current_frame->framegen_cb_count; ++i)
+			{
+				m_present_after_generated_ids[i] = m_current_frame->framegen_cbs[i]->reset_id;
+			}
+
+			m_present_after_generated_poll = 0;
+		}
+		else
+		{
+			// Set up a present request for this frame as well
+			present(m_current_frame);
+		}
 	}
 
 	// Grab next cb in line and make it usable
@@ -1060,6 +1233,14 @@ void VKGSRender::queue_swap_request()
 void VKGSRender::frame_context_cleanup(vk::frame_context_t *ctx)
 {
 	ensure(ctx->swap_command_buffer);
+
+	// A frame still held for frame generation goes out before anything of it is reclaimed. Here
+	// rather than at the callers because every reclaim path comes through here, including the one
+	// the pipelined attempt above never found: check_present_status, from a hard sync mid-frame.
+	if (ctx == m_present_after_generated) [[unlikely]]
+	{
+		present_after_generated(true);
+	}
 
 	if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_frame_cleanups++;
 
@@ -1286,6 +1467,11 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 		// A lost device presents nothing. The core replaces the renderer.
 		return false;
 	}
+
+	// The previous frame, if frame generation is still holding it, goes out before this one starts.
+	// Normally its blits finished long ago and it went out from the idle loop; waiting here means
+	// the GPU is a whole frame behind, which is the wait the game should feel.
+	present_after_generated(true);
 
 	// Serviced before the swapchain checks below, so it also runs while the surface is gone
 	// (the app was just sent to the background and the frame will not be presented).

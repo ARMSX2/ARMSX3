@@ -938,6 +938,12 @@ namespace rsx
 					//
 					// The pre-spin is not optional: an earlier Android fork parked bare here (e31ef44ef) and
 					// had to walk it back (832c23078) when the wake latency cost frametime smoothness.
+					//
+					// Work the backend is holding for the GPU rather than the guest is checked first:
+					// an idle RSX otherwise looks only every 64 passes, which at the event stream's
+					// pace is several milliseconds.
+					m_renderer->on_fifo_idle();
+
 					RSX_PROF_SCOPE(idle_fifo);
 
 #if defined(ARCH_ARM64)

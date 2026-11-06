@@ -231,6 +231,28 @@ private:
 	vk::command_buffer_chunk* m_framegen_blit_cb[3] = {};
 	u32 m_framegen_blit_cb_count = 0;
 
+	// The real frame that frame generation has not presented yet, held until its generated frames are
+	// finished on the GPU (see queue_swap_request), and the generated frames held in front of it.
+	// Null / zero when nothing is held, which is every frame with frame generation off.
+	vk::frame_context_t* m_present_after_generated = nullptr;
+	u64 m_present_after_generated_ids[3] = {};
+
+	struct held_generated_present
+	{
+		VkSemaphore semaphore = VK_NULL_HANDLE;
+		u32 image = umax;
+	};
+
+	held_generated_present m_held_generated_presents[3] = {};
+	u32 m_held_generated_count = 0;
+	u64 m_present_after_generated_poll = 0;
+
+	// How the held frames went out: on a poll, or forced at the next flip and how long that waited.
+	u32 m_held_presents_polled = 0;
+	u32 m_held_presents_forced = 0;
+	u64 m_held_presents_forced_us = 0;
+	u64 m_held_presents_window = 0;
+
 	// How the real frame reached the screen, for generated frames captured at the game's
 	// resolution (vk::frame_gen::capture_game_frame): they are scaled into the same area with the
 	// same filter, then get the overlays drawn on them just as the real frame did.
@@ -388,8 +410,9 @@ private:
 	void queue_swap_request();
 	void frame_context_cleanup(vk::frame_context_t *ctx);
 	void advance_queued_frames();
-	void present(vk::frame_context_t *ctx);
-	vk::command_buffer_chunk* present_generated_frame(VkImage src);
+	void present(vk::frame_context_t *ctx, bool lock_queue = false);
+	vk::command_buffer_chunk* present_generated_frame(VkImage src, bool hold_present = false);
+	void present_after_generated(bool wait);
 	bool reinitialize_swapchain();
 
 	vk::viewable_image* get_present_source(vk::present_surface_info* info, const rsx::avconf& avconfig);
@@ -501,4 +524,5 @@ protected:
 	void on_invalidate_memory_range(rsx::context* ctx, const utils::address_range32 &range, rsx::invalidation_cause cause) override;
 	void on_unmap_memory_range(const utils::address_range32& range) override;
 	void on_semaphore_acquire_wait() override;
+	void on_fifo_idle() override;
 };
