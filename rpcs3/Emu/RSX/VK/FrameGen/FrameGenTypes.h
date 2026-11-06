@@ -23,7 +23,7 @@
 
 #include "util/types.hpp"
 #include "FrameGenConfig.h"
-#include "Config.h"
+#include "Utilities/Config.h"
 
 #include <algorithm>
 #include <cstddef>

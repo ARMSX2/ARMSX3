@@ -7,7 +7,7 @@
 #include "shared.h"
 
 #include "Emu/Cell/timers.hpp"
-#include "Emu/system.h"
+#include "Emu/System.h"
 #include "Utilities/Thread.h"
 #include "Emu/RSX/rsx_profiler.h"
 
