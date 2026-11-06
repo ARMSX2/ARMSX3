@@ -149,7 +149,9 @@ build_variant() {
 	# volkLoadDevice() repoint the whole renderer at framegen's device. The consequence for the
 	# build is that it is NOT a dependency of libarmsx3-core.so and will not be built by asking
 	# for it: name it here or ship an APK with frame generation silently missing.
-	PATH="$CMAKE_BIN:$PATH" ninja -C "$build_dir" android/libarmsx3-core.so armsx3_lsfg
+	# NINJA_JOBS caps parallel compiles, for a machine short of memory (a header change rebuilds
+	# hundreds of files, and every compile that does not fit in RAM grows swap on the system disk).
+	PATH="$CMAKE_BIN:$PATH" ninja ${NINJA_JOBS:+-j "$NINJA_JOBS"} -C "$build_dir" android/libarmsx3-core.so armsx3_lsfg
 
 	local strip="$ANDROID_HOME/ndk/$ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-strip"
 
