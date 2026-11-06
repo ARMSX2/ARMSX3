@@ -278,6 +278,10 @@ struct cfg_root : cfg::node
 			cfg::_bool vertex_fetch_specialization{ this, "Vertex Fetch Specialization", false };
 			cfg::_enum<vk_gpu_scheduler_mode> asynchronous_scheduler{ this, "Asynchronous Queue Scheduler", vk_gpu_scheduler_mode::safe };
 			cfg::uint<256, 65536> vram_allocation_limit{ this, "VRAM allocation limit (MB)", 65536, false };
+			// ARMSX3: 0 = off. Once this many draws are recorded in the open primary command buffer
+			// and the GPU has finished the previous submit, submit it early instead of leaving the GPU
+			// idle until the next flush point. Values 1-255 count as 256. Read when the renderer starts.
+			cfg::uint<0, 65535> early_submit_draw_threshold{ this, "Early Submit Draw Threshold", 0 };
 #ifdef __ANDROID__
 			// ARMSX3: left on. Android has no Re-BAR; the name only fits desktop cards. RPCS3 counts any
 			// device-local, host-visible, coherent memory type as "BAR", and on a phone that is plain

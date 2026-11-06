@@ -415,6 +415,12 @@ namespace vk
 			return result;
 		}
 
+		// The command buffer taken from the chain just before the current one
+		inline command_buffer_chunk* previous()
+		{
+			return &m_cb_list[(m_current_index % Count + Count - 1) % Count];
+		}
+
 		inline command_buffer_chunk* get()
 		{
 			return &m_cb_list[m_current_index % Count];

@@ -1354,6 +1354,7 @@ void VKGSRender::emit_geometry(u32 sub_index)
 		}
 	}
 
+	m_draws_since_submit++;
 	m_ctx->stats.draw_exec_time += m_profiler.duration();
 }
 

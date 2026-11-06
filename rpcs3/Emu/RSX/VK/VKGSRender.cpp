@@ -507,6 +507,16 @@ VKGSRender::VKGSRender(rsx::context* ctx, rsx::display_output* output) noexcept 
 	m_current_command_buffer->begin();
 	vk::get_gpu_timer().begin(*m_current_command_buffer, vk::gpu_timer::region::frame);
 
+	// Early submit: read once per renderer, so each boot uses its own game's value.
+	// A threshold below 256 would break the render pass every few draws.
+	if (const u32 threshold = g_cfg.video.vk.early_submit_draw_threshold.get())
+	{
+		m_early_submit_threshold = std::max(threshold, 256u);
+		rsx_log.notice("VK: early submit after %u draws", m_early_submit_threshold);
+	}
+
+	m_early_submit_check_at = m_early_submit_threshold ? m_early_submit_threshold : umax;
+
 	// Create secondary command_buffer for parallel operations
 	m_secondary_command_buffer_pool.create((*m_device), m_device->get_graphics_queue_family());
 	m_secondary_cb_list.create(m_secondary_command_buffer_pool, vk::command_buffer::access_type_hint::all);
@@ -2076,6 +2086,32 @@ bool VKGSRender::on_local_task(rsx::FIFO::state state)
 	}
 	else if (!m_ctx->in_begin_end && state != rsx::FIFO::state::lock_wait)
 	{
+		// Early submit. A long command buffer is otherwise handed to the GPU only at the next
+		// flush point, and the GPU can sit idle until then. Once enough draws are recorded and the
+		// GPU has finished the previous submit, submit what we have. While the GPU is still busy,
+		// ask again only after another eighth of the threshold rather than after every draw.
+		// Off (threshold 0), this is never taken.
+		if (m_early_submit_threshold && m_draws_since_submit >= m_early_submit_check_at && !vk::is_uninterruptible())
+		{
+			if (m_primary_cb_list.previous()->poke())
+			{
+				// The buffer submitted below gives its ring memory back once it completes, but the vertex
+				// cache keeps its ranges until the frame ends. Drop them so no later draw reads a reused range.
+				if (const auto resources = res())
+				{
+					resources->vertex_cache->purge();
+				}
+
+				// close_and_submit_command_buffer resets the count and the next check
+				flush_command_queue();
+			}
+			else
+			{
+				// The threshold is at least 256 here, so this is at least 32 draws
+				m_early_submit_check_at = m_draws_since_submit + m_early_submit_threshold / 8;
+			}
+		}
+
 		if (m_ctx->graphics_state & rsx::pipeline_state::framebuffer_reads_dirty)
 		{
 			//This will re-engage locks and break the texture cache if another thread is waiting in access violation handler!
@@ -2799,6 +2835,10 @@ void VKGSRender::patch_transform_constants(rsx::context* /*ctx*/, u32 index, u32
 
 void VKGSRender::close_and_submit_command_buffer(vk::fence* pFence, VkSemaphore wait_semaphore, VkSemaphore signal_semaphore, VkPipelineStageFlags pipeline_stage_flags)
 {
+	// Every submit of m_current_command_buffer passes here: early submit counts from zero again
+	m_draws_since_submit = 0;
+	m_early_submit_check_at = m_early_submit_threshold ? m_early_submit_threshold : umax;
+
 	RSX_PROF_SCOPE(submit);
 
 	ensure(!m_queue_status.test_and_set(flush_queue_state::flushing));
