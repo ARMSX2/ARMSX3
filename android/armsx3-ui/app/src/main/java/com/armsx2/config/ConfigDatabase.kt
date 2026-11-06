@@ -319,11 +319,16 @@ object ConfigDatabase {
         // EU discs (BCES00052, BCES00301, BCES01908); the other serials are the same games.
         // NPEA00106 and NPJA00033 are listed as Quest for Booty only in RPCS3's patch file.
         // Contributed by k1r4ct (PR #226).
-        "BCES00052" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
-        "BCUS98127" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
-        "BCJS30014" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
-        "NPEA00452" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
-        "NPUA80965" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
+        //
+        // Tools of Destruction (the next five) also gets Vertex Fetch Specialization (Video/Vulkan; off
+        // elsewhere): its heavy scenes draw about 7,000 times a frame, and the generic vertex shader
+        // decodes every attribute at run time in each draw. Specialized, the robots fight went from
+        // 12.6 to 21.9 FPS (Retroid Pocket 6, Turnip, 11-06).
+        "BCES00052" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n",
+        "BCUS98127" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n",
+        "BCJS30014" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n",
+        "NPEA00452" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n",
+        "NPUA80965" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n",
         "BCES00301" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
         "BCAS20052" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
         "NPEA00088" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
