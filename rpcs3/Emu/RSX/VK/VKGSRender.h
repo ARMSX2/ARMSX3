@@ -127,6 +127,11 @@ private:
 	vk::command_buffer_chain<VK_MAX_ASYNC_CB_COUNT> m_primary_cb_list;
 	vk::command_buffer_chunk* m_current_command_buffer = nullptr;
 
+	// Early submit ("Early Submit Draw Threshold"), see on_local_task
+	u32 m_early_submit_threshold = 0;     // 0 = off, else >= 256
+	u32 m_draws_since_submit = 0;         // Draws recorded into the open primary command buffer
+	u32 m_early_submit_check_at = umax;   // Draw count at which to ask the GPU next; umax when off
+
 	std::unique_ptr<vk::buffer> m_host_object_data;
 	vk::framebuffer_holder* m_draw_fbo = nullptr;
 
