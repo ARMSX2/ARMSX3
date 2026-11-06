@@ -3157,6 +3157,39 @@ open class MainActivityRuntime : ComponentActivity() {
         return event.keyCode
     }
 
+    /**
+     * Keys while the search keyboard is the system's ("Use system keyboard"). The key grid is not on
+     * screen then, a real text field is, but the grid's handler still took every key: Enter and the
+     * pad's A typed the hidden grid's highlighted key, and a keyboard's letters, Backspace and arrows
+     * never reached the field (issue #229). A keyboard's keys are now the field's, the pad keeps close
+     * and backspace, and the focus-moving keys are held so focus stays in the field.
+     *
+     * Ported from ARMSX2, contributed there by ygordreyer (ARMSX2 PR #873).
+     */
+    private fun dispatchSystemImeKeyEvent(event: KeyEvent): Boolean {
+        val kc = event.keyCode
+        val isController = event.isFromSource(InputDevice.SOURCE_GAMEPAD) ||
+            event.isFromSource(InputDevice.SOURCE_JOYSTICK)
+        if (kc != KeyEvent.KEYCODE_BACK && !isController) {
+            return when (kc) {
+                KeyEvent.KEYCODE_TAB, KeyEvent.KEYCODE_NAVIGATE_NEXT, KeyEvent.KEYCODE_NAVIGATE_PREVIOUS -> true
+                // Alt+Up/Down are the field's Home/End; plain Up/Down would only move focus.
+                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN ->
+                    if (event.isAltPressed) super.dispatchKeyEvent(event) else true
+                else -> super.dispatchKeyEvent(event)
+            }
+        }
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            when (kc) {
+                KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_DPAD_CENTER,
+                KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BACK ->
+                    com.armsx2.ui.home.LibraryKeyboard.close()
+                KeyEvent.KEYCODE_BUTTON_X -> com.armsx2.ui.home.LibraryKeyboard.backspace()
+            }
+        }
+        return true
+    }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         // Before anything can consume it: whether the pad is driving the menus decides whether
         // selection highlights show at all.
@@ -3351,6 +3384,10 @@ open class MainActivityRuntime : ComponentActivity() {
         if (com.armsx2.ui.home.LibraryKeyboard.visible.value) {
             // The phone's volume keys stay the system's, as they are with any modal up.
             if (isVolumeKey(kc)) return false
+            // "Use system keyboard": a text field instead of the grid, in XMB mode too.
+            if (com.armsx2.ui.home.LibraryKeyboard.useSystemIme.value) {
+                return dispatchSystemImeKeyEvent(event)
+            }
             // Typing in XMB mode's field, on the phone's keyboard (after a touch on the field) or a
             // real one: those keys are the field's. The pad keeps the key grid, and Back still closes.
             val keyboard = com.armsx2.ui.home.LibraryKeyboard
