@@ -209,8 +209,10 @@ object BackupManager {
     private fun escapeXml(text: String): String =
         text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 
+    // Only the name offered in the save dialog. Restore reads the manifest inside the zip, never
+    // the file name, so backups saved under the old "ARMSX2-backup-" name still restore (issue #229).
     fun suggestedName(context: Context): String =
-        "ARMSX2-backup-${appVersion(context)}.zip"
+        "ARMSX3-backup-${appVersion(context)}.zip"
 
     private fun appVersion(context: Context): String = runCatching {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
