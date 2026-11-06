@@ -4,6 +4,8 @@
 #include "vkutils/graphics_pipeline_state.hpp"
 #include "util/fnv_hash.hpp"
 
+#include <array>
+
 namespace vk
 {
 	class render_device;
@@ -71,7 +73,8 @@ namespace vk
 			COMPILE_INLINE = 1,
 			COMPILE_DEFERRED = 2,
 			SEPARATE_SHADER_OBJECTS = 4,
-			USE_LAST_PROVOKING_VERTEX = 8
+			USE_LAST_PROVOKING_VERTEX = 8,
+			VERTEX_FETCH_SPEC_INPUTS = 16  // ARMSX3: the vertex shader declares the vertex fetch specialization inputs (vk_vspec.h)
 		};
 
 		using op_flags = rsx::flags32_t;
@@ -102,6 +105,16 @@ namespace vk
 			op_flags flags, callback_t callback = {},
 			const std::vector<glsl::program_input>& vs_inputs = {},
 			const std::vector<glsl::program_input>& fs_inputs = {});
+
+		// ARMSX3: the same, with the vertex shader specialized on an attribute layout (vk_vspec.h)
+		std::unique_ptr<glsl::program> compile(
+			const vk::pipeline_props &create_info,
+			const std::array<u32, 16>& vtx_spec,
+			VkShaderModule vs,
+			VkShaderModule fs,
+			op_flags flags, callback_t callback,
+			const std::vector<glsl::program_input>& vs_inputs,
+			const std::vector<glsl::program_input>& fs_inputs);
 
 		std::unique_ptr<glsl::program> compile(
 			graphics_pipe_create_callback_t get_create_info,
@@ -137,6 +150,7 @@ namespace vk
 			compute_pipeline_props compute_data;
 			VkShaderModule graphics_modules[2];
 			std::vector<glsl::program_input> inputs;
+			std::array<u32, 16> vtx_spec{}; // ARMSX3: vertex fetch specialization, all zero = none
 
 			op_flags flags;
 
@@ -146,10 +160,12 @@ namespace vk
 				const std::vector<glsl::program_input>& vs_in,
 				const std::vector<glsl::program_input>& fs_in,
 				op_flags flags_,
-				callback_t func)
+				callback_t func,
+				const std::array<u32, 16>& spec = {})
 			{
 				callback_func = func;
 				graphics_data = props;
+				vtx_spec = spec;
 				graphics_modules[0] = modules[0];
 				graphics_modules[1] = modules[1];
 				is_graphics_job = true;
@@ -218,7 +234,8 @@ namespace vk
 			VkShaderModule modules[2],
 			const std::vector<glsl::program_input>& vs_inputs,
 			const std::vector<glsl::program_input>& fs_inputs,
-			op_flags flags);
+			op_flags flags,
+			const std::array<u32, 16>* vtx_spec = nullptr);
 
 		std::unique_ptr<glsl::program> int_compile_graphics_pipe(
 			graphics_pipe_create_callback_t pipe_info_create_fn,

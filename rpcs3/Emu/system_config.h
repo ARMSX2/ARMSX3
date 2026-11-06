@@ -273,6 +273,9 @@ struct cfg_root : cfg::node
 			cfg::string adapter{ this, "Adapter", "", true };
 			cfg::_enum<vk_exclusive_fs_mode> exclusive_fullscreen_mode{ this, "Exclusive Fullscreen Mode", vk_exclusive_fs_mode::unspecified};
 			cfg::_bool asynchronous_texture_streaming{ this, "Asynchronous Texture Streaming", false };
+			// ARMSX3: Vulkan only, read once per boot (Emu/RSX/VK/vk_vspec.h). Off by default; the config
+			// database turns it on per title.
+			cfg::_bool vertex_fetch_specialization{ this, "Vertex Fetch Specialization", false };
 			cfg::_enum<vk_gpu_scheduler_mode> asynchronous_scheduler{ this, "Asynchronous Queue Scheduler", vk_gpu_scheduler_mode::safe };
 			cfg::uint<256, 65536> vram_allocation_limit{ this, "VRAM allocation limit (MB)", 65536, false };
 #ifdef __ANDROID__

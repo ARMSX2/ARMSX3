@@ -3,6 +3,8 @@
 #include "VKProgramPipeline.h"
 #include "vkutils/pipeline_binding_table.h"
 
+#include <array>
+
 namespace vk
 {
 	class shader_interpreter;
@@ -21,6 +23,10 @@ struct VKVertexDecompilerThread : public VertexProgramDecompiler
 		bool emulate_conditional_rendering{false};
 	}
 	m_device_props;
+
+	// ARMSX3: emit the vertex fetch specialization inputs (vk_vspec.h). Set by Task() only, so the
+	// shader interpreter, which builds its vertex shader from the insert* functions, never has them.
+	bool m_vspec = false;
 
 protected:
 	std::string getFloatTypeName(usz elementCount) override;
@@ -82,6 +88,13 @@ public:
 	void SetInputs(std::vector<vk::glsl::program_input>& inputs);
 
 	u32 Flags() const { return m_ctrl; }
+
+	// ARMSX3: vertex fetch specialization (vk_vspec.h)
+	bool vspec_inputs = false;                                     // Built with the specialization constants and vertex inputs
+	mutable std::array<u32, 16> observed_vtx_spec{};               // Attribute layout of the last draw with this program
+	mutable bool has_observed_vtx_spec = false;
+	mutable std::vector<std::array<u32, 16>> requested_vtx_specs;  // Layouts specialized pipelines were requested for
+	mutable bool vtx_spec_limit_logged = false;
 
 private:
 	void Delete();

@@ -6,6 +6,153 @@
 #include "vkutils/device.h"
 #include "../Program/GLSLCommon.h"
 #include "Emu/system_config.h"
+#include "vk_vspec.h"
+
+namespace
+{
+	// ARMSX3: attribute reader of vertex programs built for vertex fetch specialization (vk_vspec.h).
+	// Emitted after the stock vertex fetch snippet (RSXVertexFetch.glsl), which it builds on and
+	// which stays unchanged, and only into those programs. vspec_decode_attribute() is a copy of
+	// the decoding step of fetch_attribute() in that snippet: keep the two in sync.
+	constexpr const char* vspec_vertex_fetch_glsl = R"(
+uint _rsx_bswap32(const in uint x)
+{
+	return (x << 24) | ((x & 0xFF00u) << 8) | ((x >> 8) & 0xFF00u) | (x >> 24);
+}
+
+// Decoding step of fetch_attribute (RSXVertexFetch.glsl), on the assembled words
+vec4 vspec_decode_attribute(const in attribute_desc desc, in uvec4 result)
+{
+	const int elem_size_table[] = { 0, 2, 4, 2, 1, 2, 4, 1 };
+	const float scaling_table[] = { 1., 32767.5, 1., 1., 255., 1., 32767., 1. };
+	const int elem_size = elem_size_table[desc.type];
+	const vec4 scale = scaling_table[desc.type].xxxx;
+
+	uvec4 tmp;
+	vec4 ret;
+
+	if (desc.type == VTX_FMT_SNORM16 || desc.type == VTX_FMT_SINT16)
+	{
+		ret = sext(ivec4(result));
+		ret = fma(vec4(0.5), vec4(desc.type == VTX_FMT_SNORM16), ret);
+	}
+	else if (desc.type == VTX_FMT_FLOAT32)
+	{
+		ret = uintBitsToFloat(result);
+	}
+	else if (desc.type == VTX_FMT_FLOAT16)
+	{
+		tmp.x = _set_bits(result.x, result.y, 16, 16);
+		tmp.y = _set_bits(result.z, result.w, 16, 16);
+		ret.xy = unpackHalf2x16(tmp.x);
+		ret.zw = unpackHalf2x16(tmp.y);
+	}
+	else if (elem_size == 1) // (desc.type == VTX_FMT_UINT8 || desc.type == VTX_FMT_UNORM8)
+	{
+		// Ignore bswap on single byte channels
+		ret = vec4(result);
+	}
+	else // if (desc.type == VTX_FMT_COMP32)
+	{
+		result = uvec4(_get_bits(result.x, 0, 11),
+			_get_bits(result.x, 11, 11),
+			_get_bits(result.x, 22, 10),
+			uint(scale.x));
+		ret = sext(ivec4(result) << ivec4(5, 5, 6, 0));
+	}
+
+	if (desc.attribute_size < 4)
+	{
+		ret.w = scale.x;
+	}
+
+	return ret / scale;
+}
+
+// An attribute fetched by the vertex input stage. 'raw' holds the guest's elements as read by
+// it (host byte order, zero-extended); every descriptor field comes from the specialization.
+vec4 decode_native(const in uint spec, const in uvec4 raw)
+{
+	attribute_desc ndesc;
+	ndesc.stride = (spec >> 12) & 0xFFu;
+	ndesc.frequency = 1u;
+	ndesc.type = spec & 7u;
+	ndesc.attribute_size = (spec >> 3) & 7u;
+	ndesc.starting_offset = 0u;
+	ndesc.swap_bytes = (spec & 0x40u) != 0u;
+	ndesc.is_volatile = (spec & 0x80u) != 0u;
+	ndesc.modulo = false;
+	const uint nes = (ndesc.type == 2u || ndesc.type == 6u) ? 4u : ((ndesc.type == 4u || ndesc.type == 7u) ? 1u : 2u);
+	uvec4 nwords = raw;
+	if (ndesc.swap_bytes && nes == 4u)
+	{
+		nwords = uvec4(_rsx_bswap32(raw.x), _rsx_bswap32(raw.y), _rsx_bswap32(raw.z), _rsx_bswap32(raw.w));
+	}
+	else if (ndesc.swap_bytes && nes == 2u)
+	{
+		nwords = ((raw & 0xFFu) << 8u) | ((raw >> 8u) & 0xFFu);
+	}
+	nwords *= uvec4(lessThan(uvec4(0u, 1u, 2u, 3u), uvec4(ndesc.attribute_size)));
+	return vspec_decode_attribute(ndesc, nwords);
+}
+
+// 'spec' is the location's specialization constant, so every branch on it is resolved when the
+// pipeline is built. The shader trusts it: the CPU binds the generic variant (all spec constants
+// 0, read_location() everywhere) for the draws whose layout differs. 'raw' is the location's
+// vertex input, fed by a binding when the attribute is fetched natively.
+vec4 read_location_spec(const in int location, const in uint spec, const in uvec4 raw)
+{
+	if (spec == 0u)
+	{
+		return read_location(location);
+	}
+
+	if ((spec & 0x800u) != 0u)
+	{
+		return decode_native(spec, raw);
+	}
+
+	// Stride, frequency and offset stay run-time values
+	const uvec2 attrib = get_draw_params().attrib_data[location];
+	attribute_desc desc;
+	desc.stride = _get_bits(attrib.x, 0, 8);
+	desc.frequency = _get_bits(attrib.x, 8, 16);
+	desc.type = spec & 7u;
+	desc.attribute_size = (spec >> 3) & 7u;
+	desc.starting_offset = _get_bits(attrib.y, 0, 29);
+	desc.swap_bytes = (spec & 0x40u) != 0u;
+	desc.is_volatile = (spec & 0x80u) != 0u;
+	desc.modulo = (spec & 0x100u) != 0u;
+
+	int vertex_id;
+	const uint spec_class = (spec >> 9) & 3u;
+	if (spec_class == 0u)
+	{
+		vertex_id = 0;
+	}
+	else if (spec_class == 1u)
+	{
+		vertex_id = _gl_VertexID - int(vertex_base_index);
+	}
+	else if (desc.modulo)
+	{
+		vertex_id = (_gl_VertexID + int(vertex_index_offset)) % int(desc.frequency);
+	}
+	else
+	{
+		vertex_id = (_gl_VertexID - int(vertex_base_index)) / int(desc.frequency);
+	}
+
+	if (desc.is_volatile)
+	{
+		return fetch_attribute(desc, vertex_id, volatile_input_stream);
+	}
+
+	return fetch_attribute(desc, vertex_id, persistent_input_stream);
+}
+
+)";
+}
 
 std::string VKVertexDecompilerThread::getFloatTypeName(usz elementCount)
 {
@@ -204,6 +351,53 @@ void VKVertexDecompilerThread::insertInputs(std::stringstream& OS, const std::ve
 			.name = stream
 		});
 	}
+
+	if (!m_vspec)
+	{
+		return;
+	}
+
+	// ARMSX3: vertex fetch specialization (vk_vspec.h). The per-draw offsets the shader needs travel
+	// in push constants (VKGSRender::update_vertex_env), in a range after the stock ones.
+	OS <<
+		"layout(push_constant) uniform vspec_push_block\n"
+		"{\n"
+		"	layout(offset = " << vk::vspec::push_constant_offset << ") uint vspec_xform_offset;\n"
+		"	uint vspec_vs_context_offset;\n"
+		"	uint vspec_fs_constants_offset;\n"
+		"	uint vspec_fs_context_offset;\n"
+		"	uint vspec_fs_texture_base_index;\n"
+		"	uint vspec_fs_stipple_offset;\n"
+		"};\n"
+		"#undef vs_context_offset\n"
+		"#define vs_context_offset vspec_vs_context_offset\n";
+
+	this->inputs.push_back(vk::glsl::program_input
+	{
+		.domain = glsl::glsl_vertex_program,
+		.type = vk::glsl::input_type_push_constant,
+		.bound_data = vk::glsl::push_constant_ref{ .offset = vk::vspec::push_constant_offset, .size = vk::vspec::push_constant_size },
+		.set = vk::glsl::binding_set_index_vertex,
+		.location = umax,
+		.name = "vspec_push_block"
+	});
+
+	// One specialization constant and one vertex input per attribute location
+	u32 declared = 0;
+	for (const ParamType& PT : m_parr.params[PF_PARAM_IN])
+	{
+		for (const ParamItem& PI : PT.items)
+		{
+			if (PI.location < 0 || PI.location >= 16 || (declared & (1u << PI.location)))
+			{
+				continue;
+			}
+
+			declared |= (1u << PI.location);
+			OS << "layout(constant_id = " << (vk::vspec::constant_id_base + PI.location) << ") const uint vtx_spec_" << PI.location << " = 0u;\n";
+			OS << "layout(location = " << PI.location << ") in uvec4 rsx_vin_" << PI.location << ";\n";
+		}
+	}
 }
 
 void VKVertexDecompilerThread::insertConstants(std::stringstream& OS, const std::vector<ParamType>& constants)
@@ -353,6 +547,20 @@ void VKVertexDecompilerThread::insertOutputs(std::stringstream& OS, const std::v
 
 void VKVertexDecompilerThread::insertFSExport(std::stringstream& OS)
 {
+	if (m_vspec)
+	{
+		// ARMSX3: the offsets come from the push constant block (insertInputs)
+		OS <<
+			"void write_fs_payload()\n"
+			"{\n"
+			"	draw_params_payload.x = vspec_fs_constants_offset;\n"
+			"	draw_params_payload.y = vspec_fs_context_offset;\n"
+			"	draw_params_payload.z = vspec_fs_texture_base_index;\n"
+			"	draw_params_payload.w = vspec_fs_stipple_offset;\n"
+			"}\n\n";
+		return;
+	}
+
 	OS <<
 		"void write_fs_payload()\n"
 		"{\n"
@@ -378,6 +586,11 @@ void VKVertexDecompilerThread::insertMainStart(std::stringstream& OS)
 
 	glsl::insert_glsl_legacy_function(OS, properties2);
 	glsl::insert_vertex_input_fetch(OS, glsl::glsl_rules_vulkan);
+
+	if (m_vspec)
+	{
+		OS << vspec_vertex_fetch_glsl;
+	}
 
 	insertFSExport(OS);
 
@@ -441,8 +654,22 @@ void VKVertexDecompilerThread::insertMainStart(std::stringstream& OS)
 	{
 		for (const ParamItem& PI : PT.items)
 		{
+			if (m_vspec && PI.location >= 0 && PI.location < 16)
+			{
+				// ARMSX3: specialized read (vk_vspec.h)
+				OS << "	vec4 " << PI.name << "= read_location_spec(" << PI.location << ", vtx_spec_" << PI.location << ", rsx_vin_" << PI.location << ");\n";
+				continue;
+			}
+
 			OS << "	vec4 " << PI.name << "= read_location(" << std::to_string(PI.location) << ");\n";
 		}
+	}
+
+	if (m_vspec)
+	{
+		// ARMSX3: from the push constant block (insertInputs)
+		OS << "\nuint xform_constants_offset = vspec_xform_offset;\n\n";
+		return;
 	}
 
 	OS << "\nuint xform_constants_offset = get_draw_params().xform_constants_offset;\n\n";
@@ -525,6 +752,7 @@ void VKVertexDecompilerThread::insertMainEnd(std::stringstream& OS)
 void VKVertexDecompilerThread::Task()
 {
 	m_device_props.emulate_conditional_rendering = vk::emulate_conditional_rendering();
+	m_vspec = vk::vspec::active();
 	m_shader = Decompile();
 	vk_prog->SetInputs(inputs);
 }
@@ -546,6 +774,7 @@ void VKVertexProgram::Decompile(const RSXVertexProgram& prog)
 
 	has_indexed_constants = decompiler.properties.has_indexed_constants;
 	constant_ids = std::vector<u16>(decompiler.m_constant_ids.begin(), decompiler.m_constant_ids.end());
+	vspec_inputs = decompiler.m_vspec;
 
 	shader.create(::glsl::program_domain::glsl_vertex_program, source);
 }
