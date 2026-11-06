@@ -324,11 +324,16 @@ object ConfigDatabase {
         // elsewhere): its heavy scenes draw about 7,000 times a frame, and the generic vertex shader
         // decodes every attribute at run time in each draw. Specialized, the robots fight went from
         // 12.6 to 21.9 FPS (Retroid Pocket 6, Turnip, 11-06).
-        "BCES00052" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n",
-        "BCUS98127" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n",
-        "BCJS30014" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n",
-        "NPEA00452" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n",
-        "NPUA80965" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n",
+        //
+        // ToD also gets Early Submit Draw Threshold 1024 (Video/Vulkan; 0, off, elsewhere): its
+        // frames record thousands of draws, which the GPU otherwise gets only at the next flush.
+        // With vertex fetch specialization on, it took the robots fight from 21.9 to 25.7 FPS
+        // (Retroid Pocket 6, Turnip, 11-06); alone it gains nothing there.
+        "BCES00052" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n",
+        "BCUS98127" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n",
+        "BCJS30014" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n",
+        "NPEA00452" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n",
+        "NPUA80965" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n",
         "BCES00301" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
         "BCAS20052" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
         "NPEA00088" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
