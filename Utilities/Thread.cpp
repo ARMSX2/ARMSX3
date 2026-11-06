@@ -4959,6 +4959,10 @@ u64 thread_ctrl::get_affinity_mask(thread_class group)
 			// lumped in with the A510s.
 			threshold = threshold * 3 / 4;
 
+			// Cores that exist. process_affinity_mask is all 64 bits on Android (see
+			// get_thread_affinity_mask), and every bit past the last core lands in slow_mask below.
+			u64 present_mask = 0;
+
 			for (u32 core = 0; core < 64u; core++)
 			{
 				if (~process_affinity_mask & (u64{1} << core))
@@ -4967,6 +4971,11 @@ u64 thread_ctrl::get_affinity_mask(thread_class group)
 				}
 
 				const u32 capacity = caps[core];
+
+				if (capacity)
+				{
+					present_mask |= (u64{1} << core);
+				}
 
 				((capacity && capacity >= threshold) ? fast_mask : slow_mask) |= (u64{1} << core);
 			}
@@ -5020,7 +5029,17 @@ u64 thread_ctrl::get_affinity_mask(thread_class group)
 				// spill to the little cluster keeps it out of the SPUs' way.
 				return all_cores_mask;
 			default:
-				return slow_mask;
+			{
+				// Only the little cores that exist. The bits past the last core never
+				// changed where a thread ran, but they made this mask 59 cores wide on a
+				// Snapdragon 8 Gen 2 for anyone sizing a pool to it (the pipeline compiler
+				// picked 2 workers for 3 little cores), and where every core reads as
+				// fast (expected on a Snapdragon 8 Elite, not run) they were the whole mask,
+				// which sched_setaffinity rejects with EINVAL, leaving the thread wherever
+				// it was. There it gets the fast cores, which is every core.
+				const u64 helper_mask = slow_mask & present_mask;
+				return helper_mask ? helper_mask : fast_mask;
+			}
 			}
 		}
 		case native_core_arrangement::amd_ccx:
