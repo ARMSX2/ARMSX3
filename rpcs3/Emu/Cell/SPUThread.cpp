@@ -5644,6 +5644,53 @@ static u64 getllar_spin_limit_ticks()
 	return s_ticks;
 }
 
+// How close together two GETLLARs of one unchanged line must come for the spin detection in the
+// GETLLAR path to call them a loop at all, rather than a poll between pieces of real work.
+//
+// Upstream's window is 5'000 timer ticks ("large time window is intentional"), the same x86 unit
+// as getllar_spin_limit_ticks: about 1.7 us on a 3 GHz TSC, but 260 us read on cntvct_el0 at
+// 19.2 MHz and 385 us at 13 MHz. That counted an SPU polling a line between hundreds of
+// microseconds of real work as spinning. While the spin limit was also read raw (21 ms) such a loop
+// was rarely made to sleep, so it hardly mattered; with the limit converted to 0.13 ms, it is
+// sent to sleep in the middle of its work, which costs the game that SPU's throughput. Converted
+// after testers on the 8 Elite saw some games run 5-10% slower with the converted limit while
+// others gained (Web of Shadows halved its CPU).
+//
+// Converted the same way, with a 5 us floor: one pass of a genuine spin is slower on a phone than on
+// a desktop, so the bare conversion would risk missing real spins, and work between polls runs to
+// tens of microseconds at least. ARMSX3_GETLLAR_RAW_TICKS=1 keeps the raw window too.
+static u64 getllar_loop_window_ticks()
+{
+	static const u64 s_ticks = []() -> u64
+	{
+		constexpr u64 x86_ticks = 5'000;
+		constexpr u64 x86_tsc_hz = 3'000'000'000;
+		constexpr u64 floor_us = 5;
+
+		const char* env = std::getenv("ARMSX3_GETLLAR_RAW_TICKS");
+
+		if (env && *env && *env != '0')
+		{
+			return x86_ticks;
+		}
+
+#ifdef ARCH_ARM64
+		const u64 freq = utils::get_tsc_freq();
+
+		if (freq && freq < x86_tsc_hz)
+		{
+			const u64 ticks = std::max<u64>({x86_ticks * freq / x86_tsc_hz, freq * floor_us / 1'000'000, 1});
+			spu_log.notice("GETLLAR: GETLLARs of one line count as a spin when they come within %u ticks (%u us at %u Hz)", ticks, ticks * 1'000'000 / freq, freq);
+			return ticks;
+		}
+#endif
+
+		return x86_ticks;
+	}();
+
+	return s_ticks;
+}
+
 // Counts the spins the limit above ends, for a line in the log every ten seconds or more.
 static atomic_t<u32> s_getllar_spins_ended{0};
 static atomic_t<u64> s_getllar_spins_report_us{0};
@@ -5891,8 +5938,9 @@ bool spu_thread::process_mfc_cmd()
 
 						if ([&]() -> bool
 						{
-							// Validation that it is indeed GETLLAR spinning (large time window is intentional)
-							if (last_getllar_addr != addr || last_getllar_gpr1 != gpr[1]._u32[3] || perf0.get() - last_gtsc >= 5'000 || (interrupts_enabled && ch_events.load().mask))
+							// Validation that it is indeed GETLLAR spinning (large time window is intentional,
+							// in this machine's timer ticks: see getllar_loop_window_ticks)
+							if (last_getllar_addr != addr || last_getllar_gpr1 != gpr[1]._u32[3] || perf0.get() - last_gtsc >= getllar_loop_window_ticks() || (interrupts_enabled && ch_events.load().mask))
 							{
 								// Seemingly not
 								getllar_busy_waiting_switch = umax;
