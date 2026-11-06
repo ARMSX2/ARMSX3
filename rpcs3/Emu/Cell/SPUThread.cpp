@@ -5598,6 +5598,75 @@ u32 spu_thread::get_mfc_completed() const
 	return ch_tag_mask & ~mfc_fence;
 }
 
+// How long an SPU busy-waits on an unchanged reservation line before it is made to sleep in the
+// OS instead (the "Don't be stubborn" check in the GETLLAR path).
+//
+// Upstream's limit is 400'000 timer ticks, written for x86, whose TSC runs near 3 GHz: about
+// 0.13 ms. perf_meter reads cntvct_el0 on ARM, and every device in our logs runs that counter far
+// slower: 19.2 MHz on every Snapdragon, 13 MHz on every MediaTek. Read raw, 400'000 ticks is 21 ms on
+// a Snapdragon and 31 ms on a Dimensity, so an SPU that chose to spin on an idle line kept a core
+// busy that long before it slept, and with SPURS handing out work every frame (16-33 ms) an idle SPU
+// on a phone could spin from one job to the next without ever sleeping. busy_wait() already
+// converts its cycle counts for this counter (util/asm.hpp); this limit was missed. Converted here
+// to the ~0.13 ms it means on x86.
+//
+// ARMSX3_GETLLAR_RAW_TICKS=1 in driver_env.txt keeps the raw 400'000, for an A/B. Read on first use,
+// which is during a game, after driver_env.txt has been applied.
+static u64 getllar_spin_limit_ticks()
+{
+	static const u64 s_ticks = []() -> u64
+	{
+		constexpr u64 x86_ticks = 400'000;
+		constexpr u64 x86_tsc_hz = 3'000'000'000;
+
+		const char* env = std::getenv("ARMSX3_GETLLAR_RAW_TICKS");
+
+		if (env && *env && *env != '0')
+		{
+			spu_log.notice("GETLLAR: an SPU spins at most the raw %u ticks before sleeping (ARMSX3_GETLLAR_RAW_TICKS)", x86_ticks);
+			return x86_ticks;
+		}
+
+#ifdef ARCH_ARM64
+		const u64 freq = utils::get_tsc_freq();
+
+		if (freq && freq < x86_tsc_hz)
+		{
+			const u64 ticks = std::max<u64>(x86_ticks * freq / x86_tsc_hz, 1);
+			spu_log.notice("GETLLAR: an SPU spins at most %u ticks (%u us at %u Hz) before sleeping", ticks, ticks * 1'000'000 / freq, freq);
+			return ticks;
+		}
+#endif
+
+		return x86_ticks;
+	}();
+
+	return s_ticks;
+}
+
+// Counts the spins the limit above ends, for a line in the log every ten seconds or more.
+static atomic_t<u32> s_getllar_spins_ended{0};
+static atomic_t<u64> s_getllar_spins_report_us{0};
+
+static void note_getllar_spin_ended()
+{
+	s_getllar_spins_ended++;
+
+	const u64 now = get_system_time();
+	const u64 last = s_getllar_spins_report_us.load();
+
+	if (!last)
+	{
+		s_getllar_spins_report_us.compare_and_swap(0, now);
+		return;
+	}
+
+	if (now - last >= 10'000'000 && s_getllar_spins_report_us.compare_and_swap_test(last, now))
+	{
+		spu_log.notice("GETLLAR: %u spins on an unchanged line gave way to sleep in %.1f s", s_getllar_spins_ended.exchange(0), (now - last) / 1'000'000.);
+	}
+}
+
 u32 evaluate_spin_optimization(std::span<u8> stats, u64 evaluate_time, const cfg::uint<0, 100>& wait_percent, bool inclined_for_responsiveness = false)
 {
 	ensure(stats.size() >= 2 && stats.size() <= 16);
@@ -5923,7 +5992,8 @@ bool spu_thread::process_mfc_cmd()
 								}
 							}
 							// Don't be stubborn, force operating sleep if too much time has passed
-							else if (getllar_busy_waiting_switch == 1 && perf0.get() > getllar_evaluate_time && perf0.get() - getllar_evaluate_time >= 400'000)
+							// (in this machine's timer ticks: see getllar_spin_limit_ticks)
+							else if (getllar_busy_waiting_switch == 1 && perf0.get() > getllar_evaluate_time && perf0.get() - getllar_evaluate_time >= getllar_spin_limit_ticks())
 							{
 								// Hidden value to force busy waiting
 								if (!g_cfg.core.spu_getllar_spin_optimization_disabled)
@@ -5931,6 +6001,7 @@ bool spu_thread::process_mfc_cmd()
 									spu_log.trace("SPU wait for 0x%x", addr);
 									getllar_wait_time[(addr % SPU_LS_SIZE) / 128].front() = 1;
 									getllar_busy_waiting_switch = 0;
+									note_getllar_spin_ended();
 								}
 							}
 
