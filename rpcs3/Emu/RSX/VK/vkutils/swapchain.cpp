@@ -410,7 +410,16 @@ namespace vk
 			surface_descriptors.currentTransform == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR ? 1u :
 			surface_descriptors.currentTransform == VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR ? 2u : 0u;
 
-		if (surface_turns && !g_cfg.video.disable_swapchain_prerotation &&
+		// Not while frame generation runs. A turned swapchain made frame generation hand the screen a
+		// 1080x1920 turned image and copy its generated frames into the swapchain unchanged, with its
+		// game-resolution path off: on the Odin 3, held the usual way (a 90 degree turn), Spider-Man:
+		// Web of Shadows with x2 fell from 30 fps to 18-21 and as low as 12, and the performance overlay
+		// flickered. The same session at a 270 degree turn, which is left to the compositor, held 30
+		// with the overlay steady (11-05). With frame generation on, the compositor turns the frame, as
+		// it did before pre-rotation; the swapchain is rebuilt when frame generation is switched.
+		const bool framegen_on = g_cfg.video.frame_generation != frame_generation_mode::off;
+
+		if (surface_turns && !g_cfg.video.disable_swapchain_prerotation && !framegen_on &&
 			(surface_descriptors.supportedTransforms & surface_descriptors.currentTransform))
 		{
 			const u32 image_w = (surface_turns & 1) ? m_height : m_width;
@@ -440,7 +449,8 @@ namespace vk
 		{
 			rsx_log.notice("Swapchain: surface currentTransform=0x%x, overriding with IDENTITY (0x%x). Compositor will rotate%s.",
 				static_cast<u32>(surface_descriptors.currentTransform), static_cast<u32>(pre_transform),
-				g_cfg.video.disable_swapchain_prerotation ? " (pre-rotation is off in Fixes)" : "");
+				g_cfg.video.disable_swapchain_prerotation ? " (pre-rotation is off in Fixes)" :
+				framegen_on && surface_turns ? " (no pre-rotation while frame generation runs)" : "");
 		}
 		else
 		{
