@@ -67,6 +67,14 @@ private:
 	const VKVertexProgram *m_vertex_prog = nullptr;
 	vk::glsl::program *m_program = nullptr;
 	vk::glsl::program *m_prev_program = nullptr;
+	// ARMSX3: vertex fetch specialization (vk_vspec.h), all unused while it is off
+	vk::glsl::program *m_generic_program = nullptr;     // Generic variant of a specialized m_program
+	std::array<u32, 16> m_bound_vtx_spec{};             // Specialization of m_program, all zero = generic
+	bool m_vspec_draw = false;                          // This draw uses a program built for specialization
+	bool m_draw_use_generic = false;                    // This draw's layout differs from m_bound_vtx_spec
+	u32 m_vin_native_mask = 0;                          // Locations this draw fetches through vertex input bindings
+	s32 m_vin_vertex_offset = 0;                        // Index rebase of this draw (vertexOffset)
+	VkDeviceSize m_vin_offsets[16]{};                   // Binding offsets of those locations in the attribute ring
 	vk::pipeline_props m_pipeline_properties;           // Decoded pipeline properties cached
 	u32 m_pipeline_properties_ctrl = 0;                 // Fragment program control bits that m_pipeline_properties was decoded with
 

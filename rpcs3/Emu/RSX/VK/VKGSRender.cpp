@@ -10,6 +10,7 @@
 #include "VKGSRender.h"
 #include "VKFrameGen.h"
 #include "Emu/RSX/rsx_profiler.h"
+#include "vk_vspec.h"
 #include "vkutils/gpu_timer.h"
 #include "VKHelpers.h"
 #include "VKRenderPass.h"
@@ -519,9 +520,18 @@ VKGSRender::VKGSRender(rsx::context* ctx, rsx::display_output* output) noexcept 
 		m_occlusion_query_manager->set_control_flags(VK_QUERY_CONTROL_PRECISE_BIT, 0);
 	}
 
+	// ARMSX3: vertex fetch specialization, decided once per boot from this boot's configuration,
+	// before any vertex program exists (vk_vspec.h). It fetches attributes straight from the
+	// attribute ring through vertex input bindings, so only then does the ring need that usage.
+	const bool vspec_on = vk::vspec::activate(g_cfg.video.vk.vertex_fetch_specialization.get(), *m_device,
+		vk::get_heap_compatible_buffer_types());
+	const VkBufferUsageFlags attrib_ring_usage = vspec_on
+		? (VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)
+		: VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT;
+
 	// VRAM allocation
 	// This first set is bound persistently, so grow notifications are enabled.
-	m_attrib_ring_info.create(VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT, VK_ATTRIB_RING_BUFFER_SIZE_M * 0x100000, vk::heap_pool_default, "attrib buffer", 0x400000, VK_TRUE);
+	m_attrib_ring_info.create(attrib_ring_usage, VK_ATTRIB_RING_BUFFER_SIZE_M * 0x100000, vk::heap_pool_default, "attrib buffer", 0x400000, VK_TRUE);
 	m_fragment_env_ring_info.create(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_UBO_RING_BUFFER_SIZE_M * 0x100000, vk::heap_pool_low_latency, "fragment env buffer", 0x10000, VK_TRUE);
 	m_vertex_env_ring_info.create(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_UBO_RING_BUFFER_SIZE_M * 0x100000, vk::heap_pool_default, "vertex env buffer", 0x10000, VK_TRUE);
 	m_fragment_texture_params_ring_info.create(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_UBO_RING_BUFFER_SIZE_M * 0x100000, vk::heap_pool_low_latency, "fragment texture params buffer", 0x10000, VK_TRUE);
@@ -961,6 +971,7 @@ VKGSRender::~VKGSRender()
 	vk::destroy_pipe_compiler();        // Ensure no pending shaders being compiled
 	spirv::finalize_compiler_context(); // Shut down the glslang compiler
 	m_prog_buffer->clear();             // Delete shader objects
+	vk::vspec::deactivate();            // The next boot decides again
 	m_shader_interpreter.destroy();
 
 	m_persistent_attribute_storage.reset();
@@ -2203,6 +2214,27 @@ bool VKGSRender::load_program()
 			m_pipeline_properties,
 			allow_async, true);
 
+		if (vk::vspec::active())
+		{
+			// ARMSX3: prefer the pipeline specialized on this program's last attribute layout
+			// (vk_vspec.h). Until it is built, and for draws with another layout, the generic one
+			// draws. The cache miss flag, and with it the hint below, is the generic lookup's.
+			m_generic_program = nullptr;
+			m_bound_vtx_spec = {};
+
+			if (m_program && m_vertex_prog && m_fragment_prog &&
+				m_vertex_prog->vspec_inputs && m_vertex_prog->has_observed_vtx_spec)
+			{
+				if (const auto specialized = m_prog_buffer->get_specialized_pipeline(
+					*m_vertex_prog, *m_fragment_prog, m_pipeline_properties, m_vertex_prog->observed_vtx_spec))
+				{
+					m_generic_program = m_program;
+					m_program = specialized;
+					m_bound_vtx_spec = m_vertex_prog->observed_vtx_spec;
+				}
+			}
+		}
+
 		vk::leave_uninterruptible();
 
 		if (m_prog_buffer->check_cache_missed())
@@ -2615,6 +2647,95 @@ void VKGSRender::update_vertex_env(u32 id, const vk::vertex_upload_info& vertex_
 			4,
 			28,
 			blend_config);
+	}
+
+	if (vk::vspec::active())
+	{
+		// ARMSX3: vertex fetch specialization (vk_vspec.h), for programs built for it. Interpreted
+		// draws take the code below unchanged: the shader interpreter fetches every attribute
+		// itself, knows nothing of the index rebase and has no push constants at offset 32.
+		m_vin_native_mask = 0;
+		m_vin_vertex_offset = 0;
+		m_draw_use_generic = false;
+		m_vspec_draw = m_vertex_prog && m_vertex_prog->vspec_inputs && !is_current_program_interpreted();
+
+		if (m_vspec_draw)
+		{
+			// Built on the stack, because it is read back below
+			s32 attrib_local[32] = {};
+			RSX(m_ctx)->draw_processor()->fill_vertex_layout_state(
+				m_vertex_layout,
+				m_ctx->program.vp_metadata,
+				vertex_info.first_vertex,
+				vertex_info.allocated_vertex_count,
+				attrib_local,
+				vertex_info.persistent_window_offset,
+				vertex_info.volatile_window_offset);
+
+			const u16 referenced = m_ctx->program.vp_metadata.referenced_inputs_mask;
+
+			// Native fetch through vertex input bindings, for the attributes that allow it and on
+			// single draws only
+			if (const auto& clause = REGS(m_ctx)->current_draw_clause;
+				clause.is_single_draw() && !clause.is_trivial_instanced_draw &&
+				(vertex_info.index_info || vertex_info.vertex_index_base == 0))
+			{
+				for (u32 i = 0; i < 16; ++i)
+				{
+					if (!(referenced & (1u << i)))
+					{
+						continue;
+					}
+
+					const u32 x = static_cast<u32>(attrib_local[i * 2]);
+					const u32 y = static_cast<u32>(attrib_local[i * 2 + 1]);
+					const bool is_volatile = (y >> 30) & 1;
+					const auto& view = is_volatile ? m_volatile_attribute_storage : m_persistent_attribute_storage;
+					if (!view || !vk::vspec::native_capable(x, y, view->info.offset))
+					{
+						continue;
+					}
+
+					m_vin_offsets[i] = view->info.offset + (y & 0x1FFFFFFF);
+					m_vin_native_mask |= (1u << i);
+				}
+
+				if (m_vin_native_mask && vertex_info.index_info)
+				{
+					// Vertex input indexes from the binding offset, so rebase the indices on the GPU
+					// and tell the shader-side fetches that the base is already applied.
+					m_vin_vertex_offset = -static_cast<s32>(vertex_info.vertex_index_base);
+					dst->vertex_base_index = 0;
+					dst->vertex_index_offset = vertex_info.vertex_index_offset + vertex_info.vertex_index_base;
+				}
+			}
+
+			std::memcpy(dst->attrib_data, attrib_local, sizeof(attrib_local));
+
+			// The layout this program's next pipeline gets specialized on. A specialized shader
+			// trusts its specialization, so a draw whose layout differs uses the generic variant.
+			const std::array<u32, 16> observed = vk::vspec::from_layout(attrib_local, referenced, m_vin_native_mask);
+			m_vertex_prog->observed_vtx_spec = observed;
+			m_vertex_prog->has_observed_vtx_spec = vk::vspec::any(observed);
+			m_draw_use_generic = vk::vspec::any(m_bound_vtx_spec) && m_bound_vtx_spec != observed;
+
+			// The per-draw offsets the vertex shader reads from push constants (VKVertexProgram.cpp)
+			const u32 push_block[] =
+			{
+				vs_constant_id_offset,
+				vertex_context_offset,
+				fs_constant_id_offset,
+				fs_context_offset,
+				fs_texture_base_index,
+				fs_stipple_pattern_offset
+			};
+			static_assert(sizeof(push_block) == vk::vspec::push_constant_size);
+			vkCmdPushConstants(*m_current_command_buffer, m_program->layout(), VK_SHADER_STAGE_VERTEX_BIT,
+				vk::vspec::push_constant_offset, sizeof(push_block), push_block);
+
+			m_vertex_layout_ring_info.unmap();
+			return;
+		}
 	}
 
 	// Now actually fill in the data

@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "VKPipelineCompiler.h"
 #include "VKRenderPass.h"
+#include "vk_vspec.h"
 #include "vkutils/device.h"
 #include "Utilities/Thread.h"
 #include "Emu/system_config.h"
@@ -126,7 +127,7 @@ namespace vk
 					continue;
 				}
 
-				auto compiled = int_compile_graphics_pipe(job.graphics_data, job.graphics_modules, job.inputs, {}, job.flags);
+				auto compiled = int_compile_graphics_pipe(job.graphics_data, job.graphics_modules, job.inputs, {}, job.flags, &job.vtx_spec);
 				job.callback_func(compiled);
 			}
 
@@ -160,7 +161,8 @@ namespace vk
 		VkShaderModule modules[2],
 		const std::vector<glsl::program_input>& vs_inputs,
 		const std::vector<glsl::program_input>& fs_inputs,
-		op_flags flags)
+		op_flags flags,
+		const std::array<u32, 16>* vtx_spec)
 	{
 		VkPipelineShaderStageCreateInfo shader_stages[2] = {};
 		shader_stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -172,6 +174,26 @@ namespace vk
 		shader_stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
 		shader_stages[1].module = modules[1];
 		shader_stages[1].pName = "main";
+
+		// ARMSX3: vertex fetch specialization constants, one per attribute location (vk_vspec.h).
+		// Without a specialization the stage info stays as it was.
+		VkSpecializationMapEntry vspec_entries[16];
+		VkSpecializationInfo vspec_info{};
+		if (vtx_spec && vk::vspec::any(*vtx_spec))
+		{
+			for (u32 i = 0; i < 16; ++i)
+			{
+				vspec_entries[i].constantID = vk::vspec::constant_id_base + i;
+				vspec_entries[i].offset = i * 4;
+				vspec_entries[i].size = 4;
+			}
+
+			vspec_info.mapEntryCount = 16;
+			vspec_info.pMapEntries = vspec_entries;
+			vspec_info.dataSize = sizeof(u32) * 16;
+			vspec_info.pData = vtx_spec->data();
+			shader_stages[0].pSpecializationInfo = &vspec_info;
+		}
 
 		std::vector<VkDynamicState> dynamic_state_descriptors;
 		dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_VIEWPORT);
@@ -219,6 +241,27 @@ namespace vk
 		dynamic_state_info.dynamicStateCount = ::size32(dynamic_state_descriptors);
 
 		VkPipelineVertexInputStateCreateInfo vi = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+
+		// ARMSX3: a vertex shader built for vertex fetch specialization declares one vertex input per
+		// RSX attribute location. Each gets its own binding when the specialization fetches it
+		// natively; every other location reads binding 16, a zero-stride dummy (vk_vspec.h).
+		VkVertexInputBindingDescription vin_bindings[vk::vspec::vertex_binding_count];
+		VkVertexInputAttributeDescription vin_attribs[16];
+		if (flags & VERTEX_FETCH_SPEC_INPUTS)
+		{
+			for (u32 i = 0; i < 16; ++i)
+			{
+				const u32 s = vtx_spec ? (*vtx_spec)[i] : 0u;
+				const bool native = (s & vk::vspec::native_bit) != 0;
+				vin_bindings[i] = { i, native ? ((s >> 12) & 0xFFu) : 0u, VK_VERTEX_INPUT_RATE_VERTEX };
+				vin_attribs[i] = { i, native ? i : 16u, native ? vk::vspec::native_format(s & 7u, (s >> 3) & 7u) : VK_FORMAT_R32G32B32A32_UINT, 0 };
+			}
+			vin_bindings[16] = { 16, 0, VK_VERTEX_INPUT_RATE_VERTEX };
+			vi.vertexBindingDescriptionCount = vk::vspec::vertex_binding_count;
+			vi.pVertexBindingDescriptions = vin_bindings;
+			vi.vertexAttributeDescriptionCount = 16;
+			vi.pVertexAttributeDescriptions = vin_attribs;
+		}
 
 		VkPipelineViewportStateCreateInfo vp = {};
 		vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
@@ -337,6 +380,25 @@ namespace vk
 		}
 
 		m_work_queue.push(create_info, modules, vs_inputs, fs_inputs, flags, callback);
+		return {};
+	}
+
+	std::unique_ptr<glsl::program> pipe_compiler::compile(
+		const vk::pipeline_props &create_info,
+		const std::array<u32, 16>& vtx_spec,
+		VkShaderModule vs,
+		VkShaderModule fs,
+		op_flags flags, callback_t callback,
+		const std::vector<glsl::program_input>& vs_inputs,
+		const std::vector<glsl::program_input>& fs_inputs)
+	{
+		VkShaderModule modules[] = { vs, fs };
+		if (flags & COMPILE_INLINE)
+		{
+			return int_compile_graphics_pipe(create_info, modules, vs_inputs, fs_inputs, flags, &vtx_spec);
+		}
+
+		m_work_queue.push(create_info, modules, vs_inputs, fs_inputs, flags, callback, vtx_spec);
 		return {};
 	}
 

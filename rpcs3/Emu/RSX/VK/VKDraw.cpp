@@ -5,6 +5,7 @@
 
 #include "VKAsyncScheduler.h"
 #include "VKGSRender.h"
+#include "vk_vspec.h"
 #include "vkutils/gpu_timer.h"
 #include "Emu/RSX/rsx_profiler.h"
 #include "vkutils/buffer_object.h"
@@ -1214,6 +1215,14 @@ void VKGSRender::emit_geometry(u32 sub_index)
 	// FIXME: We only need to rebind the pipeline when reload state is set. Flags?
 	m_program->bind(*m_current_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS);
 
+	if (m_draw_use_generic && m_generic_program)
+	{
+		// ARMSX3: this draw's attribute layout differs from the specialization of m_program
+		// (vk_vspec.h). Same shader module with spec constants 0 and an identically defined
+		// pipeline layout, so the descriptor sets and push constants bound for m_program stay valid.
+		m_current_command_buffer->bind_pipeline(m_generic_program->value(), VK_PIPELINE_BIND_POINT_GRAPHICS);
+	}
+
 	if (m_device->get_extended_dynamic_state_support())
 	{
 		set_extended_dynamic_state();
@@ -1239,6 +1248,21 @@ void VKGSRender::emit_geometry(u32 sub_index)
 
 	// Bind the new set of descriptors for use with this draw call
 	m_ctx->stats.setup_time += m_profiler.duration();
+
+	if (m_vspec_draw)
+	{
+		// ARMSX3: the vertex inputs of a program built for vertex fetch specialization (vk_vspec.h).
+		// Bindings 0..15 feed the natively fetched locations, binding 16 is the zero-stride dummy.
+		constexpr u32 binding_count = vk::vspec::vertex_binding_count;
+		VkBuffer vin_buffers[binding_count];
+		VkDeviceSize vin_offsets[binding_count];
+		for (u32 i = 0; i < binding_count; ++i)
+		{
+			vin_buffers[i] = m_attrib_ring_info.heap->value;
+			vin_offsets[i] = (i < 16 && (m_vin_native_mask & (1u << i))) ? m_vin_offsets[i] : 0;
+		}
+		vkCmdBindVertexBuffers(*m_current_command_buffer, 0, binding_count, vin_buffers, vin_offsets);
+	}
 
 	// The vertex shader uses the instance base as the draw parameters index
 	const u32 first_instance = m_device->get_shader_draw_parameters_support() ? m_draw_parameters_index : 0;
@@ -1289,7 +1313,7 @@ void VKGSRender::emit_geometry(u32 sub_index)
 		else if (REGS(m_ctx)->current_draw_clause.is_single_draw())
 		{
 			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::note_subdraws(1);
-			vkCmdDrawIndexed(*m_current_command_buffer, upload_info.vertex_draw_count, 1, 0, 0, first_instance);
+			vkCmdDrawIndexed(*m_current_command_buffer, upload_info.vertex_draw_count, 1, 0, m_vin_vertex_offset, first_instance);
 		}
 		else if (m_device->get_multidraw_support())
 		{
