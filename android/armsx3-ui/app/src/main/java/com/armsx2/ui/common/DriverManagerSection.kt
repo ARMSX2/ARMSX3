@@ -253,7 +253,7 @@ fun DriverManagerSection() {
                             drivers.forEach { rd ->
                                 RemoteDriverRow(
                                     controllerId = "driver.remote.${rd.id}",
-                                    title = rd.releaseName.ifBlank { rd.assetName },
+                                    title = rd.title.ifBlank { rd.assetName },
                                     subtitle = listOf(rd.source, rd.tagName).filter(String::isNotBlank).joinToString(" · "),
                                     busy = busyId == rd.id,
                                     onDownload = {
@@ -513,7 +513,7 @@ private fun XmbDriverNodes(
                         drivers.map { rd ->
                             com.armsx2.ui.xmb.XmbNode.Action(
                                 "xmb.driver.remote.${rd.id}",
-                                rd.releaseName.ifBlank { rd.assetName },
+                                rd.title.ifBlank { rd.assetName },
                                 c.icon,
                                 listOf(rd.tagName, rd.publishedAt.take(10)).filter(String::isNotBlank).joinToString(" \u00B7 "),
                             ) { download(rd) }

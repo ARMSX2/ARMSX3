@@ -52,6 +52,9 @@ object CustomDriver {
         val label: String,
         val releasesUrl: String,
         val idPrefix: String,
+        /** Whether to list this source for the device's GL_RENDERER (null when unknown).
+         *  Sources that only build for one GPU family say so here; the rest list everywhere. */
+        val supports: (renderer: String?) -> Boolean = { true },
     )
     private val DRIVER_SOURCES = listOf(
         DriverSource(
@@ -94,6 +97,15 @@ object CustomDriver {
             "https://api.github.com/repos/WearyConcern1165/ExynosTools/releases",
             "exynostools",
         ),
+        // avavo/MdiEx — the packs ExynosTools republishes, released here first and newer: one zip
+        // per Exynos chip (2200, 2400, 2600, ...) plus a chip-neutral "Nativo" base. Same meta.json
+        // zip format. Xclipse only, so it is listed only where GL_RENDERER names an Xclipse part.
+        DriverSource(
+            "avavo · MdiEx",
+            "https://api.github.com/repos/avavo/MdiEx/releases",
+            "mdiex",
+            supports = { r -> r == null || r.contains("Xclipse", ignoreCase = true) },
+        ),
     )
 
     /** Sane default for the driver's library soname when meta.json
@@ -129,6 +141,9 @@ object CustomDriver {
         val assetUrl: String,
         val sizeBytes: Long,
         val source: String = "",
+        /** What a list shows for it: the release's name, or the zip's own name when the release
+         *  ships one zip per device (MdiEx: 1480, 2200, 2400, ...), so each row says which one it is. */
+        val title: String = releaseName,
     )
 
     // ---- Installed drivers --------------------------------------------------
@@ -179,13 +194,13 @@ object CustomDriver {
 
     // ---- GitHub release list ------------------------------------------------
 
-    /** Fetch the K11MCH1/AdrenoToolsDrivers releases and flatten into
-     *  one RemoteDriver per .zip asset. Suspending — caller must wrap
-     *  in `withContext(Dispatchers.IO)` (the JNI call blocks the
+    /** Fetch every source that supports [renderer] (the system GL_RENDERER, probed once and
+     *  cached by GpuInfo) and flatten into one RemoteDriver per .zip asset. Suspending — caller
+     *  must wrap in `withContext(Dispatchers.IO)` (the JNI call blocks the
      *  calling thread). Returns empty list on any network/parse error;
      *  callers can detect "I had drivers shown a moment ago, now
      *  nothing" by tracking the previous size. */
-    fun fetchRemote(): List<RemoteDriver> {
+    fun fetchRemote(renderer: String? = GpuInfo.rendererName()): List<RemoteDriver> {
         val userAgent = "ARMSX2/" + runCatching {
             NativeApp.getBuildVersion()
         }.getOrNull().orEmpty().ifEmpty { "dev" }
@@ -194,6 +209,7 @@ object CustomDriver {
         // Sequential per source; one dead/rate-limited source returns empty and
         // never blanks the others. Dedup by id guards the LazyVerticalGrid key set.
         for (src in DRIVER_SOURCES) {
+            if (!src.supports(renderer)) continue
             for (rd in fetchSource(src, userAgent)) {
                 if (seen.add(rd.id)) out += rd
             }
@@ -223,6 +239,9 @@ object CustomDriver {
             val releaseName = release.optString("name").ifEmpty { tag }
             val publishedAt = release.optString("published_at")
             val assets = release.optJSONArray("assets") ?: continue
+            val zips = (0 until assets.length()).count {
+                assets.optJSONObject(it)?.optString("name")?.endsWith(".zip", ignoreCase = true) == true
+            }
             for (j in 0 until assets.length()) {
                 val asset = assets.optJSONObject(j) ?: continue
                 val assetName = asset.optString("name")
@@ -243,11 +262,16 @@ object CustomDriver {
                     assetUrl = url,
                     sizeBytes = size,
                     source = src.label,
+                    title = if (zips > 1) zipTitle(assetName) else releaseName,
                 )
             }
         }
         return out
     }
+
+    /** "MdiEx_1480_v3.6.zip" -> "MdiEx 1480 v3.6". */
+    private fun zipTitle(assetName: String): String =
+        assetName.substring(0, assetName.length - ".zip".length).replace('_', ' ').trim().ifEmpty { assetName }
 
     /** Stable id from `<tag>-<assetBase>`. Strips ".zip" + non-filename
      *  chars so the driver dir name is dlopen-safe (paths get fed straight
