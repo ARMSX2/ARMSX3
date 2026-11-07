@@ -303,6 +303,23 @@ object ConfigDatabase {
         "BLJM67005" to "Core:\n  SPU Block Size: Mega\n  Stub PPU Traps: 20\n",
         "BCAS25005" to "Core:\n  SPU Block Size: Mega\n  Stub PPU Traps: 20\n",
 
+        // God of War III: SPU XFloat Accuracy Relaxed. At the default (Approximate) its cutscenes
+        // render with graphical errors, and Relaxed clears them (user, Odin 3, 11-06). Relaxed keeps
+        // the approximate path only for FCGT, FNMS, FREST and FRSQEST (system_config_types.h).
+        //
+        // Here rather than in GameDefaults for the reason given at Final Fantasy XIII, and one more:
+        // XFloat is also on the Fixes and Performance tabs, and GameDefaults writes its stock value
+        // after that push on every boot, which would reset a player's own XFloat choice in every
+        // other game. Every serial RPCS3 lists for the game: the discs (US, EU twice, Asia, Korea,
+        // Japan) and the E3 demo.
+        "BCUS98111" to "Core:\n  SPU XFloat Accuracy: Relaxed\n",
+        "BCES00510" to "Core:\n  SPU XFloat Accuracy: Relaxed\n",
+        "BCES00799" to "Core:\n  SPU XFloat Accuracy: Relaxed\n",
+        "BCAS25003" to "Core:\n  SPU XFloat Accuracy: Relaxed\n",
+        "BCKS15003" to "Core:\n  SPU XFloat Accuracy: Relaxed\n",
+        "BCJS37001" to "Core:\n  SPU XFloat Accuracy: Relaxed\n",
+        "NPUA70080" to "Core:\n  SPU XFloat Accuracy: Relaxed\n",
+
         // Ratchet & Clank Future: Tools of Destruction and Quest for Booty, and Ratchet & Clank:
         // Into the Nexus: Thread Scheduler Mode RPCS3 Scheduler and SPU GETLLAR Busy Waiting
         // Percentage 0.
