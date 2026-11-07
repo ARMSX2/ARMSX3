@@ -31,6 +31,7 @@ object TouchControls {
     private const val KEY_ACTIVE = "touch.active"
     private const val KEY_OPACITY = "touch.opacity"
     private const val KEY_PRESSURE_PERCENT = "touch.pressurePercent"
+    private const val KEY_STICK_TRAVEL = "touch.stickTravelPercent"
     // #357: pause button is now a visible top-right single-tap button; this toggles its glyph
     // (off = invisible but still tappable). The migration key one-shot relocates the old
     // invisible center pause hotspot to the new top-right spot for existing layouts.
@@ -415,6 +416,25 @@ object TouchControls {
         // settings slider, not from the layout editor, so save() may never be called.
         runCatching { MainActivityRuntime.prefs.edit().putInt(KEY_PRESSURE_PERCENT, c).apply() }
     }
+
+    /** How far a thumb moves from a touch stick's centre for full tilt, as a percentage of the
+     *  default reach (the thumb cap's travel, two thirds of the stick's radius). One value for
+     *  every touch stick: the on-screen ones and the invisible half-screen ones. A longer reach
+     *  leaves more of the drag for walking and slow aiming; the thumb art stays inside the ring
+     *  and reaches its edge exactly at full tilt either way. It sets the raw tilt only: the Stick
+     *  Feel settings (deadzone, curve, sensitivity) shape that afterwards, as they do a controller's
+     *  stick (ControllerMappings.shapeStickVector). Persisted. Same setting and key as ARMSX2's. */
+    val stickTravelPercent = mutableIntStateOf(100)
+
+    fun setStickTravelPercent(v: Int) {
+        val c = v.coerceIn(STICK_TRAVEL_MIN, STICK_TRAVEL_MAX)
+        stickTravelPercent.intValue = c
+        // Persisted now, like the pressure amount: a settings slider drives it, not the layout editor.
+        runCatching { MainActivityRuntime.prefs.edit().putInt(KEY_STICK_TRAVEL, c).apply() }
+    }
+
+    const val STICK_TRAVEL_MIN = 50
+    const val STICK_TRAVEL_MAX = 250
 
     // PS2 DualShock2 pressure-sensitive inputs (keycodes match native-lib.cpp's
     // setPadButton map): d-pad, face buttons, L1/L2/R1/R2. Start/Select/L3/R3 are
@@ -867,6 +887,8 @@ object TouchControls {
         activeLayout.value = match.layoutFor(portrait.value).copy()
         opacity.floatValue = MainActivityRuntime.prefs.getFloat(KEY_OPACITY, 0.55f).coerceIn(0.0f, 1.0f)
         pressurePercent.intValue = MainActivityRuntime.prefs.getInt(KEY_PRESSURE_PERCENT, 50).coerceIn(5, 100)
+        stickTravelPercent.intValue = MainActivityRuntime.prefs.getInt(KEY_STICK_TRAVEL, 100)
+            .coerceIn(STICK_TRAVEL_MIN, STICK_TRAVEL_MAX)
         faceMultiTouch.value = MainActivityRuntime.prefs.getBoolean(KEY_FACE_MULTI, true)
         gestureEnabled.value = MainActivityRuntime.prefs.getBoolean(KEY_GESTURE_ON, false)
         gestureSwipeUp.intValue = MainActivityRuntime.prefs.getInt(KEY_GESTURE_UP, 0)

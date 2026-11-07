@@ -1545,5 +1545,7 @@
  "renderer.cardboard.spacing.label": "Separación de ojos VR",
  "renderer.cardboard.spacing.description": "Los valores más altos separan las dos imágenes y los más bajos las acercan, para alinearlas con las lentes del visor.",
  "renderer.cardboard.vertical.label": "Altura VR",
- "renderer.cardboard.vertical.description": "Los valores más altos suben ambas imágenes y los más bajos las bajan, para alinearlas con las lentes del visor."
+ "renderer.cardboard.vertical.description": "Los valores más altos suben ambas imágenes y los más bajos las bajan, para alinearlas con las lentes del visor.",
+ "pad.stickTravel.label": "Recorrido del stick",
+ "pad.stickTravel.description": "Cuánto se mueve tu pulgar desde el centro de un stick táctil para la inclinación máxima, en todos los sticks táctiles. Súbelo para dejar más margen al caminar y apuntar despacio; bájalo para llegar antes a la velocidad máxima."
 }

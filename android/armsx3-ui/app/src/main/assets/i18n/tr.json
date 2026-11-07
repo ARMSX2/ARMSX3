@@ -1545,5 +1545,7 @@
  "renderer.cardboard.spacing.label": "VR Göz Aralığı",
  "renderer.cardboard.spacing.description": "Yüksek değerler iki görüntüyü birbirinden uzaklaştırır, düşük değerler yakınlaştırır; böylece gözlüğün lensleriyle hizalanırlar.",
  "renderer.cardboard.vertical.label": "VR Yüksekliği",
- "renderer.cardboard.vertical.description": "Yüksek değerler iki görüntüyü yukarı, düşük değerler aşağı taşır; böylece gözlüğün lensleriyle hizalanırlar."
+ "renderer.cardboard.vertical.description": "Yüksek değerler iki görüntüyü yukarı, düşük değerler aşağı taşır; böylece gözlüğün lensleriyle hizalanırlar.",
+ "pad.stickTravel.label": "Çubuk hareket mesafesi",
+ "pad.stickTravel.description": "Tam eğim için başparmağınızın bir dokunmatik çubuğun merkezinden ne kadar uzağa gideceği; tüm dokunmatik çubuklar için geçerlidir. Yürüme ve yavaş nişan alma için daha fazla alan bırakmak istiyorsanız artırın; tam hıza daha çabuk ulaşmak için azaltın."
 }

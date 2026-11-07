@@ -850,6 +850,21 @@ fun PadTab(state: MutableState<Settings>) {
                 onChange = { TouchControls.setMultiTouchRadius(it / 100f) },
             )
             SettingsDivider()
+            // One travel for every touch stick: how far the thumb moves for full tilt. Longer
+            // leaves more of the drag for walking and slow aiming (ported from ARMSX2). The Stick
+            // Feel settings above shape the tilt it gives, as they do a controller's.
+            IntSliderRow(
+                label = str("pad.stickTravel.label"),
+                value = TouchControls.stickTravelPercent.intValue,
+                min = TouchControls.STICK_TRAVEL_MIN,
+                max = TouchControls.STICK_TRAVEL_MAX,
+                description = str("pad.stickTravel.description"),
+                valueFormatter = { "${it}%" },
+                onReset = if (TouchControls.stickTravelPercent.intValue != 100) ({ TouchControls.setStickTravelPercent(100) }) else null,
+                notDefault = TouchControls.stickTravelPercent.intValue != 100,
+                onChange = { TouchControls.setStickTravelPercent(it) },
+            )
+            SettingsDivider()
             // L1/L2/R1/R2 touch areas cut to their artwork: without it the shoulder squares and
             // their multi-touch circles reach far past the wide sprites.
             ToggleRow(

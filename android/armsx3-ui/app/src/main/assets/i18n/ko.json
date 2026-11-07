@@ -1545,5 +1545,7 @@
  "renderer.cardboard.spacing.label": "VR 눈 간격",
  "renderer.cardboard.spacing.description": "값이 높을수록 두 화면이 멀어지고, 낮을수록 가까워집니다. 뷰어의 렌즈에 맞춰 조정하세요.",
  "renderer.cardboard.vertical.label": "VR 높이",
- "renderer.cardboard.vertical.description": "값이 높을수록 두 화면이 위로, 낮을수록 아래로 이동합니다. 뷰어의 렌즈에 맞춰 조정하세요."
+ "renderer.cardboard.vertical.description": "값이 높을수록 두 화면이 위로, 낮을수록 아래로 이동합니다. 뷰어의 렌즈에 맞춰 조정하세요.",
+ "pad.stickTravel.label": "스틱 이동 거리",
+ "pad.stickTravel.description": "모든 터치 스틱에서 완전히 기울이기 위해 엄지손가락이 터치 스틱 중심에서 움직여야 하는 거리입니다. 높이면 걷기와 느린 조준을 위한 여유가 늘고, 낮추면 최고 속도에 더 빨리 도달합니다."
 }

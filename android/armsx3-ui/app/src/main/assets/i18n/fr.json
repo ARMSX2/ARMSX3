@@ -1545,5 +1545,7 @@
  "renderer.cardboard.spacing.label": "Écart des yeux VR",
  "renderer.cardboard.spacing.description": "Les valeurs plus élevées écartent les deux images, les plus basses les rapprochent, pour les aligner sur les lentilles du casque.",
  "renderer.cardboard.vertical.label": "Hauteur VR",
- "renderer.cardboard.vertical.description": "Les valeurs plus élevées montent les deux images, les plus basses les descendent, pour les aligner sur les lentilles du casque."
+ "renderer.cardboard.vertical.description": "Les valeurs plus élevées montent les deux images, les plus basses les descendent, pour les aligner sur les lentilles du casque.",
+ "pad.stickTravel.label": "Course du stick",
+ "pad.stickTravel.description": "Distance dont votre pouce se déplace depuis le centre d'un stick tactile pour atteindre l'inclinaison maximale, pour tous les sticks tactiles. Augmentez-la pour avoir plus de marge en marchant et en visant lentement ; diminuez-la pour atteindre plus vite la pleine vitesse."
 }

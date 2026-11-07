@@ -1545,5 +1545,7 @@
  "renderer.cardboard.spacing.label": "VR-Augenabstand",
  "renderer.cardboard.spacing.description": "Höhere Werte rücken die beiden Bilder auseinander, niedrigere näher zusammen, um sie an den Linsen der Brille auszurichten.",
  "renderer.cardboard.vertical.label": "VR-Höhe",
- "renderer.cardboard.vertical.description": "Höhere Werte verschieben beide Bilder nach oben, niedrigere nach unten, um sie an den Linsen der Brille auszurichten."
+ "renderer.cardboard.vertical.description": "Höhere Werte verschieben beide Bilder nach oben, niedrigere nach unten, um sie an den Linsen der Brille auszurichten.",
+ "pad.stickTravel.label": "Stick-Weg",
+ "pad.stickTravel.description": "Wie weit sich dein Daumen von der Mitte eines Touch-Sticks bewegt, bis der Stick voll ausgelenkt ist, für alle Touch-Sticks. Höher lässt mehr Spielraum zum Gehen und langsamen Zielen; niedriger erreicht die volle Geschwindigkeit früher."
 }

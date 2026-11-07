@@ -1545,5 +1545,7 @@
  "renderer.cardboard.spacing.label": "VR 双眼间距",
  "renderer.cardboard.spacing.description": "数值越高两个画面越分开，越低越靠近，用于对准眼镜的镜片。",
  "renderer.cardboard.vertical.label": "VR 高度",
- "renderer.cardboard.vertical.description": "数值越高两个画面越靠上，越低越靠下，用于对准眼镜的镜片。"
+ "renderer.cardboard.vertical.description": "数值越高两个画面越靠上，越低越靠下，用于对准眼镜的镜片。",
+ "pad.stickTravel.label": "摇杆行程",
+ "pad.stickTravel.description": "拇指从触屏摇杆中心移动多远即视为完全推到底，适用于所有触屏摇杆。调高可为行走和缓慢瞄准留出更多余地；调低可更快达到全速。"
 }

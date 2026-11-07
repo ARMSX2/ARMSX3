@@ -1545,5 +1545,7 @@
  "renderer.cardboard.spacing.label": "Khoảng cách mắt VR",
  "renderer.cardboard.spacing.description": "Giá trị cao hơn đẩy hai hình ra xa nhau, giá trị thấp hơn kéo chúng lại gần, để khớp với thấu kính của kính.",
  "renderer.cardboard.vertical.label": "Độ cao VR",
- "renderer.cardboard.vertical.description": "Giá trị cao hơn đưa cả hai hình lên, giá trị thấp hơn đưa xuống, để khớp với thấu kính của kính."
+ "renderer.cardboard.vertical.description": "Giá trị cao hơn đưa cả hai hình lên, giá trị thấp hơn đưa xuống, để khớp với thấu kính của kính.",
+ "pad.stickTravel.label": "Hành trình cần analog",
+ "pad.stickTravel.description": "Ngón cái của bạn di chuyển xa bao nhiêu từ tâm của cần analog cảm ứng để nghiêng hết cỡ, áp dụng cho mọi cần analog cảm ứng. Tăng lên để có thêm chỗ đi bộ và ngắm chậm; giảm xuống để đạt tốc độ tối đa sớm hơn."
 }

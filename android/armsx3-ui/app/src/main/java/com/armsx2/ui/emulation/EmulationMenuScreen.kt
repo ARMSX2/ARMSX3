@@ -1479,6 +1479,19 @@ private fun ControlsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
     MenuSwitchRow(str("pad.onScreenControls.label"), state.touchControlsVisible) {
         viewModel.toggleTouchControls()
     }
+    // Stick travel, the Controls tab's slider. In-game because the right value is found by walking
+    // and aiming with it; it applies to the next thumb movement, and it is Compose state, so the row
+    // follows a change made anywhere else.
+    com.armsx2.ui.settings.IntSliderRow(
+        label = str("pad.stickTravel.label"),
+        value = TouchControls.stickTravelPercent.intValue,
+        min = TouchControls.STICK_TRAVEL_MIN,
+        max = TouchControls.STICK_TRAVEL_MAX,
+        description = str("pad.stickTravel.description"),
+        valueFormatter = { "${it}%" },
+        onReset = if (TouchControls.stickTravelPercent.intValue != 100) ({ TouchControls.setStickTravelPercent(100) }) else null,
+        onChange = { TouchControls.setStickTravelPercent(it) },
+    )
     MenuSwitchRow(
         title = str("pad.rumble.label"),
         checked = state.rumbleEnabled,

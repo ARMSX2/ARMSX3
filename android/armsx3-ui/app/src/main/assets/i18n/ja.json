@@ -1545,5 +1545,7 @@
  "renderer.cardboard.spacing.label": "VR 目の間隔",
  "renderer.cardboard.spacing.description": "値を上げると2つの映像が離れ、下げると近づきます。ビューアーのレンズに合わせて調整します。",
  "renderer.cardboard.vertical.label": "VR 高さ",
- "renderer.cardboard.vertical.description": "値を上げると両方の映像が上に、下げると下に移動します。ビューアーのレンズに合わせて調整します。"
+ "renderer.cardboard.vertical.description": "値を上げると両方の映像が上に、下げると下に移動します。ビューアーのレンズに合わせて調整します。",
+ "pad.stickTravel.label": "スティックの移動量",
+ "pad.stickTravel.description": "フルチルトにするために、タッチスティックの中心から親指をどれだけ動かすかを、すべてのタッチスティックに対して設定します。大きくすると歩行やゆっくりした照準の余裕が増え、小さくすると最高速度にすぐ達します。"
 }

@@ -1545,5 +1545,7 @@
  "renderer.cardboard.spacing.label": "المسافة بين العينين في VR",
  "renderer.cardboard.spacing.description": "القيم الأعلى تباعد بين الصورتين، والقيم الأقل تقربهما، لمحاذاتهما مع عدستي النظارة.",
  "renderer.cardboard.vertical.label": "ارتفاع VR",
- "renderer.cardboard.vertical.description": "القيم الأعلى ترفع الصورتين، والقيم الأقل تخفضهما، لمحاذاتهما مع عدستي النظارة."
+ "renderer.cardboard.vertical.description": "القيم الأعلى ترفع الصورتين، والقيم الأقل تخفضهما، لمحاذاتهما مع عدستي النظارة.",
+ "pad.stickTravel.label": "مدى حركة العصا",
+ "pad.stickTravel.description": "إلى أي مدى يتحرك إبهامك من مركز عصا اللمس لتصل إلى الميلان الكامل، لكل عصي اللمس. ارفعه لترك مساحة أكبر للمشي والتصويب البطيء؛ اخفضه للوصول إلى السرعة الكاملة أسرع."
 }

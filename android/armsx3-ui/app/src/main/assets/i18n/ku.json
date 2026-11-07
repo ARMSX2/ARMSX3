@@ -1545,5 +1545,7 @@
  "renderer.cardboard.spacing.label": "Navbera çavan a VR",
  "renderer.cardboard.spacing.description": "Nirxên bilindtir du wêneyan ji hev dûr dixin, nirxên nizmtir wan nêzîkî hev dikin, da ku bi lensên temaşeker re li hev bên.",
  "renderer.cardboard.vertical.label": "Bilindahiya VR",
- "renderer.cardboard.vertical.description": "Nirxên bilindtir her du wêneyan bilind dikin, nirxên nizmtir wan nizm dikin, da ku bi lensên temaşeker re li hev bên."
+ "renderer.cardboard.vertical.description": "Nirxên bilindtir her du wêneyan bilind dikin, nirxên nizmtir wan nizm dikin, da ku bi lensên temaşeker re li hev bên.",
+ "pad.stickTravel.label": "Rêwîtiya stikê",
+ "pad.stickTravel.description": "Tilya te çiqas ji navenda stikeke tûchê dûr dikeve da ku bi tevahî bikeve, ji bo hemû stikên tûchê. Bilind bike da ku ji bo meşîn û armanckirina hêdî cih zêdetir bimîne; nizm bike da ku zûtir bigihîje lezê ya tevahî."
 }

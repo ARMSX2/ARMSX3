@@ -1545,5 +1545,7 @@
  "renderer.cardboard.spacing.label": "Distanza occhi VR",
  "renderer.cardboard.spacing.description": "Valori più alti allontanano le due immagini, valori più bassi le avvicinano, per allinearle alle lenti del visore.",
  "renderer.cardboard.vertical.label": "Altezza VR",
- "renderer.cardboard.vertical.description": "Valori più alti spostano entrambe le immagini in alto, valori più bassi in basso, per allinearle alle lenti del visore."
+ "renderer.cardboard.vertical.description": "Valori più alti spostano entrambe le immagini in alto, valori più bassi in basso, per allinearle alle lenti del visore.",
+ "pad.stickTravel.label": "Corsa dello stick",
+ "pad.stickTravel.description": "Quanto si sposta il pollice dal centro di uno stick touch per l'inclinazione massima, per tutti gli stick touch. Aumentalo per avere più margine nel camminare e nel mirare lentamente; diminuiscilo per raggiungere prima la massima velocità."
 }

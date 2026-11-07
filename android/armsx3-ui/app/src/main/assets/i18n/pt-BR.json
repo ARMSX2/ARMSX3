@@ -1546,5 +1546,7 @@
  "renderer.cardboard.spacing.label": "Distância entre olhos VR",
  "renderer.cardboard.spacing.description": "Valores maiores afastam as duas imagens, valores menores as aproximam, para alinhá-las às lentes do visor.",
  "renderer.cardboard.vertical.label": "Altura VR",
- "renderer.cardboard.vertical.description": "Valores maiores sobem as duas imagens, valores menores as descem, para alinhá-las às lentes do visor."
+ "renderer.cardboard.vertical.description": "Valores maiores sobem as duas imagens, valores menores as descem, para alinhá-las às lentes do visor.",
+ "pad.stickTravel.label": "Curso do analógico",
+ "pad.stickTravel.description": "Quanto o seu polegar se move a partir do centro de um analógico de toque para a inclinação máxima, em todos os analógicos de toque. Aumente para deixar mais espaço para andar e mirar devagar; diminua para chegar mais cedo à velocidade máxima."
 }

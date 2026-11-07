@@ -1545,5 +1545,7 @@
  "renderer.cardboard.spacing.label": "VR 雙眼間距",
  "renderer.cardboard.spacing.description": "數值越高兩個畫面越分開，越低越靠近，用於對準眼鏡的鏡片。",
  "renderer.cardboard.vertical.label": "VR 高度",
- "renderer.cardboard.vertical.description": "數值越高兩個畫面越靠上，越低越靠下，用於對準眼鏡的鏡片。"
+ "renderer.cardboard.vertical.description": "數值越高兩個畫面越靠上，越低越靠下，用於對準眼鏡的鏡片。",
+ "pad.stickTravel.label": "搖桿行程",
+ "pad.stickTravel.description": "拇指從觸控搖桿中心移動多遠即視為完全推到底，適用於所有觸控搖桿。調高可為行走和緩慢瞄準留出更多餘裕；調低可更快達到全速。"
 }

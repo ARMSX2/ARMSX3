@@ -1545,5 +1545,7 @@
  "renderer.cardboard.spacing.label": "Rozstaw oczu VR",
  "renderer.cardboard.spacing.description": "Wyższe wartości oddalają oba obrazy od siebie, niższe je przybliżają, aby wyrównać je z soczewkami gogli.",
  "renderer.cardboard.vertical.label": "Wysokość VR",
- "renderer.cardboard.vertical.description": "Wyższe wartości przesuwają oba obrazy w górę, niższe w dół, aby wyrównać je z soczewkami gogli."
+ "renderer.cardboard.vertical.description": "Wyższe wartości przesuwają oba obrazy w górę, niższe w dół, aby wyrównać je z soczewkami gogli.",
+ "pad.stickTravel.label": "Wychylenie drążka",
+ "pad.stickTravel.description": "Jak daleko kciuk przesuwa się od środka drążka dotykowego do pełnego wychylenia, dla wszystkich drążków dotykowych. Zwiększ, aby mieć więcej miejsca na chodzenie i powolne celowanie; zmniejsz, aby szybciej osiągać pełną prędkość."
 }

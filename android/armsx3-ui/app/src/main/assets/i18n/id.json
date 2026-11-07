@@ -1545,5 +1545,7 @@
  "renderer.cardboard.spacing.label": "Jarak Mata VR",
  "renderer.cardboard.spacing.description": "Nilai lebih tinggi menjauhkan kedua gambar, nilai lebih rendah mendekatkannya, agar sejajar dengan lensa viewer.",
  "renderer.cardboard.vertical.label": "Ketinggian VR",
- "renderer.cardboard.vertical.description": "Nilai lebih tinggi menaikkan kedua gambar, nilai lebih rendah menurunkannya, agar sejajar dengan lensa viewer."
+ "renderer.cardboard.vertical.description": "Nilai lebih tinggi menaikkan kedua gambar, nilai lebih rendah menurunkannya, agar sejajar dengan lensa viewer.",
+ "pad.stickTravel.label": "Jarak gerak stik",
+ "pad.stickTravel.description": "Seberapa jauh ibu jari Anda bergeser dari tengah stik sentuh agar stik miring penuh, untuk semua stik sentuh. Naikkan untuk memberi ruang lebih saat berjalan dan membidik pelan; turunkan agar kecepatan penuh tercapai lebih cepat."
 }
