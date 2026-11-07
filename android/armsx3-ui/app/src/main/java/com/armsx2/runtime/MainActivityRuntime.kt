@@ -98,12 +98,6 @@ private const val STICK_DIGITAL_THRESHOLD = 0.5f
 // isDeliberateControllerMotion). Halfway, like a stick: well past resting noise. The pad itself
 // still reads a trigger from TRIGGER_DEAD up; this only decides when the touch controls hide.
 private const val TRIGGER_DIGITAL_THRESHOLD = 0.5f
-// Off-axis bleed gate for the RADIAL analog path (accumStickRadial): the minor axis is
-// dropped when it's below this fraction of the major axis, so a near-cardinal push on a
-// stick that isn't perfectly centered on the other axis doesn't leak a phantom second
-// direction ("up also presses right"). 0.15 ≈ snaps only ~<9° diagonals to the cardinal;
-// genuine diagonals (minor axis well above this) pass through untouched.
-private const val STICK_CROSS_GATE = 0.15f
 private const val UI_NAV_DEAD = 0.20f
 private const val UI_NAV_RELEASE_DEAD = 0.06f
 private const val UI_HAT_DEAD = 0.50f
@@ -5080,33 +5074,9 @@ open class MainActivityRuntime : ComponentActivity() {
      *  (exponential response curve) to a post-deadzone magnitude in [0,1]. accel 0
      *  = linear; higher = finer control near center, faster toward full tilt. Only
      *  shapes real analog output (native passthrough + CUSTOM analog targets). */
-    private fun shapeStickMag(m: Float, left: Boolean): Float {
-        val dz = ControllerMappings.stickDeadzone(left)
-        if (m <= dz) return 0f
-        // Re-normalize the window [dz, 1-outer] to [0, 1] so output ramps smoothly
-        // from 0 past the inner deadzone (no jump), and reaches FULL at (1-outer) —
-        // the outer/anti-deadzone lets a short-throw stick that can't physically
-        // reach its corners still hit 100%. Then apply the accel curve + sensitivity.
-        // ALL feel tunables are PER-STICK now (left/right independent).
-        val outer = ControllerMappings.stickOuterDeadzone(left)
-        val hi = (1f - outer).coerceAtLeast(dz + 0.01f) // upper edge; guard hi > dz
-        val t = ((m - dz) / (hi - dz)).coerceIn(0f, 1f)
-        val accel = ControllerMappings.stickAcceleration(left)
-        // Acceleration + the response-curve preset compose into one exponent (both reshape
-        // magnitude; exp==1 = linear = unchanged).
-        val exp = 1f + accel + ControllerMappings.stickCurveGamma(left)
-        val curved =
-            if (exp != 1f) Math.pow(t.toDouble(), exp.toDouble()).toFloat()
-            else t
-        val out = (curved * ControllerMappings.stickSensitivity(left)).coerceIn(0f, 1f)
-        // Anti-deadzone (output floor): lift ANY non-zero output up to start at the floor,
-        // so a game with its own large stick deadzone responds the instant the stick moves
-        // and the rest of the travel maps proportionally above it (no dead bottom, no jump).
-        // True center (out == 0) stays 0. 0 floor = unchanged behaviour.
-        if (out <= 0f) return 0f
-        val anti = ControllerMappings.stickAntiDeadzone(left)
-        return if (anti > 0f) (anti + out * (1f - anti)).coerceIn(0f, 1f) else out
-    }
+    // The shaping lives in ControllerMappings so the on-screen sticks share it exactly.
+    private fun shapeStickMag(m: Float, left: Boolean): Float =
+        ControllerMappings.shapeStickMagnitude(m, left)
 
     // ---- Analog-code merge layer (native codes 110-123) --------------------
     // Several writers can drive the SAME PS2 stick direction in one motion event:
@@ -5190,36 +5160,16 @@ open class MainActivityRuntime : ComponentActivity() {
      *  stick's radial magnitude (not per-axis), so diagonals shape identically to
      *  cardinals — a per-axis deadzone was a "square" zone that ate diagonals.
      *  Direction is preserved exactly; only the magnitude is reshaped. */
+    private val stickShapeOut = FloatArray(2)
+
     private fun accumStickRadial(vx: Float, vy: Float, left: Boolean,
                                  aXPos: Int, aXNeg: Int, aYPos: Int, aYNeg: Int) {
-        // Off-axis BLEED gate (fixes the "push up also presses right" regression). Moving
-        // the deadzone from per-axis to radial (above) stopped diagonals being eaten, but
-        // the old per-axis zone was also silently cleaning up small perpendicular values —
-        // so a near-cardinal push on a stick that doesn't sit perfectly centered on the
-        // other axis now leaks that value through. Restore the cleanup WITHOUT the square
-        // zone: drop the minor axis only when it's a small fraction of the major one. That
-        // snaps just very shallow (~<9°) diagonals to the cardinal; genuine diagonals (minor
-        // axis well above STICK_CROSS_GATE of the major) are untouched, so 8-way is intact.
-        var gx = vx
-        var gy = vy
-        val ax = abs(gx)
-        val ay = abs(gy)
-        if (ax >= ay) { if (ay < ax * STICK_CROSS_GATE) gy = 0f }
-        else { if (ax < ay * STICK_CROSS_GATE) gx = 0f }
-        // Magnitude from the RAW vector: the snap only chooses the direction. Measured after it, a
-        // near-straight push lost the dropped axis's share and fell short of full tilt.
-        val mag = kotlin.math.hypot(vx, vy)
-        if (mag <= 0f) return
-        val shaped = shapeStickMag(mag.coerceAtMost(1f), left)
-        // Dividing by the magnitude caps a full diagonal at the unit circle: 0.707 per axis, which
-        // is what a circular-gated DualShock 3 really sends. Games that deadzone each axis on its
-        // own then ignore diagonals almost entirely. Dividing by the LARGER axis instead expands
-        // to the square, so a full diagonal reaches 1.0 on both. Same result on the cardinals.
-        val denom = if (ControllerMappings.stickSquareGate(left)) kotlin.math.max(abs(gx), abs(gy))
-            else kotlin.math.hypot(gx, gy)
-        val scale = if (denom > 0f) shaped / denom else 0f
-        val ox = gx * scale
-        val oy = gy * scale
+        // Bleed gate, radial shaping and Full Diagonal Range, shared with the on-screen sticks
+        // (ControllerMappings.shapeStickVector). Main looper only: motion events and the gyro
+        // callback both run there, so one scratch array is enough.
+        ControllerMappings.shapeStickVector(vx, vy, left, stickShapeOut)
+        val ox = stickShapeOut[0]
+        val oy = stickShapeOut[1]
         if (ox > 0f) accumAnalog(aXPos, ox) else if (ox < 0f) accumAnalog(aXNeg, -ox)
         if (oy > 0f) accumAnalog(aYPos, oy) else if (oy < 0f) accumAnalog(aYNeg, -oy)
     }

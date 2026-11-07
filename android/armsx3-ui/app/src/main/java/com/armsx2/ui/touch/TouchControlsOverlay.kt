@@ -1992,23 +1992,23 @@ private data class StickEmit(
     fun any() = xPos != 0 || xNeg != 0 || yPos != 0 || yNeg != 0
 }
 
-/** Apply the user-configurable PER-STICK analog deadzone and re-normalize past it
- *  so the on-screen stick responds from low values without a jump — matching the
- *  physical-stick path (MainActivityRuntime.shapeStickMag). */
-private fun shapeTouchAxis(m: Float, left: Boolean): Float {
-    val dz = ControllerMappings.stickDeadzone(left)
-    if (m <= dz) return 0f
-    return (if (dz < 1f) (m - dz) / (1f - dz) else 0f).coerceIn(0f, 1f)
-}
-
+/** The finger's offset ([nx], [ny], each in [-1, 1], capped to the stick's circle) to the four
+ *  half-axes to send. Shaped exactly like a physical stick (ControllerMappings.shapeStickVector):
+ *  deadzone, outer deadzone, curve, sensitivity, anti-deadzone and Full Diagonal Range all apply.
+ *  This used to apply only the deadzone, per axis, so a full diagonal stopped at about 70% on each
+ *  axis and no Stick Feel setting could change it (issue #235). */
 private fun computeStickEmit(nx: Float, ny: Float, left: Boolean): StickEmit {
-    val scaleX = (shapeTouchAxis(abs(nx), left) * 32767f).toInt()
-    val scaleY = (shapeTouchAxis(abs(ny), left) * 32767f).toInt()
+    val shaped = FloatArray(2)
+    ControllerMappings.shapeStickVector(nx, ny, left, shaped)
+    val ox = shaped[0]
+    val oy = shaped[1]
+    val scaleX = (abs(ox) * 32767f).toInt()
+    val scaleY = (abs(oy) * 32767f).toInt()
     return StickEmit(
-        xPos = if (nx > 0) scaleX else 0,
-        xNeg = if (nx < 0) scaleX else 0,
-        yPos = if (ny > 0) scaleY else 0,
-        yNeg = if (ny < 0) scaleY else 0,
+        xPos = if (ox > 0) scaleX else 0,
+        xNeg = if (ox < 0) scaleX else 0,
+        yPos = if (oy > 0) scaleY else 0,
+        yNeg = if (oy < 0) scaleY else 0,
     )
 }
 

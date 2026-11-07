@@ -407,6 +407,78 @@ object ControllerMappings {
     fun stickAntiDeadzone(left: Boolean): Float = prefStickAntiDz.get(left)
     fun setStickAntiDeadzone(left: Boolean, v: Float) = prefStickAntiDz.set(left, v)
 
+    // ---- Stick shaping, shared by every stick that drives a PS3 analog stick -----------------
+    //
+    // A physical stick (MainActivityRuntime.accumStickRadial) and the on-screen sticks
+    // (TouchControlsOverlay, both the drawn sticks and the full-half invisible ones) go through
+    // these same steps, so every Stick Feel setting means the same thing on both. The on-screen
+    // sticks used to apply only the deadzone, per axis, to a finger capped to a circle: their
+    // diagonals stopped at about 70% on each axis whatever Full Diagonal Range, Sensitivity or
+    // Outer Deadzone said, so a game that wants more than that on an axis to run slowed or
+    // stopped on diagonals (issue #235), and no setting could reach full speed sooner.
+
+    // Off-axis bleed gate: the minor axis is dropped when it is below this fraction of the major
+    // one, so a near-cardinal push on a stick that is not perfectly centred on the other axis does
+    // not leak a phantom second direction ("up also presses right"). 0.15 snaps only diagonals
+    // shallower than about 9 degrees to the cardinal; genuine diagonals pass through untouched.
+    private const val STICK_CROSS_GATE = 0.15f
+
+    /** Deadzone, outer deadzone, curve, sensitivity and anti-deadzone, applied to a stick's radial
+     *  magnitude [m] in [0, 1]. Returns the magnitude to send, in [0, 1]. */
+    fun shapeStickMagnitude(m: Float, left: Boolean): Float {
+        val dz = stickDeadzone(left)
+        if (m <= dz) return 0f
+        // Re-normalize the window [dz, 1-outer] to [0, 1] so output ramps smoothly
+        // from 0 past the inner deadzone (no jump), and reaches FULL at (1-outer) --
+        // the outer/anti-deadzone lets a short-throw stick that can't physically
+        // reach its corners still hit 100%. Then apply the accel curve + sensitivity.
+        // ALL feel tunables are PER-STICK now (left/right independent).
+        val outer = stickOuterDeadzone(left)
+        val hi = (1f - outer).coerceAtLeast(dz + 0.01f) // upper edge; guard hi > dz
+        val t = ((m - dz) / (hi - dz)).coerceIn(0f, 1f)
+        // Acceleration + the response-curve preset compose into one exponent (both reshape
+        // magnitude; exp==1 = linear = unchanged).
+        val exp = 1f + stickAcceleration(left) + stickCurveGamma(left)
+        val curved =
+            if (exp != 1f) Math.pow(t.toDouble(), exp.toDouble()).toFloat()
+            else t
+        val out = (curved * stickSensitivity(left)).coerceIn(0f, 1f)
+        // Anti-deadzone (output floor): lift ANY non-zero output up to start at the floor,
+        // so a game with its own large stick deadzone responds the instant the stick moves
+        // and the rest of the travel maps proportionally above it (no dead bottom, no jump).
+        // True center (out == 0) stays 0. 0 floor = unchanged behaviour.
+        if (out <= 0f) return 0f
+        val anti = stickAntiDeadzone(left)
+        return if (anti > 0f) (anti + out * (1f - anti)).coerceIn(0f, 1f) else out
+    }
+
+    /** One stick's vector ([vx], [vy], each in [-1, 1]) to the deflection to send, written to
+     *  [out] as x then y, each in [-1, 1]. The bleed gate chooses the direction, the radial
+     *  magnitude is shaped by [shapeStickMagnitude], and with Full Diagonal Range on a diagonal
+     *  is expanded to the square, so a full diagonal reaches 1.0 on both axes. */
+    fun shapeStickVector(vx: Float, vy: Float, left: Boolean, out: FloatArray) {
+        var gx = vx
+        var gy = vy
+        val ax = kotlin.math.abs(gx)
+        val ay = kotlin.math.abs(gy)
+        if (ax >= ay) { if (ay < ax * STICK_CROSS_GATE) gy = 0f }
+        else { if (ax < ay * STICK_CROSS_GATE) gx = 0f }
+        // Magnitude from the RAW vector: the snap only chooses the direction. Measured after it, a
+        // near-straight push lost the dropped axis's share and fell short of full tilt.
+        val mag = kotlin.math.hypot(vx, vy)
+        if (mag <= 0f) { out[0] = 0f; out[1] = 0f; return }
+        val shaped = shapeStickMagnitude(mag.coerceAtMost(1f), left)
+        // Dividing by the magnitude caps a full diagonal at the unit circle: 0.707 per axis, which
+        // is what a circular-gated DualShock 3 really sends. Games that deadzone each axis on its
+        // own then ignore diagonals almost entirely. Dividing by the LARGER axis instead expands
+        // to the square, so a full diagonal reaches 1.0 on both. Same result on the cardinals.
+        val denom = if (stickSquareGate(left)) kotlin.math.max(kotlin.math.abs(gx), kotlin.math.abs(gy))
+            else kotlin.math.hypot(gx, gy)
+        val scale = if (denom > 0f) shaped / denom else 0f
+        out[0] = (gx * scale).coerceIn(-1f, 1f)
+        out[1] = (gy * scale).coerceIn(-1f, 1f)
+    }
+
     // Master rumble / vibration enable. Gates NativeApp.onPadRumble (controller motors AND
     // the device-haptic fallback). Persisted in prefs and mirrored into the native gate
     // NativeApp.sRumbleEnabled — live on change and at app start (MainActivityRuntime.onCreate). Default on.
