@@ -1537,5 +1537,13 @@
  "xmb.video.original": "Orîjînal",
  "xmb.video.aspect": "Rêjeya Dîmenê",
  "xmb.keyboard.paste": "Pêve bike",
- "xmb.video.shader.failed": "Ev shader li vir naxebite, ji ber vê vîdyo bê wê tê lîstin."
+ "xmb.video.shader.failed": "Ev shader li vir naxebite, ji ber vê vîdyo bê wê tê lîstin.",
+ "renderer.cardboard.label": "Cardboard VR",
+ "renderer.cardboard.description": "Lîstikê du caran, li kêleka hev, ji bo her çavekî wêneyek nîşan dide, ji bo telefonek di nav temaşekerê VR yê bi şêweya Cardboard de. Telefonê bi awayê asoyî bigire. Lîstikên bi 3D ya stereo dema ku 3D Display Enabled di Hemû mîhengên navikê de vekirî be û çareseriya PS3 1280x720 be, ji her çavekî re dîmenek cuda didin. Shaderên RetroArch û SGSR di vê modê de nayên xebitandin; FSR hîn jî dixebite.",
+ "renderer.cardboard.size.label": "Mezinahiya wêneya VR",
+ "renderer.cardboard.size.description": "Her wêne çiqas ji nîvê ekrana xwe tije dike.",
+ "renderer.cardboard.spacing.label": "Navbera çavan a VR",
+ "renderer.cardboard.spacing.description": "Nirxên bilindtir du wêneyan ji hev dûr dixin, nirxên nizmtir wan nêzîkî hev dikin, da ku bi lensên temaşeker re li hev bên.",
+ "renderer.cardboard.vertical.label": "Bilindahiya VR",
+ "renderer.cardboard.vertical.description": "Nirxên bilindtir her du wêneyan bilind dikin, nirxên nizmtir wan nizm dikin, da ku bi lensên temaşeker re li hev bên."
 }

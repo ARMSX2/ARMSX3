@@ -46,6 +46,7 @@ internal val SETTINGS_CATEGORY_FIELDS: Map<SettingsCategory, List<String>> = map
         "hwAccurateAlphaTest", "loadTextureReplacements",
         "loadTextureReplacementsAsync", "maxAnisotropy", "orientation",
         "osdShowTextureReplacements", "portraitRenderTop", "precacheTextureReplacements",
+        "cardboardVr", "cardboardVrSize", "cardboardVrSpacing", "cardboardVrVertical",
         "ps3AnisoFilter", "ps3AsyncTexStream", "ps3DisableZcull", "ps3DisplayAspect",
         "ps3MsaaMode", "ps3MultithreadedRsx", "ps3ReadColorBuffers", "ps3ReadDepthBuffer",
         "ps3FrameGeneration",

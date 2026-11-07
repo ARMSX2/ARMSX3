@@ -1537,5 +1537,13 @@
  "xmb.video.original": "اصلی",
  "xmb.video.aspect": "نسبت تصویر",
  "xmb.keyboard.paste": "جای‌گذاری",
- "xmb.video.shader.failed": "این سایه‌زن اینجا اجرا نمی‌شود، پس ویدیو بدون آن پخش می‌شود."
+ "xmb.video.shader.failed": "این سایه‌زن اینجا اجرا نمی‌شود، پس ویدیو بدون آن پخش می‌شود.",
+ "renderer.cardboard.label": "Cardboard VR",
+ "renderer.cardboard.description": "بازی را دو بار، کنار هم، یک تصویر برای هر چشم نشان می‌دهد، برای گوشی داخل هدست واقعیت مجازی از نوع Cardboard. گوشی را افقی نگه دارید. بازی‌های دارای سه‌بعدی استریوسکوپی به هر چشم نمای جداگانه می‌دهند، وقتی 3D Display Enabled در تمام تنظیمات هسته روشن باشد و وضوح PS3 روی 1280x720 باشد. سایه‌زن‌های RetroArch و SGSR در این حالت اجرا نمی‌شوند؛ FSR همچنان کار می‌کند.",
+ "renderer.cardboard.size.label": "اندازه تصویر VR",
+ "renderer.cardboard.size.description": "اینکه هر تصویر چه مقدار از نیمه صفحه خود را پر می‌کند.",
+ "renderer.cardboard.spacing.label": "فاصله چشم‌ها در VR",
+ "renderer.cardboard.spacing.description": "مقادیر بالاتر دو تصویر را از هم دور و مقادیر پایین‌تر آن‌ها را به هم نزدیک می‌کنند، تا با عدسی‌های هدست هم‌تراز شوند.",
+ "renderer.cardboard.vertical.label": "ارتفاع VR",
+ "renderer.cardboard.vertical.description": "مقادیر بالاتر هر دو تصویر را بالا و مقادیر پایین‌تر آن‌ها را پایین می‌برند، تا با عدسی‌های هدست هم‌تراز شوند."
 }

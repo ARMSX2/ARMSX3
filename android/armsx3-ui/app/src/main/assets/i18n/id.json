@@ -1537,5 +1537,13 @@
  "xmb.video.original": "Asli",
  "xmb.video.aspect": "Rasio Aspek",
  "xmb.keyboard.paste": "Tempel",
- "xmb.video.shader.failed": "Shader ini tidak bisa berjalan di sini, jadi video diputar tanpanya."
+ "xmb.video.shader.failed": "Shader ini tidak bisa berjalan di sini, jadi video diputar tanpanya.",
+ "renderer.cardboard.label": "Cardboard VR",
+ "renderer.cardboard.description": "Menampilkan game dua kali, berdampingan, satu gambar untuk setiap mata, untuk ponsel di dalam viewer VR bergaya Cardboard. Pegang ponsel dalam posisi lanskap. Game dengan 3D stereo memberi setiap mata tampilannya sendiri saat 3D Display Enabled aktif di Semua Pengaturan Inti dan resolusi PS3 adalah 1280x720. Shader RetroArch dan SGSR dilewati selama mode ini aktif; FSR tetap berfungsi.",
+ "renderer.cardboard.size.label": "Ukuran Gambar VR",
+ "renderer.cardboard.size.description": "Seberapa penuh setiap gambar mengisi separuh layarnya.",
+ "renderer.cardboard.spacing.label": "Jarak Mata VR",
+ "renderer.cardboard.spacing.description": "Nilai lebih tinggi menjauhkan kedua gambar, nilai lebih rendah mendekatkannya, agar sejajar dengan lensa viewer.",
+ "renderer.cardboard.vertical.label": "Ketinggian VR",
+ "renderer.cardboard.vertical.description": "Nilai lebih tinggi menaikkan kedua gambar, nilai lebih rendah menurunkannya, agar sejajar dengan lensa viewer."
 }

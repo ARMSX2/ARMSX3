@@ -1537,5 +1537,13 @@
  "xmb.video.original": "ต้นฉบับ",
  "xmb.video.aspect": "อัตราส่วนภาพ",
  "xmb.keyboard.paste": "วาง",
- "xmb.video.shader.failed": "เชเดอร์นี้ใช้งานที่นี่ไม่ได้ จึงเล่นวิดีโอโดยไม่มีเชเดอร์"
+ "xmb.video.shader.failed": "เชเดอร์นี้ใช้งานที่นี่ไม่ได้ จึงเล่นวิดีโอโดยไม่มีเชเดอร์",
+ "renderer.cardboard.label": "Cardboard VR",
+ "renderer.cardboard.description": "แสดงเกมสองภาพเคียงข้างกัน ภาพละหนึ่งตา สำหรับโทรศัพท์ที่ใส่ในแว่น VR แบบ Cardboard ถือโทรศัพท์ในแนวนอน เกมที่มี 3D แบบสเตอริโอจะให้แต่ละตาเห็นมุมมองของตัวเอง เมื่อเปิด 3D Display Enabled ในการตั้งค่าแกนทั้งหมด และความละเอียด PS3 เป็น 1280x720 ระหว่างเปิดโหมดนี้จะข้ามเชเดอร์ RetroArch และ SGSR ส่วน FSR ยังใช้งานได้",
+ "renderer.cardboard.size.label": "ขนาดภาพ VR",
+ "renderer.cardboard.size.description": "ภาพแต่ละภาพเต็มพื้นที่ครึ่งจอของตัวเองมากแค่ไหน",
+ "renderer.cardboard.spacing.label": "ระยะห่างตา VR",
+ "renderer.cardboard.spacing.description": "ค่าที่สูงขึ้นจะแยกภาพทั้งสองออกจากกัน ค่าที่ต่ำลงจะดึงเข้าหากัน เพื่อให้ตรงกับเลนส์ของแว่น",
+ "renderer.cardboard.vertical.label": "ความสูง VR",
+ "renderer.cardboard.vertical.description": "ค่าที่สูงขึ้นจะเลื่อนภาพทั้งสองขึ้น ค่าที่ต่ำลงจะเลื่อนลง เพื่อให้ตรงกับเลนส์ของแว่น"
 }

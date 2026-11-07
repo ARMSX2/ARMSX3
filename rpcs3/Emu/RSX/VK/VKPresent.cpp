@@ -33,6 +33,8 @@ extern atomic_t<bool> g_user_asked_for_screenshot;
 extern atomic_t<bool> g_flush_pipeline_cache_requested;
 extern atomic_t<u64> g_pipeline_cache_flush_generation;
 extern atomic_t<recording_mode> g_recording_mode;
+// android/src/armsx3-core.cpp: Cardboard VR, packed (see _armsx3_setCardboardVr)
+extern atomic_t<u32> g_cardboard_vr;
 // android/src/remote_play.cpp
 extern atomic_t<u32> g_remote_play_max_size;
 extern atomic_t<u32> g_remote_play_frames;
@@ -1710,6 +1712,8 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 	// Scan memory for required data. This is done early to optimize waiting for the driver image acquire below.
 	vk::viewable_image* image_to_flip = nullptr;
 	vk::viewable_image* image_to_flip2 = nullptr;
+	// ARMSX3 Cardboard VR: the game drew both eyes of a stereo pair into the one image_to_flip.
+	bool stereo_single_image = false;
 
 	if (res() && info.buffer < m_ctx->display_buffers_count && buffer_width && buffer_height)
 	{
@@ -1761,6 +1765,7 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 				// Account for possible insets
 				const auto [unused2, scaled_buffer_height] = rsx::apply_resolution_scale<true>(RSX(m_ctx)->resolution_scaling_config, RSX_SURFACE_DIMENSION_IGNORED, buffer_height);
 				buffer_height = std::min<u32>(image_to_flip->height() - min_expected_height, scaled_buffer_height);
+				stereo_single_image = true;
 			}
 		}
 
@@ -1903,6 +1908,41 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 		aspect_ratio = { 0, 0, s32(m_swapchain_dims.width), s32(m_swapchain_dims.height) };
 	}
 
+	// Cardboard VR: the picture twice, one in each half of the screen, for a phone in a VR headset
+	// (the ARMSX2 community asked for PPSSPP's mode). Each picture is fitted to its half exactly as
+	// the whole picture is fitted to the window, scaled to the chosen size, then moved apart or
+	// together across the space beside it and up or down. Only with a game image: the screens
+	// drawn without one (the compile banner, a cleared frame) stay as they are.
+	const u32 cardboard = g_cardboard_vr.load();
+	const bool cardboard_on = (cardboard & 0x8000'0000u) && image_to_flip && m_swapchain_dims.width >= 2;
+	areai cardboard_eye[2]{};
+
+	if (cardboard_on)
+	{
+		const s32 half = s32(m_swapchain_dims.width) / 2;
+		const s32 height = s32(m_swapchain_dims.height);
+		const s32 size = s32(cardboard & 0xff);
+		const s32 spacing = s32((cardboard >> 8) & 0xff) - 128;
+		const s32 vertical = s32((cardboard >> 16) & 0xff) - 128;
+
+		areai fit = { 0, 0, half, height };
+
+		if (!g_cfg.video.stretch_to_display_area)
+		{
+			fit = static_cast<areai>(avconfig.aspect_convert_region({ buffer_width, buffer_height }, { u32(half), u32(height) }));
+		}
+
+		const s32 w = std::max(1, fit.width() * size / 100);
+		const s32 h = std::max(1, fit.height() * size / 100);
+		const s32 room_x = std::max(0, half - w) / 2;
+		const s32 room_y = std::max(0, height - h) / 2;
+		const s32 shift_x = room_x * spacing / 100;
+		const s32 y = room_y - room_y * vertical / 100;
+
+		cardboard_eye[0] = { room_x - shift_x, y, room_x - shift_x + w, y + h };
+		cardboard_eye[1] = { half + room_x + shift_x, y, half + room_x + shift_x + w, y + h };
+	}
+
 	// Blit contents to screen..
 	VkImage target_image = m_swapchain->get_image(m_current_frame->present_image);
 	const auto present_layout = m_swapchain->get_optimal_present_layout();
@@ -1994,6 +2034,29 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 		{
 			const areau render_area = view->use_window_space ? display_area : area;
 			ui_renderer->run(*m_current_command_buffer, render_area, fbo, single_target_pass, m_texture_upload_buffer_ring_info, *view.get());
+		}
+	};
+
+	// As render_overlays, once per eye. The second eye draws without stepping the overlays
+	// (advance = false), so the performance overlay still counts each frame once.
+	const auto render_overlays_cardboard = [&](vk::framebuffer_holder* fbo)
+	{
+		if (!has_overlay) return;
+
+		auto ui_renderer = vk::get_overlay_pass<vk::ui_overlay_renderer>();
+		std::lock_guard lock(*overlay_manager);
+
+		const areau display_area = {0, 0, static_cast<u32>(m_swapchain_dims.width), static_cast<u32>(m_swapchain_dims.height)};
+		for (const auto& view : overlay_manager->get_views())
+		{
+			if (view->use_window_space)
+			{
+				ui_renderer->run(*m_current_command_buffer, display_area, fbo, single_target_pass, m_texture_upload_buffer_ring_info, *view.get());
+				continue;
+			}
+
+			ui_renderer->run(*m_current_command_buffer, areau(cardboard_eye[0]), fbo, single_target_pass, m_texture_upload_buffer_ring_info, *view.get());
+			ui_renderer->run(*m_current_command_buffer, areau(cardboard_eye[1]), fbo, single_target_pass, m_texture_upload_buffer_ring_info, *view.get(), false);
 		}
 	};
 
@@ -2127,7 +2190,7 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 	// window where m_swapchain_dims lags the actual image size (Android rotation, a WSI
 	// currentExtent override). Exact-fit and stretch_to_display_area cases are unaffected, so the
 	// extra clear costs nothing in the normal path.
-	if (!image_to_flip || aspect_ratio.x1 || aspect_ratio.y1 ||
+	if (!image_to_flip || cardboard_on || aspect_ratio.x1 || aspect_ratio.y1 ||
 		u32(aspect_ratio.x2) < m_swapchain->get_width() ||
 		u32(aspect_ratio.y2) < m_swapchain->get_height())
 	{
@@ -2209,7 +2272,63 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 		}
 	}
 
-	if (image_to_flip)
+	if (cardboard_on)
+	{
+		// Each eye through the calibration pass: it samples its source, so the same picture can be
+		// drawn twice, and it applies gamma and the RGB range the same way the single picture gets
+		// them. A game drawing in stereo 3D gives each eye its own view (left, right) instead of
+		// the side-by-side or anaglyph composition the 3D modes make of the pair: from its two
+		// images, or from the two parts of its one image when it drew the pair into one.
+		//
+		// FSR scales the picture to the eye's size first, as for the whole picture on the
+		// calibration path; not for a pair in one image, which it would scale as one picture. The
+		// other upscalers (SGSR, RetroArch shaders) are not run in this mode: the pass filters the
+		// picture to each eye's size bilinearly.
+		const bool use_full_rgb_range_output = g_cfg.video.full_rgb_range_output.get();
+		const bool stereo_pair = avconfig.stereo_enabled && image_to_flip2;
+		const bool stereo_one_image = avconfig.stereo_enabled && stereo_single_image;
+		vk::viewable_image* eye_source[2] = { image_to_flip, stereo_pair ? image_to_flip2 : image_to_flip };
+
+		if (m_output_scaling == output_scaling_mode::fsr && !stereo_one_image)
+		{
+			VkImageBlit request = {};
+			request.srcSubresource = { image_to_flip->aspect(), 0, 0, 1 };
+			request.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+			request.srcOffsets[0] = { 0, 0, 0 };
+			request.srcOffsets[1] = { s32(buffer_width), s32(buffer_height), 1 };
+			request.dstOffsets[0] = { 0, 0, 0 };
+			request.dstOffsets[1] = { cardboard_eye[0].width(), cardboard_eye[0].height(), 1 };
+
+			eye_source[0] = m_upscaler->scale_output(*m_current_command_buffer, image_to_flip, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED, request, UPSCALE_LEFT_VIEW);
+			eye_source[1] = stereo_pair
+				? m_upscaler->scale_output(*m_current_command_buffer, image_to_flip2, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED, request, UPSCALE_RIGHT_VIEW)
+				: eye_source[0];
+		}
+
+		vk::change_image_layout(*m_current_command_buffer, target_image, target_layout, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, subresource_range);
+		target_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+		const auto key = vk::get_renderpass_key(m_swapchain->get_surface_format());
+		single_target_pass = vk::get_renderpass(*m_device, key);
+		ensure(single_target_pass != VK_NULL_HANDLE);
+
+		direct_fbo = vk::get_framebuffer(*m_device, m_swapchain_dims.width, m_swapchain_dims.height, VK_FALSE, single_target_pass, m_swapchain->get_surface_format(), target_image);
+		direct_fbo->add_ref();
+
+		for (u32 eye = 0; eye < 2; ++eye)
+		{
+			rsx::simple_array<vk::viewable_image*> eye_src;
+			eye_src.push_back(eye_source[eye]);
+
+			vk::get_overlay_pass<vk::video_out_calibration_pass>()->run(
+				*m_current_command_buffer, areau(cardboard_eye[eye]), direct_fbo, eye_src,
+				avconfig.gamma, !use_full_rgb_range_output, false, single_target_pass,
+				stereo_one_image ? s32(eye) : -1);
+		}
+
+		direct_fbo->release();
+	}
+	else if (image_to_flip)
 	{
 		const bool use_full_rgb_range_output = g_cfg.video.full_rgb_range_output.get();
 
@@ -2324,7 +2443,14 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 
 		direct_fbo->add_ref();
 
-		render_overlays(direct_fbo, areau(aspect_ratio));
+		if (cardboard_on)
+		{
+			render_overlays_cardboard(direct_fbo);
+		}
+		else
+		{
+			render_overlays(direct_fbo, areau(aspect_ratio));
+		}
 
 		if (g_cfg.video.debug_overlay && res())
 		{
@@ -2410,7 +2536,7 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 	// less by the ratio of the two (720p on a 1080p screen: 2.25x fewer pixels to generate). Every
 	// other output mode renders through passes a generated frame would need a run of its own of,
 	// so those keep capturing the finished screen.
-	const bool framegen_plain_output = image_to_flip && !pre_rotation && !avconfig.stereo_enabled &&
+	const bool framegen_plain_output = image_to_flip && !pre_rotation && !avconfig.stereo_enabled && !cardboard_on &&
 		g_cfg.video.full_rgb_range_output.get() && rsx::fcmp(avconfig.gamma, 1.f) &&
 		(m_output_scaling == output_scaling_mode::bilinear || m_output_scaling == output_scaling_mode::nearest);
 

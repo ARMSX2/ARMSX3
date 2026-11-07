@@ -1536,5 +1536,13 @@
  "xmb.video.original": "Исходный",
  "xmb.video.aspect": "Соотношение сторон",
  "xmb.keyboard.paste": "Вставить",
- "xmb.video.shader.failed": "Этот шейдер здесь не работает, поэтому видео воспроизводится без него."
+ "xmb.video.shader.failed": "Этот шейдер здесь не работает, поэтому видео воспроизводится без него.",
+ "renderer.cardboard.label": "Cardboard VR",
+ "renderer.cardboard.description": "Показывает игру дважды, бок о бок, по одной картинке для каждого глаза, для телефона в VR-очках типа Cardboard. Держите телефон в альбомной ориентации. Игры со стереоскопическим 3D дают каждому глазу свой вид, если в разделе «Все настройки ядра» включён параметр 3D Display Enabled и разрешение PS3 равно 1280x720. Шейдеры RetroArch и SGSR в этом режиме не применяются; FSR продолжает работать.",
+ "renderer.cardboard.size.label": "Размер картинки VR",
+ "renderer.cardboard.size.description": "Какую часть своей половины экрана занимает каждая картинка.",
+ "renderer.cardboard.spacing.label": "Расстояние между глазами VR",
+ "renderer.cardboard.spacing.description": "Большие значения разводят картинки в стороны, меньшие сближают их, чтобы совместить с линзами очков.",
+ "renderer.cardboard.vertical.label": "Высота VR",
+ "renderer.cardboard.vertical.description": "Большие значения поднимают обе картинки, меньшие опускают их, чтобы совместить с линзами очков."
 }

@@ -398,7 +398,7 @@ namespace gl
 		}
 	}
 
-	void ui_overlay_renderer::run(gl::command_context& cmd_, const areau& viewport, GLuint target, rsx::overlays::overlay& ui, bool flip_vertically)
+	void ui_overlay_renderer::run(gl::command_context& cmd_, const areau& viewport, GLuint target, rsx::overlays::overlay& ui, bool flip_vertically, bool advance)
 	{
 		ui.set_render_viewport(
 		    static_cast<u16>(std::min<u32>(viewport.width(), std::numeric_limits<u16>::max())),
@@ -487,7 +487,12 @@ namespace gl
 			overlay_pass::run(cmd_, viewport, target, gl::image_aspect::color, true);
 		}
 
-		ui.update(get_system_time());
+		// advance = false draws the overlay again without stepping it: Cardboard VR draws it once per eye
+		// (GLPresent.cpp), and stepping twice made the performance overlay count each frame twice.
+		if (advance)
+		{
+			ui.update(get_system_time());
+		}
 	}
 
 	video_out_calibration_pass::video_out_calibration_pass()
@@ -511,7 +516,7 @@ namespace gl
 	}
 
 	void video_out_calibration_pass::run(gl::command_context& cmd, const areau& viewport, const rsx::simple_array<GLuint>& source, f32 gamma, bool limited_rgb,
-		bool stereo_enabled, gl::filter input_filter)
+		bool stereo_enabled, gl::filter input_filter, s32 single_image_eye)
 	{
 		if (m_input_filter != input_filter)
 		{
@@ -526,7 +531,9 @@ namespace gl
 
 		program_handle.uniforms["gamma"] = gamma;
 		program_handle.uniforms["limit_range"] = limited_rgb + 0;
-		program_handle.uniforms["stereo_display_mode"] = static_cast<u8>(stereo_cfg.stereo_mode());
+		// 100 and 101 are the shader's STEREO_MODE_SINGLE_IMAGE_LEFT_EYE and _RIGHT_EYE.
+		const int display_mode = single_image_eye >= 0 ? 100 + (single_image_eye ? 1 : 0) : static_cast<u8>(stereo_cfg.stereo_mode());
+		program_handle.uniforms["stereo_display_mode"] = display_mode;
 		program_handle.uniforms["stereo_image_count"] = (source[1] == GL_NONE ? 1 : 2);
 		program_handle.uniforms["left_anaglyph_matrix"] = matrices.left;
 		program_handle.uniforms["right_anaglyph_matrix"] = matrices.right;

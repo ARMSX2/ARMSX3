@@ -986,7 +986,7 @@ namespace vk
 
 	void video_out_calibration_pass::run(vk::command_buffer& cmd, const areau& viewport, vk::framebuffer* target,
 		const rsx::simple_array<vk::viewable_image*>& src, f32 gamma, bool limited_rgb,
-		bool stereo_enabled, VkRenderPass render_pass)
+		bool stereo_enabled, VkRenderPass render_pass, s32 single_image_eye)
 	{
 		static stereo_config stereo_cfg = stereo_config(true);
 		stereo_cfg.update_from_config(stereo_enabled);
@@ -994,7 +994,8 @@ namespace vk
 
 		config.gamma = gamma;
 		config.limit_range = limited_rgb ? 1 : 0;
-		config.stereo_display_mode = static_cast<u8>(stereo_cfg.stereo_mode());
+		// 100 and 101 are the shader's STEREO_MODE_SINGLE_IMAGE_LEFT_EYE and _RIGHT_EYE.
+		config.stereo_display_mode = single_image_eye >= 0 ? 100 + (single_image_eye ? 1 : 0) : static_cast<u8>(stereo_cfg.stereo_mode());
 		config.stereo_image_count = std::min(::size32(src), 2u);
 
 		for (u32 i = 0; i < 3; i++)

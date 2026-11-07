@@ -241,9 +241,11 @@ namespace vk
 
 		void update_uniforms(vk::command_buffer& cmd, vk::glsl::program* /*program*/) override;
 
+		// single_image_eye (ARMSX3 Cardboard VR): 0 or 1 draws only that eye of a stereo pair the game
+		// drew into the one image in src, left above right. -1 is the normal pass.
 		void run(vk::command_buffer& cmd, const areau& viewport, vk::framebuffer* target,
 			const rsx::simple_array<vk::viewable_image*>& src, f32 gamma, bool limited_rgb,
-			bool stereo_enabled, VkRenderPass render_pass);
+			bool stereo_enabled, VkRenderPass render_pass, s32 single_image_eye = -1);
 	};
 
 	// ARMSX3: the last pass of a pre-rotated present (see swapchain_WSI::init). Draws the finished,

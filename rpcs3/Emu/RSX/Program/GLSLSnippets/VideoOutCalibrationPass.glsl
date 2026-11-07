@@ -20,6 +20,10 @@ layout(location=0) out vec4 ocol;
 #define STEREO_MODE_ANAGLYPH_TRIOSCOPIC 8
 #define STEREO_MODE_ANAGLYPH_AMBER_BLUE 9
 #define STEREO_MODE_ANAGLYPH_CUSTOM 10
+// ARMSX3 Cardboard VR: one eye of a pair the game drew into a single image (left eye above, right
+// eye below, where the single-image matrices read them), for a pass that draws that eye by itself.
+#define STEREO_MODE_SINGLE_IMAGE_LEFT_EYE 100
+#define STEREO_MODE_SINGLE_IMAGE_RIGHT_EYE 101
 
 #define TRUE 1
 #define FALSE 0
@@ -83,6 +87,16 @@ vec4 read_source()
 	if (stereo_display_mode == STEREO_MODE_DISABLED)
 	{
 		return texture(fs0, tc0);
+	}
+
+	if (stereo_display_mode == STEREO_MODE_SINGLE_IMAGE_LEFT_EYE)
+	{
+		return texture(fs0, tc0 * left_single_matrix);
+	}
+
+	if (stereo_display_mode == STEREO_MODE_SINGLE_IMAGE_RIGHT_EYE)
+	{
+		return texture(fs0, (tc0 * left_single_matrix) + right_single_matrix);
 	}
 
 	if (stereo_image_count == 1)

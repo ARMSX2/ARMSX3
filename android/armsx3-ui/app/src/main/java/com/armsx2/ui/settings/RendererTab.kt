@@ -313,6 +313,56 @@ fun RendererTab(state: MutableState<Settings>) {
                 notDefault = s.notDefault { it.portraitRenderTop },
             )
             SettingsDivider()
+            // Cardboard VR (asked for by the ARMSX2 community, after PPSSPP's mode): the picture
+            // twice, side by side, one per eye, for a phone in a VR viewer. Drawn by the core's
+            // presenters (VKPresent.cpp, GLPresent.cpp); live via NativeApp.setCardboardVr through
+            // applyTo. The three adjustments only show while it is on.
+            ToggleRow(
+                label = str("renderer.cardboard.label"),
+                value = s.cardboardVr,
+                description = str("renderer.cardboard.description"),
+                onChange = { apply(s.copy(cardboardVr = it)) },
+                notDefault = s.notDefault { it.cardboardVr },
+            )
+            if (s.cardboardVr) {
+                SettingsDivider()
+                IntSliderRow(
+                    label = str("renderer.cardboard.size.label"),
+                    value = s.cardboardVrSize.coerceIn(20, 100),
+                    min = 20,
+                    max = 100,
+                    description = str("renderer.cardboard.size.description"),
+                    valueFormatter = { "$it%" },
+                    onReset = if (s.cardboardVrSize != 80) ({ apply(s.copy(cardboardVrSize = 80)) }) else null,
+                    onChange = { apply(s.copy(cardboardVrSize = it)) },
+                    notDefault = s.notDefault { it.cardboardVrSize },
+                )
+                SettingsDivider()
+                IntSliderRow(
+                    label = str("renderer.cardboard.spacing.label"),
+                    value = s.cardboardVrSpacing.coerceIn(-100, 100),
+                    min = -100,
+                    max = 100,
+                    description = str("renderer.cardboard.spacing.description"),
+                    valueFormatter = { if (it > 0) "+$it" else "$it" },
+                    onReset = if (s.cardboardVrSpacing != 0) ({ apply(s.copy(cardboardVrSpacing = 0)) }) else null,
+                    onChange = { apply(s.copy(cardboardVrSpacing = it)) },
+                    notDefault = s.notDefault { it.cardboardVrSpacing },
+                )
+                SettingsDivider()
+                IntSliderRow(
+                    label = str("renderer.cardboard.vertical.label"),
+                    value = s.cardboardVrVertical.coerceIn(-100, 100),
+                    min = -100,
+                    max = 100,
+                    description = str("renderer.cardboard.vertical.description"),
+                    valueFormatter = { if (it > 0) "+$it" else "$it" },
+                    onReset = if (s.cardboardVrVertical != 0) ({ apply(s.copy(cardboardVrVertical = 0)) }) else null,
+                    onChange = { apply(s.copy(cardboardVrVertical = it)) },
+                    notDefault = s.notDefault { it.cardboardVrVertical },
+                )
+            }
+            SettingsDivider()
             // Auto Progressive Scan — holds Triangle+Cross through boot, the combo some titles
             // probe to offer 480p progressive. Takes effect on the next boot (it is a boot-time
             // pad hold, not a live setting), and only does anything on games that implement it.

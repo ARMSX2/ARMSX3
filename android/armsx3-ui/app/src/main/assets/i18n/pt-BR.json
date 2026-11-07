@@ -1538,5 +1538,13 @@
  "xmb.video.original": "Original",
  "xmb.video.aspect": "Proporção da tela",
  "xmb.keyboard.paste": "Colar",
- "xmb.video.shader.failed": "Este shader não pode ser executado aqui, então o vídeo é reproduzido sem ele."
+ "xmb.video.shader.failed": "Este shader não pode ser executado aqui, então o vídeo é reproduzido sem ele.",
+ "renderer.cardboard.label": "Cardboard VR",
+ "renderer.cardboard.description": "Mostra o jogo duas vezes, lado a lado, uma imagem para cada olho, para um celular dentro de um visor de realidade virtual estilo Cardboard. Segure o celular na horizontal. Jogos com 3D estereoscópico dão a cada olho sua própria visão quando 3D Display Enabled está ativado em Todas as configurações do núcleo e a resolução do PS3 é 1280x720. Os shaders RetroArch e o SGSR são ignorados neste modo; o FSR continua funcionando.",
+ "renderer.cardboard.size.label": "Tamanho da imagem VR",
+ "renderer.cardboard.size.description": "Quanto da sua metade da tela cada imagem ocupa.",
+ "renderer.cardboard.spacing.label": "Distância entre olhos VR",
+ "renderer.cardboard.spacing.description": "Valores maiores afastam as duas imagens, valores menores as aproximam, para alinhá-las às lentes do visor.",
+ "renderer.cardboard.vertical.label": "Altura VR",
+ "renderer.cardboard.vertical.description": "Valores maiores sobem as duas imagens, valores menores as descem, para alinhá-las às lentes do visor."
 }

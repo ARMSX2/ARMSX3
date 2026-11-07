@@ -1086,6 +1086,45 @@ private fun GraphicsPaneRest(settings: com.armsx2.config.Settings, viewModel: Em
             onSelect = { v -> viewModel.updateSettings { it.copy(portraitRenderTop = v == 0) } },
         )
         Spacer(Modifier.height(6.dp))
+        // Cardboard VR, the Renderer tab's toggle and its three adjustments. In-game because the
+        // lining up is done against the game: size, spacing and height are set by looking at the
+        // picture through the viewer, and a controller reaches this menu without taking it off.
+        MenuSwitchRow(str("renderer.cardboard.label"), settings.cardboardVr) { v ->
+            viewModel.updateSettings { it.copy(cardboardVr = v) }
+        }
+        if (settings.cardboardVr) {
+            Spacer(Modifier.height(6.dp))
+            com.armsx2.ui.settings.IntSliderRow(
+                label = str("renderer.cardboard.size.label"),
+                value = settings.cardboardVrSize.coerceIn(20, 100),
+                min = 20,
+                max = 100,
+                valueFormatter = { "$it%" },
+                onReset = if (settings.cardboardVrSize != 80) ({ viewModel.updateSettings { it.copy(cardboardVrSize = 80) } }) else null,
+                onChange = { v -> viewModel.updateSettings { it.copy(cardboardVrSize = v) } },
+            )
+            Spacer(Modifier.height(6.dp))
+            com.armsx2.ui.settings.IntSliderRow(
+                label = str("renderer.cardboard.spacing.label"),
+                value = settings.cardboardVrSpacing.coerceIn(-100, 100),
+                min = -100,
+                max = 100,
+                valueFormatter = { if (it > 0) "+$it" else "$it" },
+                onReset = if (settings.cardboardVrSpacing != 0) ({ viewModel.updateSettings { it.copy(cardboardVrSpacing = 0) } }) else null,
+                onChange = { v -> viewModel.updateSettings { it.copy(cardboardVrSpacing = v) } },
+            )
+            Spacer(Modifier.height(6.dp))
+            com.armsx2.ui.settings.IntSliderRow(
+                label = str("renderer.cardboard.vertical.label"),
+                value = settings.cardboardVrVertical.coerceIn(-100, 100),
+                min = -100,
+                max = 100,
+                valueFormatter = { if (it > 0) "+$it" else "$it" },
+                onReset = if (settings.cardboardVrVertical != 0) ({ viewModel.updateSettings { it.copy(cardboardVrVertical = 0) } }) else null,
+                onChange = { v -> viewModel.updateSettings { it.copy(cardboardVrVertical = v) } },
+            )
+        }
+        Spacer(Modifier.height(6.dp))
         // RSX accuracy -- the levers that actually matter on this core, and the
         // reason the PS2 GS rows above had to go rather than just be hidden.
         HorizontalOptions(

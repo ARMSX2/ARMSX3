@@ -90,15 +90,17 @@ namespace gl
 
 		void emit_geometry(gl::command_context& cmd) override;
 
-		void run(gl::command_context& cmd, const areau& viewport, GLuint target, rsx::overlays::overlay& ui, bool flip_vertically);
+		void run(gl::command_context& cmd, const areau& viewport, GLuint target, rsx::overlays::overlay& ui, bool flip_vertically, bool advance = true);
 	};
 
 	struct video_out_calibration_pass final : public overlay_pass
 	{
 		video_out_calibration_pass();
 
+		// single_image_eye (ARMSX3 Cardboard VR): 0 or 1 draws only that eye of a stereo pair the game
+		// drew into the one image in source[0], left above right. -1 is the normal pass.
 		void run(gl::command_context& cmd, const areau& viewport, const rsx::simple_array<GLuint>& source, f32 gamma, bool limited_rgb,
-			bool stereo_enabled, gl::filter input_filter);
+			bool stereo_enabled, gl::filter input_filter, s32 single_image_eye = -1);
 	};
 
 	struct rp_ssbo_to_generic_texture final : public overlay_pass

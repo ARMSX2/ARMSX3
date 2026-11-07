@@ -6901,6 +6901,22 @@ extern "C" void _armsx3_setRenderPosition(bool portraitTop, int topInset) {
   rsx::g_render_top_inset = topInset > 0 ? static_cast<u32>(topInset) : 0;
 }
 
+// Cardboard VR: the picture twice, side by side, for a phone in a VR headset (VKPresent.cpp,
+// present_frame). One packed value so the presenter reads it once a frame: bit 31 on, bits 0-7
+// the picture's size in percent of an eye's half of the screen (20-100), bits 8-15 the spacing
+// between the two pictures + 128 (-100..100, positive = further apart), bits 16-23 the vertical
+// position + 128 (-100..100, positive = higher). The app owns it and re-sends it on every change,
+// like the render position above. Defined here rather than in a shared header so adding it
+// recompiles nothing else in the core.
+atomic_t<u32> g_cardboard_vr{0};
+
+extern "C" void _armsx3_setCardboardVr(bool on, int size, int spacing, int vertical) {
+  const u32 s = static_cast<u32>(std::clamp(size, 20, 100));
+  const u32 sp = static_cast<u32>(std::clamp(spacing, -100, 100) + 128);
+  const u32 v = static_cast<u32>(std::clamp(vertical, -100, 100) + 128);
+  g_cardboard_vr = (on ? 0x8000'0000u : 0u) | (v << 16) | (sp << 8) | s;
+}
+
 // Set every port's controller class at once, and make it take effect now.
 //
 // All seven together rather than one at a time because each change has to be followed by a

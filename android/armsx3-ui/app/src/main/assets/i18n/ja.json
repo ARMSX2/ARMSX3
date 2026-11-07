@@ -1537,5 +1537,13 @@
  "xmb.video.original": "オリジナル",
  "xmb.video.aspect": "アスペクト比",
  "xmb.keyboard.paste": "貼り付け",
- "xmb.video.shader.failed": "このシェーダーはここでは動作しないため、シェーダーなしで再生します。"
+ "xmb.video.shader.failed": "このシェーダーはここでは動作しないため、シェーダーなしで再生します。",
+ "renderer.cardboard.label": "Cardboard VR",
+ "renderer.cardboard.description": "ゲームを左右に2つ並べて表示し、片目ずつに1枚の映像を映します。Cardboard 型の VR ビューアーにスマートフォンを入れて使います。端末は横向きで使用してください。立体視 3D に対応したゲームでは、すべてのコア設定で 3D Display Enabled をオンにし、PS3 の解像度を 1280x720 にすると、左右の目にそれぞれの視点が表示されます。このモードでは RetroArch シェーダーと SGSR は適用されません。FSR は引き続き使えます。",
+ "renderer.cardboard.size.label": "VR 映像サイズ",
+ "renderer.cardboard.size.description": "各映像が画面の半分をどれだけ占めるか。",
+ "renderer.cardboard.spacing.label": "VR 目の間隔",
+ "renderer.cardboard.spacing.description": "値を上げると2つの映像が離れ、下げると近づきます。ビューアーのレンズに合わせて調整します。",
+ "renderer.cardboard.vertical.label": "VR 高さ",
+ "renderer.cardboard.vertical.description": "値を上げると両方の映像が上に、下げると下に移動します。ビューアーのレンズに合わせて調整します。"
 }

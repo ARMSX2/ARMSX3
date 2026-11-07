@@ -135,6 +135,9 @@ class ARMSX3 {
      */
     external fun setThermals(cpu: Float, gpu: Float, battery: Float, show: Boolean)
     external fun setRenderPosition(portraitTop: Boolean, topInset: Int)
+    /** Cardboard VR: the picture twice, side by side; size 20-100 (% of an eye's half), spacing and
+     *  vertical -100..100 (apart / higher when positive). */
+    external fun setCardboardVr(on: Boolean, size: Int, spacing: Int, vertical: Int)
     external fun setPadDeviceClasses(classes: IntArray)
 
     /** Write a line into the emulator's own log, the file testers actually send.

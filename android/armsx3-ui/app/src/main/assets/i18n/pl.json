@@ -1537,5 +1537,13 @@
  "xmb.video.original": "Oryginalny",
  "xmb.video.aspect": "Proporcje obrazu",
  "xmb.keyboard.paste": "Wklej",
- "xmb.video.shader.failed": "Ten shader nie może tu działać, więc wideo jest odtwarzane bez niego."
+ "xmb.video.shader.failed": "Ten shader nie może tu działać, więc wideo jest odtwarzane bez niego.",
+ "renderer.cardboard.label": "Cardboard VR",
+ "renderer.cardboard.description": "Wyświetla grę dwa razy, obok siebie, jeden obraz dla każdego oka, dla telefonu w goglach VR typu Cardboard. Trzymaj telefon poziomo. Gry ze stereoskopowym 3D dają każdemu oku osobny widok, gdy na ekranie Wszystkie ustawienia rdzenia włączone jest 3D Display Enabled, a rozdzielczość PS3 to 1280x720. Shadery RetroArch i SGSR są w tym trybie pomijane; FSR nadal działa.",
+ "renderer.cardboard.size.label": "Rozmiar obrazu VR",
+ "renderer.cardboard.size.description": "Jaką część swojej połowy ekranu wypełnia każdy obraz.",
+ "renderer.cardboard.spacing.label": "Rozstaw oczu VR",
+ "renderer.cardboard.spacing.description": "Wyższe wartości oddalają oba obrazy od siebie, niższe je przybliżają, aby wyrównać je z soczewkami gogli.",
+ "renderer.cardboard.vertical.label": "Wysokość VR",
+ "renderer.cardboard.vertical.description": "Wyższe wartości przesuwają oba obrazy w górę, niższe w dół, aby wyrównać je z soczewkami gogli."
 }

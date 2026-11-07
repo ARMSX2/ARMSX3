@@ -76,6 +76,7 @@ struct CoreApi {
   int (*getPadRumble)(int port);
   void (*setThermals)(float cpu, float gpu, float battery, bool show);
   void (*setRenderPosition)(bool portraitTop, int topInset);
+  void (*setCardboardVr)(bool on, int size, int spacing, int vertical);
   void (*setPadDeviceClasses)(const int *classes, int count);
   bool (*usbDeviceEvent)(int fd, int vendorId, int productId, int event);
   bool (*installFw)(JNIEnv *env, int fd, long progressId);
@@ -271,6 +272,7 @@ struct CoreLibrary : CoreApi {
     result.setThermals = reinterpret_cast<decltype(setThermals)>(dlsym(handle, "_armsx3_setThermals"));
     // Optional: a core built before this simply centres the image, as it always did.
     result.setRenderPosition = reinterpret_cast<decltype(setRenderPosition)>(dlsym(handle, "_armsx3_setRenderPosition"));
+    result.setCardboardVr = reinterpret_cast<decltype(setCardboardVr)>(dlsym(handle, "_armsx3_setCardboardVr"));
     // Optional: a core without it reports every port as a standard pad, as it always did.
     result.setPadDeviceClasses = reinterpret_cast<decltype(setPadDeviceClasses)>(dlsym(handle, "_armsx3_setPadDeviceClasses"));
     result.usbDeviceEvent = reinterpret_cast<decltype(usbDeviceEvent)>(dlsym(handle, "_armsx3_usbDeviceEvent"));
@@ -959,6 +961,16 @@ extern "C" JNIEXPORT void JNICALL Java_com_armsx3_core_ARMSX3_setRenderPosition(
   }
 
   coreLib.setRenderPosition(portraitTop == JNI_TRUE, topInset);
+}
+
+// Cardboard VR: the picture twice, side by side (android/src/armsx3-core.cpp, _armsx3_setCardboardVr).
+extern "C" JNIEXPORT void JNICALL Java_com_armsx3_core_ARMSX3_setCardboardVr(
+    JNIEnv *, jobject, jboolean on, jint size, jint spacing, jint vertical) {
+  if (coreLib.setCardboardVr == nullptr) {
+    return;
+  }
+
+  coreLib.setCardboardVr(on == JNI_TRUE, size, spacing, vertical);
 }
 
 extern "C" JNIEXPORT void JNICALL Java_com_armsx3_core_ARMSX3_setPadDeviceClasses(

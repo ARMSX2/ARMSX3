@@ -1537,5 +1537,13 @@
  "xmb.video.original": "الأصلي",
  "xmb.video.aspect": "نسبة العرض إلى الارتفاع",
  "xmb.keyboard.paste": "لصق",
- "xmb.video.shader.failed": "لا يمكن تشغيل هذا التظليل هنا، لذا يُعرض الفيديو بدونه."
+ "xmb.video.shader.failed": "لا يمكن تشغيل هذا التظليل هنا، لذا يُعرض الفيديو بدونه.",
+ "renderer.cardboard.label": "Cardboard VR",
+ "renderer.cardboard.description": "يعرض اللعبة مرتين جنبًا إلى جنب، صورة لكل عين، لهاتف داخل نظارة واقع افتراضي من نوع Cardboard. أمسك الهاتف بالوضع الأفقي. تمنح الألعاب ذات الأبعاد الثلاثية المجسمة كل عين منظرها الخاص عند تفعيل 3D Display Enabled في جميع إعدادات النواة وعندما تكون دقة PS3 هي 1280x720. يتم تخطي تظليل RetroArch و SGSR أثناء تفعيل هذا الوضع؛ ويظل FSR يعمل.",
+ "renderer.cardboard.size.label": "حجم صورة VR",
+ "renderer.cardboard.size.description": "مقدار ما تملؤه كل صورة من نصف الشاشة الخاص بها.",
+ "renderer.cardboard.spacing.label": "المسافة بين العينين في VR",
+ "renderer.cardboard.spacing.description": "القيم الأعلى تباعد بين الصورتين، والقيم الأقل تقربهما، لمحاذاتهما مع عدستي النظارة.",
+ "renderer.cardboard.vertical.label": "ارتفاع VR",
+ "renderer.cardboard.vertical.description": "القيم الأعلى ترفع الصورتين، والقيم الأقل تخفضهما، لمحاذاتهما مع عدستي النظارة."
 }

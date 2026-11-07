@@ -17,6 +17,8 @@ LOG_CHANNEL(screenshot_log, "SCREENSHOT");
 
 extern atomic_t<bool> g_user_asked_for_screenshot;
 extern atomic_t<recording_mode> g_recording_mode;
+// android/src/armsx3-core.cpp: Cardboard VR, packed (see _armsx3_setCardboardVr)
+extern atomic_t<u32> g_cardboard_vr;
 
 namespace gl
 {
@@ -221,6 +223,8 @@ bool GLGSRender::present_frame(const rsx::display_flip_info_t& info)
 
 	gl::texture* image_to_flip = nullptr;
 	gl::texture* image_to_flip2 = nullptr;
+	// ARMSX3 Cardboard VR: the game drew both eyes of a stereo pair into the one image_to_flip.
+	bool stereo_single_image = false;
 
 	if (res() && info.buffer < m_ctx->display_buffers_count && buffer_width && buffer_height)
 	{
@@ -256,6 +260,7 @@ bool GLGSRender::present_frame(const rsx::display_flip_info_t& info)
 				// Account for possible insets
 				const auto [unused2, scaled_buffer_height] = rsx::apply_resolution_scale<true>(RSX(m_ctx)->resolution_scaling_config, RSX_SURFACE_DIMENSION_IGNORED, buffer_height);
 				buffer_height = std::min<u32>(image_to_flip->height() - min_expected_height, scaled_buffer_height);
+				stereo_single_image = true;
 			}
 		}
 
@@ -304,7 +309,39 @@ bool GLGSRender::present_frame(const rsx::display_flip_info_t& info)
 		aspect_ratio = { 0, 0, width, height };
 	}
 
-	if (!image_to_flip || aspect_ratio.x1 || aspect_ratio.y1)
+	// Cardboard VR: the picture twice, one in each half of the screen. Same layout as VKPresent.cpp's:
+	// each picture fitted to its half as the whole one is to the window, scaled, then moved apart or
+	// together across the space beside it and up or down. Only with a game image.
+	const u32 cardboard = g_cardboard_vr.load();
+	const bool cardboard_on = (cardboard & 0x8000'0000u) && image_to_flip && width >= 2;
+	areai cardboard_eye[2]{};
+
+	if (cardboard_on)
+	{
+		const s32 half = width / 2;
+		const s32 size = s32(cardboard & 0xff);
+		const s32 spacing = s32((cardboard >> 8) & 0xff) - 128;
+		const s32 vertical = s32((cardboard >> 16) & 0xff) - 128;
+
+		areai fit = { 0, 0, half, height };
+
+		if (!g_cfg.video.stretch_to_display_area)
+		{
+			fit = static_cast<areai>(avconfig.aspect_convert_region(size2u{ buffer_width, buffer_height }, sizeu(half, height)));
+		}
+
+		const s32 w = std::max(1, fit.width() * size / 100);
+		const s32 h = std::max(1, fit.height() * size / 100);
+		const s32 room_x = std::max(0, half - w) / 2;
+		const s32 room_y = std::max(0, height - h) / 2;
+		const s32 shift_x = room_x * spacing / 100;
+		const s32 y = room_y - room_y * vertical / 100;
+
+		cardboard_eye[0] = { room_x - shift_x, y, room_x - shift_x + w, y + h };
+		cardboard_eye[1] = { half + room_x + shift_x, y, half + room_x + shift_x + w, y + h };
+	}
+
+	if (!image_to_flip || cardboard_on || aspect_ratio.x1 || aspect_ratio.y1)
 	{
 		// Clear the window background to opaque black
 		gl_state.clear_color(0, 0, 0, 255);
@@ -446,7 +483,36 @@ bool GLGSRender::present_frame(const rsx::display_flip_info_t& info)
 			}
 		}
 
-		if (!backbuffer_has_alpha && use_full_rgb_range_output && rsx::fcmp(avconfig.gamma, 1.f) && !avconfig.stereo_enabled)
+		if (cardboard_on)
+		{
+			// Each eye through the video output pass, which samples its source, so the picture can be
+			// drawn twice; a game drawing in stereo 3D gives each eye its own view, from its two
+			// images or from the two parts of its one image. FSR scales to the eye's size first (not
+			// for a pair in one image, which it would scale as one picture); the pass filters for
+			// the other modes.
+			const auto filter = m_output_scaling == output_scaling_mode::nearest ? gl::filter::nearest : gl::filter::linear;
+			const bool stereo_pair = avconfig.stereo_enabled && image_to_flip2;
+			const bool stereo_one_image = avconfig.stereo_enabled && stereo_single_image;
+			gl::texture* eye_source[2] = { image_to_flip, stereo_pair ? image_to_flip2 : image_to_flip };
+
+			if (m_output_scaling == output_scaling_mode::fsr && !stereo_one_image)
+			{
+				eye_source[0] = m_upscaler->scale_output(cmd, image_to_flip, screen_area, cardboard_eye[0].flipped_vertical(), UPSCALE_LEFT_VIEW);
+				eye_source[1] = stereo_pair
+					? m_upscaler->scale_output(cmd, image_to_flip2, screen_area, cardboard_eye[1].flipped_vertical(), UPSCALE_RIGHT_VIEW)
+					: eye_source[0];
+			}
+
+			gl::screen.bind();
+
+			for (u32 eye = 0; eye < 2; ++eye)
+			{
+				rsx::simple_array<GLuint> source{ eye_source[eye] ? eye_source[eye]->id() : GL_NONE, GL_NONE };
+				m_video_output_pass.run(cmd, areau(cardboard_eye[eye]), source, avconfig.gamma, !use_full_rgb_range_output, false, filter,
+					stereo_one_image ? s32(eye) : -1);
+			}
+		}
+		else if (!backbuffer_has_alpha && use_full_rgb_range_output && rsx::fcmp(avconfig.gamma, 1.f) && !avconfig.stereo_enabled)
 		{
 			// Blit source image to the screen
 			m_upscaler->scale_output(cmd, image_to_flip, screen_area, aspect_ratio.flipped_vertical(), UPSCALE_AND_COMMIT | UPSCALE_DEFAULT_VIEW);
@@ -472,7 +538,32 @@ bool GLGSRender::present_frame(const rsx::display_flip_info_t& info)
 		}
 	}
 
-	render_overlays(nullptr, areau(aspect_ratio));
+	if (cardboard_on)
+	{
+		// The picture's overlays in each eye, the window-space ones once; the second eye does not step them.
+		if (overlay_manager && overlay_manager->has_visible())
+		{
+			gl::screen.bind();
+			std::lock_guard lock(*overlay_manager);
+
+			const areau display_area = {0, 0, static_cast<u32>(m_frame->client_width()), static_cast<u32>(m_frame->client_height())};
+			for (const auto& view : overlay_manager->get_views())
+			{
+				if (view->use_window_space)
+				{
+					m_ui_renderer.run(cmd, display_area, 0, *view.get(), false);
+					continue;
+				}
+
+				m_ui_renderer.run(cmd, areau(cardboard_eye[0]), 0, *view.get(), false);
+				m_ui_renderer.run(cmd, areau(cardboard_eye[1]), 0, *view.get(), false, false);
+			}
+		}
+	}
+	else
+	{
+		render_overlays(nullptr, areau(aspect_ratio));
+	}
 
 	if (g_cfg.video.debug_overlay && res())
 	{

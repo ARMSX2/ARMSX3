@@ -1537,5 +1537,13 @@
  "xmb.video.original": "原始",
  "xmb.video.aspect": "宽高比",
  "xmb.keyboard.paste": "粘贴",
- "xmb.video.shader.failed": "此着色器无法在这里运行，视频将不使用它播放。"
+ "xmb.video.shader.failed": "此着色器无法在这里运行，视频将不使用它播放。",
+ "renderer.cardboard.label": "Cardboard VR",
+ "renderer.cardboard.description": "将游戏左右并排显示两次，每只眼睛一个画面，适用于放入 Cardboard 式 VR 眼镜的手机。请横向握持手机。支持立体 3D 的游戏在所有核心设置中开启 3D Display Enabled 且 PS3 分辨率为 1280x720 时，会为每只眼睛提供各自的视角。开启此模式时会跳过 RetroArch 着色器和 SGSR；FSR 仍可使用。",
+ "renderer.cardboard.size.label": "VR 画面大小",
+ "renderer.cardboard.size.description": "每个画面占其所在半屏的比例。",
+ "renderer.cardboard.spacing.label": "VR 双眼间距",
+ "renderer.cardboard.spacing.description": "数值越高两个画面越分开，越低越靠近，用于对准眼镜的镜片。",
+ "renderer.cardboard.vertical.label": "VR 高度",
+ "renderer.cardboard.vertical.description": "数值越高两个画面越靠上，越低越靠下，用于对准眼镜的镜片。"
 }

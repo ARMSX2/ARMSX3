@@ -675,6 +675,15 @@ data class Settings(
      *  centering (false), so the bottom is free for touch controls. Applied live via
      *  NativeApp.setPortraitRenderTop; only affects a portrait window. */
     val portraitRenderTop: Boolean = true,
+    /** Cardboard VR: the picture twice, side by side, for a phone in a VR headset (the ARMSX2
+     *  community asked for PPSSPP's mode). Size is each picture's width in % of its half of the
+     *  screen (20-100); spacing moves the two apart (+) or together (-) and vertical moves them up
+     *  (+) or down (-), each -100..100 of the room they have. Applied live via
+     *  NativeApp.setCardboardVr; drawn by the core's presenter (VKPresent.cpp, GLPresent.cpp). */
+    val cardboardVr: Boolean = false,
+    val cardboardVrSize: Int = 80,
+    val cardboardVrSpacing: Int = 0,
+    val cardboardVrVertical: Int = 0,
     /** Auto Progressive Scan: hold Triangle+Cross on port 1 through the boot sequence, which is
      *  the real-console combo a number of PS2 titles probe to offer 480p progressive output
      *  (Tekken 4, several Criterion games). Purely a synthetic pad hold — no core setting — so it
@@ -1312,6 +1321,8 @@ data class Settings(
         // GS-thread global, applied live; no persisted EmuCore key needed.
         if (emitSink == null) NativeApp.setFrameSkip(frameSkip.coerceIn(0, 5))
         if (emitSink == null) NativeApp.setPortraitRenderTop(portraitRenderTop)
+        if (emitSink == null) NativeApp.setCardboardVr(cardboardVr, cardboardVrSize.coerceIn(20, 100),
+            cardboardVrSpacing.coerceIn(-100, 100), cardboardVrVertical.coerceIn(-100, 100))
         // Audio (SPU2). Volume/mute are live native setters; the rest are written
         // to the base layer and applied on commit (SPU2 stream reconfigure).
         if (emitSink == null) NativeApp.setAudioVolume(audioVolume.coerceIn(0, 200))
@@ -2314,6 +2325,10 @@ data class Settings(
         put("customDriverId", customDriverId)
         put("orientation", orientation)
         put("portraitRenderTop", portraitRenderTop)
+        put("cardboardVr", cardboardVr)
+        put("cardboardVrSize", cardboardVrSize)
+        put("cardboardVrSpacing", cardboardVrSpacing)
+        put("cardboardVrVertical", cardboardVrVertical)
         put("autoProgressiveScan", autoProgressiveScan)
         put("affinityMode", affinityMode)
         put("framerateNtsc", framerateNtsc.toDouble())
@@ -2688,6 +2703,10 @@ data class Settings(
                 customDriverId = json.optString("customDriverId", def.customDriverId),
                 orientation = json.optInt("orientation", def.orientation),
                 portraitRenderTop = json.optBoolean("portraitRenderTop", def.portraitRenderTop),
+                cardboardVr = json.optBoolean("cardboardVr", def.cardboardVr),
+                cardboardVrSize = json.optInt("cardboardVrSize", def.cardboardVrSize).coerceIn(20, 100),
+                cardboardVrSpacing = json.optInt("cardboardVrSpacing", def.cardboardVrSpacing).coerceIn(-100, 100),
+                cardboardVrVertical = json.optInt("cardboardVrVertical", def.cardboardVrVertical).coerceIn(-100, 100),
                 autoProgressiveScan = json.optBoolean("autoProgressiveScan", def.autoProgressiveScan),
                 affinityMode = json.optInt("affinityMode", def.affinityMode),
                 framerateNtsc = json.optDouble("framerateNtsc", def.framerateNtsc.toDouble()).toFloat(),
@@ -3030,6 +3049,10 @@ data class Settings(
             if (current.customDriverId != base.customDriverId) j.put("customDriverId", current.customDriverId)
             if (current.orientation != base.orientation) j.put("orientation", current.orientation)
             if (current.portraitRenderTop != base.portraitRenderTop) j.put("portraitRenderTop", current.portraitRenderTop)
+            if (current.cardboardVr != base.cardboardVr) j.put("cardboardVr", current.cardboardVr)
+            if (current.cardboardVrSize != base.cardboardVrSize) j.put("cardboardVrSize", current.cardboardVrSize)
+            if (current.cardboardVrSpacing != base.cardboardVrSpacing) j.put("cardboardVrSpacing", current.cardboardVrSpacing)
+            if (current.cardboardVrVertical != base.cardboardVrVertical) j.put("cardboardVrVertical", current.cardboardVrVertical)
             if (current.autoProgressiveScan != base.autoProgressiveScan) j.put("autoProgressiveScan", current.autoProgressiveScan)
             if (current.affinityMode != base.affinityMode) j.put("affinityMode", current.affinityMode)
             if (current.framerateNtsc != base.framerateNtsc) j.put("framerateNtsc", current.framerateNtsc.toDouble())
@@ -3359,6 +3382,10 @@ data class Settings(
             customDriverId = if (overrides.has("customDriverId")) overrides.getString("customDriverId") else base.customDriverId,
             orientation = if (overrides.has("orientation")) overrides.getInt("orientation") else base.orientation,
             portraitRenderTop = if (overrides.has("portraitRenderTop")) overrides.getBoolean("portraitRenderTop") else base.portraitRenderTop,
+            cardboardVr = if (overrides.has("cardboardVr")) overrides.getBoolean("cardboardVr") else base.cardboardVr,
+            cardboardVrSize = if (overrides.has("cardboardVrSize")) overrides.getInt("cardboardVrSize").coerceIn(20, 100) else base.cardboardVrSize,
+            cardboardVrSpacing = if (overrides.has("cardboardVrSpacing")) overrides.getInt("cardboardVrSpacing").coerceIn(-100, 100) else base.cardboardVrSpacing,
+            cardboardVrVertical = if (overrides.has("cardboardVrVertical")) overrides.getInt("cardboardVrVertical").coerceIn(-100, 100) else base.cardboardVrVertical,
             autoProgressiveScan = if (overrides.has("autoProgressiveScan")) overrides.getBoolean("autoProgressiveScan") else base.autoProgressiveScan,
             affinityMode = if (overrides.has("affinityMode")) overrides.getInt("affinityMode") else base.affinityMode,
             framerateNtsc = if (overrides.has("framerateNtsc")) overrides.getDouble("framerateNtsc").toFloat() else base.framerateNtsc,

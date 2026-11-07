@@ -444,6 +444,16 @@ public final class NativeApp {
         pushRenderPosition();
     }
 
+    /** Cardboard VR (see Settings.cardboardVr): the picture twice, side by side, for a phone in a VR
+     *  headset. Sent whole on every change, from applyTo, like the render position above. */
+    public static void setCardboardVr(boolean on, int size, int spacing, int vertical) {
+        try {
+            com.armsx3.core.ARMSX3.Companion.getInstance().setCardboardVr(on, size, spacing, vertical);
+        } catch (Throwable ignored) {
+            // A core without the symbol shows the single picture, as before.
+        }
+    }
+
     // ===== Audio =====
 
     /**

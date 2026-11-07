@@ -82,6 +82,8 @@ internal val SETTINGS_SEARCH_INDEX: List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry("renderer.ps3Resolution.label", true, SettingsCategory.Graphics),
     SettingsSearchEntry("renderer.orientation.label", true, SettingsCategory.Graphics),
     SettingsSearchEntry("renderer.portraitPosition.label", true, SettingsCategory.Graphics),
+    // Only the toggle: the three VR adjustments are not on screen until it is on.
+    SettingsSearchEntry("renderer.cardboard.label", true, SettingsCategory.Graphics),
     SettingsSearchEntry("renderer.section.outputScaling", true, SettingsCategory.Graphics),
     SettingsSearchEntry("renderer.outputScaling.label", true, SettingsCategory.Graphics),
     SettingsSearchEntry("renderer.cas.sharpness.fsr", true, SettingsCategory.Graphics),

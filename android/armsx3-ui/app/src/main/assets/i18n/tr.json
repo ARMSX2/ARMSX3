@@ -1537,5 +1537,13 @@
  "xmb.video.original": "Orijinal",
  "xmb.video.aspect": "En Boy Oranı",
  "xmb.keyboard.paste": "Yapıştır",
- "xmb.video.shader.failed": "Bu gölgelendirici burada çalışamıyor, bu yüzden video onsuz oynatılıyor."
+ "xmb.video.shader.failed": "Bu gölgelendirici burada çalışamıyor, bu yüzden video onsuz oynatılıyor.",
+ "renderer.cardboard.label": "Cardboard VR",
+ "renderer.cardboard.description": "Oyunu yan yana iki kez, her göz için bir görüntü olarak gösterir; Cardboard tarzı bir VR gözlüğüne takılan telefon içindir. Telefonu yatay tutun. Stereo 3D destekli oyunlar, Tüm Çekirdek Ayarları'nda 3D Display Enabled açık ve PS3 çözünürlüğü 1280x720 olduğunda her göze kendi görüntüsünü verir. Bu mod açıkken RetroArch gölgelendiricileri ve SGSR atlanır; FSR çalışmaya devam eder.",
+ "renderer.cardboard.size.label": "VR Görüntü Boyutu",
+ "renderer.cardboard.size.description": "Her görüntünün kendi ekran yarısını ne kadar doldurduğu.",
+ "renderer.cardboard.spacing.label": "VR Göz Aralığı",
+ "renderer.cardboard.spacing.description": "Yüksek değerler iki görüntüyü birbirinden uzaklaştırır, düşük değerler yakınlaştırır; böylece gözlüğün lensleriyle hizalanırlar.",
+ "renderer.cardboard.vertical.label": "VR Yüksekliği",
+ "renderer.cardboard.vertical.description": "Yüksek değerler iki görüntüyü yukarı, düşük değerler aşağı taşır; böylece gözlüğün lensleriyle hizalanırlar."
 }

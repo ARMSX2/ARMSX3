@@ -1537,5 +1537,13 @@
  "xmb.video.original": "Gốc",
  "xmb.video.aspect": "Tỷ lệ khung hình",
  "xmb.keyboard.paste": "Dán",
- "xmb.video.shader.failed": "Shader này không chạy được ở đây nên video được phát mà không có nó."
+ "xmb.video.shader.failed": "Shader này không chạy được ở đây nên video được phát mà không có nó.",
+ "renderer.cardboard.label": "Cardboard VR",
+ "renderer.cardboard.description": "Hiển thị trò chơi hai lần, cạnh nhau, mỗi mắt một hình, dành cho điện thoại đặt trong kính VR kiểu Cardboard. Hãy cầm điện thoại theo chiều ngang. Trò chơi có 3D lập thể sẽ cho mỗi mắt một góc nhìn riêng khi bật 3D Display Enabled trong Tất cả cài đặt lõi và độ phân giải PS3 là 1280x720. Shader RetroArch và SGSR bị bỏ qua khi bật chế độ này; FSR vẫn hoạt động.",
+ "renderer.cardboard.size.label": "Kích thước hình VR",
+ "renderer.cardboard.size.description": "Mỗi hình lấp đầy bao nhiêu phần nửa màn hình của nó.",
+ "renderer.cardboard.spacing.label": "Khoảng cách mắt VR",
+ "renderer.cardboard.spacing.description": "Giá trị cao hơn đẩy hai hình ra xa nhau, giá trị thấp hơn kéo chúng lại gần, để khớp với thấu kính của kính.",
+ "renderer.cardboard.vertical.label": "Độ cao VR",
+ "renderer.cardboard.vertical.description": "Giá trị cao hơn đưa cả hai hình lên, giá trị thấp hơn đưa xuống, để khớp với thấu kính của kính."
 }
