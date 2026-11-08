@@ -11,7 +11,7 @@ namespace rsx
 	{
 		u32 addr = 0;
 		u32 length = 0;
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 		bool enabled = false; // Whether a lock was taken at construction, so a zero length can still mean re-lock
 #endif
 
@@ -24,7 +24,7 @@ namespace rsx
 
 			this->addr = addr;
 			this->length = length;
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 			enabled = true;
 #endif
 		}
@@ -80,7 +80,7 @@ namespace rsx
 		template <typename T = void>
 		void update_if_enabled(u32 addr, u32 _length, const std::add_pointer_t<T>& lock_release = std::add_pointer_t<void>{})
 		{
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 			if (!enabled)
 			{
 				return;
@@ -98,7 +98,7 @@ namespace rsx
 				(this->addr / rsx_iomap_table::c_lock_stride) != (addr / rsx_iomap_table::c_lock_stride) ||  // Lock-addr and test-addr have different locks, update
 				(addr % rsx_iomap_table::c_lock_stride + _length) > rsx_iomap_table::c_lock_stride;          // Test range spills beyond our base section
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 			// A zero length (after unlock, or a failed lock_range) re-locks below
 			if (length && !should_update)
 #else
