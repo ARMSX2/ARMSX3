@@ -164,6 +164,15 @@ private:
 	u32 m_async_skipped_first_write = 0;
 	static constexpr u32 sync_compile_max_fp_ucode_bytes = 32;
 
+	// Program loads that missed the cache this frame and how long the RSX thread spent in them, logged in flip()
+	u32 m_program_misses = 0;
+	u64 m_program_miss_us = 0;
+	u64 m_program_miss_max_us = 0;
+	u32 m_program_inline = 0;
+	u32 m_program_inline_tiny = 0;
+	u64 m_program_inline_us = 0;
+	u64 m_program_inline_max_us = 0;
+
 	// iOS kills the app before the GPU reports pressure, so the texture cache is held to its quota at frame end
 	void enforce_texture_cache_quota();
 

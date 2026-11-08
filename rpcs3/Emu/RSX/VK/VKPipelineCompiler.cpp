@@ -7,6 +7,10 @@
 #if defined(__APPLE__) && defined(ARCH_ARM64)
 #include <sys/sysctl.h>
 #endif
+#ifdef __APPLE__
+#include "Emu/Cell/timers.hpp"
+#include <pthread.h>
+#endif
 #include "Emu/system_config.h"
 
 #include "util/sysinfo.hpp"
@@ -20,6 +24,24 @@ namespace vk
 #ifdef __APPLE__
 	// Set by destroy only, so a Stop drops queued compiles; a resize must still compile them.
 	atomic_t<bool> g_pipe_compilers_stopping{};
+	pipe_compile_stats g_pipe_compile_stats;
+
+	static void note_pipe_compile(u64 started_us)
+	{
+		const u64 us = get_system_time() - started_us;
+		qos_class_t qos = QOS_CLASS_UNSPECIFIED;
+		pthread_get_qos_class_np(pthread_self(), &qos, nullptr);
+
+		g_pipe_compile_stats.jobs++;
+		g_pipe_compile_stats.total_us += us;
+
+		// Racy max, good enough for a log line.
+		if (us > g_pipe_compile_stats.max_us.observe())
+		{
+			g_pipe_compile_stats.max_us.release(us);
+			g_pipe_compile_stats.max_qos.release(static_cast<u32>(qos));
+		}
+	}
 #endif
 	VkPipelineCache g_pipeline_cache = VK_NULL_HANDLE;
 
@@ -179,9 +201,15 @@ namespace vk
 					continue;
 				}
 
+#ifdef __APPLE__
+				const u64 started_us = get_system_time();
+#endif
 				if (job.create_info_func)
 				{
 					auto compiled = int_compile_graphics_pipe(job.create_info_func, job.inputs, {}, job.flags);
+#ifdef __APPLE__
+					note_pipe_compile(started_us);
+#endif
 					job.callback_func(compiled);
 #ifdef __APPLE__
 					m_pending_jobs--;
@@ -190,6 +218,9 @@ namespace vk
 				}
 
 				auto compiled = int_compile_graphics_pipe(job.graphics_data, job.graphics_modules, job.inputs, {}, job.flags, &job.vtx_spec);
+#ifdef __APPLE__
+				note_pipe_compile(started_us);
+#endif
 				job.callback_func(compiled);
 #ifdef __APPLE__
 				m_pending_jobs--;
