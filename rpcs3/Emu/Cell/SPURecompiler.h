@@ -144,7 +144,7 @@ class spu_runtime
 	// on module name (the per-block program hash) and validates nothing else, so every input
 	// that can change emitted code must be folded into this path. See the spu_runtime ctor.
 	std::string m_obj_cache_path;
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__APPLE__) && defined(ARCH_ARM64))
 	// The key's settings as they were at boot (spu_obj_cache_settings in SPUCommonRecompiler.cpp)
 	u64 m_obj_cache_settings = 0;
 #endif
@@ -180,7 +180,7 @@ public:
 
 	// Empty when the persistent object cache is off; callers must fall back to an
 	// uncached jit add() in that case.
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__APPLE__) && defined(ARCH_ARM64))
 	// Also empty once a setting folded into the key has changed since boot.
 	const std::string& get_obj_cache_path() const;
 #else

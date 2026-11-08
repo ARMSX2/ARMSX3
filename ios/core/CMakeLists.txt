@@ -30,6 +30,14 @@ set(ARMSX3_SPU_CODEGEN_SOURCES
     ios/core/vm_reservation_slot.h
     rpcs3/Emu/Cell/SPUOpcodes.h
     rpcs3/Emu/Cell/SPUAnalyser.h
+    # The GHC frame pass rewrites every SPU function's prologue and returns as inline asm
+    rpcs3/Emu/CPU/Backends/AArch64/AArch64JIT.cpp
+    rpcs3/Emu/CPU/Backends/AArch64/AArch64JIT.h
+    rpcs3/Emu/CPU/Backends/AArch64/AArch64ASM.cpp
+    rpcs3/Emu/CPU/Backends/AArch64/AArch64ASM.h
+    rpcs3/Emu/CPU/Backends/AArch64/AArch64Common.h
+    # spu_mfc_cmd sits inside spu_thread, whose offsets the emitted code bakes in
+    rpcs3/Emu/Cell/MFC.h
 )
 set(_armsx3_spu_identity_input "")
 foreach(_armsx3_path IN LISTS ARMSX3_SPU_CODEGEN_SOURCES)

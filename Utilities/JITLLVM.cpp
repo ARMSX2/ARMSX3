@@ -1126,7 +1126,7 @@ public:
 			}
 		};
 #endif
-#if defined(__ANDROID__) && defined(ARCH_ARM64)
+#if (defined(__ANDROID__) || defined(__APPLE__)) && defined(ARCH_ARM64)
 		// Never the write that fills the disk. fs::file::write treats a failed write as fatal (an
 		// ensure, so ENOSPC ends the app), and the SPU object cache writes during play on storage it
 		// shares with everything else. So each SPU object is written only while at least 512 MB

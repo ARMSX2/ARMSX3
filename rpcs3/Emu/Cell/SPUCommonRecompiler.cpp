@@ -1707,7 +1707,7 @@ void spu_cache::initialize(bool build_existing_cache)
 		spu_log.notice("SPU object cache: hits=%u misses=%u rejected=%u not_persisted=%u written=%u write_failed=%u evicted=%u validate_ms=%.1f walk_ms=%.1f",
 			st.hits.load(), st.misses.load(), st.rejected.load(), st.not_persisted.load(), st.written.load(), st.write_failed.load(), st.evicted.load(),
 			st.validate_ns.load() / 1e6, st.walk_ns.load() / 1e6);
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__APPLE__)
 		if (const u64 skipped = st.skipped_low_space.load())
 		{
 			spu_log.notice("SPU object cache: %u objects not written, as free space was under its margin", skipped);
@@ -1929,6 +1929,8 @@ static std::string spu_obj_cache_parent(const std::string& game_cache)
 	return fmt::format("%sspuobj/other/%s/", g_android_private_cache_dir, fmt::base57(digest, 16));
 }
 
+#endif
+#if defined(__ANDROID__) || (defined(__APPLE__) && defined(ARCH_ARM64))
 // The g_cfg values folded into the object cache key, packed bit for bit. The key is made once at
 // boot, but a setting can still change during play (Accurate RSX reservation access is dynamic),
 // and code compiled after such a change must neither be written under the boot key nor mixed with
@@ -2160,7 +2162,6 @@ spu_runtime::spu_runtime()
 		fold(hw2);
 		const u32 spu_decoder = static_cast<u32>(g_cfg.core.spu_decoder.get());
 		fold(spu_decoder);
-		m_obj_cache_settings = spu_obj_cache_settings();
 		const auto [app_commit, app_hash] = rpcs3::get_commit_and_hash();
 		sha1_update(&ctx, reinterpret_cast<const u8*>(app_commit.data()), app_commit.size());
 		sha1_update(&ctx, reinterpret_cast<const u8*>(app_hash.data()), app_hash.size());
@@ -2171,6 +2172,9 @@ spu_runtime::spu_runtime()
 		spu_log.notice("SPU object cache key: build %s, commit %s-%s", build_id.empty() ? "(no build ID)" : build_id, app_commit, app_hash);
 
 #endif
+		// The key's settings as they are now, so a change during play turns the cache off (get_obj_cache_path)
+		m_obj_cache_settings = spu_obj_cache_settings();
+
 		sha1_finish(&ctx, key);
 
 #ifdef __ANDROID__
@@ -2300,29 +2304,28 @@ spu_runtime::spu_runtime()
 		}
 
 #ifdef __ANDROID__
-		// Saves come before the cache: a failed write is fatal, and the cache writes a file for
-		// every new block during play, so below this much free space the boot compiles as before
-		// and uses no cache. Each write also keeps 512 MB free (JITLLVM.cpp), Android's own
-		// "storage low" line on large phones, and the whole cache is about 10 MB for a game of
-		// 2442 functions on internal storage (11-08), so 1 GB is room to start.
+		if (const char* why = spu_obj_cache_off_reason(); why && !m_obj_cache_path.empty())
+		{
+			spu_log.notice("SPU object cache off for this boot: %s is set", why);
+			m_obj_cache_path.clear();
+		}
+#endif
+
+		// Saves come before the cache: a failed write is fatal (an ensure in fs::file::write), and
+		// the cache writes a file for every new block during play, so below this much free space
+		// the boot compiles as before and uses no cache. Each write also keeps 512 MB free
+		// (JITLLVM.cpp), Android's own "storage low" line on large phones, and the whole cache is
+		// about 10 MB for a game of 2442 functions on Android's internal storage (11-08), so 1 GB
+		// is room to start.
 		constexpr u64 SPU_OBJ_CACHE_MIN_FREE = 1ull << 30;
 		fs::device_stat free_stat{};
 
-		if (!m_obj_cache_path.empty())
+		if (!m_obj_cache_path.empty() && (!fs::statfs(m_obj_cache_path, free_stat) || free_stat.avail_free < SPU_OBJ_CACHE_MIN_FREE))
 		{
-			if (const char* why = spu_obj_cache_off_reason())
-			{
-				spu_log.notice("SPU object cache off for this boot: %s is set", why);
-				m_obj_cache_path.clear();
-			}
-			else if (!fs::statfs(m_obj_cache_path, free_stat) || free_stat.avail_free < SPU_OBJ_CACHE_MIN_FREE)
-			{
-				spu_log.notice("SPU object cache off for this boot: %u MB free, under the %u MB it keeps for saves",
-					free_stat.avail_free >> 20, SPU_OBJ_CACHE_MIN_FREE >> 20);
-				m_obj_cache_path.clear();
-			}
+			spu_log.notice("SPU object cache off for this boot: %u MB free, under the %u MB it keeps for saves",
+				free_stat.avail_free >> 20, SPU_OBJ_CACHE_MIN_FREE >> 20);
+			m_obj_cache_path.clear();
 		}
-#endif
 	}
 #endif
 }

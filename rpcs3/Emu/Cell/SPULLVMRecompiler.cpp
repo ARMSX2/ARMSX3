@@ -2026,7 +2026,7 @@ public:
 			// after the XER fix). Bump this letter whenever ARM64 SPU codegen changes semantics.
 			fmt::append(m_hash, "__spu-a-0x%05x-%s", func.entry_point, fmt::base57(output));
 
-#if defined(__ANDROID__) && defined(ARCH_ARM64)
+#if (defined(__ANDROID__) || defined(__APPLE__)) && defined(ARCH_ARM64)
 			// The name is also the persistent object cache's only key per function, and the code
 			// emitted for it depends on where the function's code starts as well (compile() begins
 			// at m_pos = lower_bound). The same bytes and entry with a different start would share
