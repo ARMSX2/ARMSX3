@@ -1477,7 +1477,7 @@ void spu_cache::initialize(bool build_existing_cache)
 			}
 
 			// Clear fake LS
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 			std::memset(ls.data() + start / 4, 0, 4 * size0);
 #else
 			std::memset(ls.data() + start / 4, 0, 4 * (size0 - 1));
@@ -10843,7 +10843,7 @@ struct spu_llvm_worker
 			}
 
 			// Clear fake LS
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 			std::memset(ls.data() + start / 4, 0, 4 * size0);
 #else
 			std::memset(ls.data() + start / 4, 0, 4 * (size0 - 1));
