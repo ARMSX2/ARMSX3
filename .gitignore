@@ -164,5 +164,21 @@ android/**/cpp/libadrenotools/
 
 # Kotlin incremental-compile scratch dir
 android/armsx3-ui/.kotlin/
+
+# Code-signing material.
+*.p12
+*.mobileprovision
+*.certSigningRequest
+
+# The Xcode project is generated from ios/project.yml.
+ios/*.xcodeproj/
+
+# iOS build trees and fetched dependencies.
+ios/build-ios-xcode/
+ios/build/
+ios/build-deps/
+ios/3rdparty/
+ios/tests/__pycache__/
+
 # claude
 CLAUDE.md

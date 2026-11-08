@@ -117,7 +117,8 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "RPCS3 can only be compiled on 64-bit platforms.")
 endif()
 
-if(APPLE AND CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
+# Keep the host's Homebrew libraries out of the iOS cross-compile.
+if(APPLE AND NOT IOS AND CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
     list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew")
     list(APPEND CMAKE_SYSTEM_PREFIX_PATH "/opt/homebrew")
 endif()
@@ -131,6 +132,19 @@ endif()
 # unguarded, so the target has to exist before 3rdparty/ is processed.
 if(ANDROID)
     include(${CMAKE_CURRENT_SOURCE_DIR}/android/ffmpeg.cmake)
+endif()
+
+# The iOS find modules must set their cache variables before 3rdparty is configured.
+if(IOS)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ios/cmake/IosVulkan.cmake")
+        include(${CMAKE_CURRENT_SOURCE_DIR}/ios/cmake/IosVulkan.cmake)
+    endif()
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ios/cmake/IosFfmpeg.cmake")
+        include(${CMAKE_CURRENT_SOURCE_DIR}/ios/cmake/IosFfmpeg.cmake)
+    endif()
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ios/cmake/IosLlvm.cmake")
+        include(${CMAKE_CURRENT_SOURCE_DIR}/ios/cmake/IosLlvm.cmake)
+    endif()
 endif()
 
 add_subdirectory(3rdparty)
@@ -167,10 +181,25 @@ if(BUILD_RPCS3_TESTS)
 endif()
 add_subdirectory(rpcs3)
 
+# Port seam sources and include directory, added to rpcs3_emu on Apple only.
+if(APPLE)
+    add_subdirectory(ios/core)
+endif()
+
 # ARMSX3: the Android JNI shared library. Kept behind ANDROID so desktop builds
 # are byte-for-byte unaffected.
 if(ANDROID)
     add_subdirectory(android)
+endif()
+
+# Added after rpcs3 because it adds sources to rpcs3_emu.
+if(IOS)
+    add_subdirectory(ios)
+endif()
+
+# The frontend callback table the iOS app links.
+if(IOS)
+    add_subdirectory(ios/bridge)
 endif()
 
 set_directory_properties(PROPERTIES VS_STARTUP_PROJECT rpcs3)

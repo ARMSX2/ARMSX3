@@ -109,17 +109,27 @@ else()
 	else()
 		# we don't have the system libusb, so we compile from submodule
 		unset(LIBUSB_LIBRARIES CACHE)
-		add_subdirectory(libusb EXCLUDE_FROM_ALL)
+		# libusb does not configure for iOS; an empty target keeps the 3rdparty::libusb alias valid.
+		if(NOT IOS)
+			add_subdirectory(libusb EXCLUDE_FROM_ALL)
 
-		if (NOT TARGET usb-1.0 AND TARGET usb-1.0-static)
-			add_library(usb-1.0 ALIAS usb-1.0-static)
+			if (NOT TARGET usb-1.0 AND TARGET usb-1.0-static)
+				add_library(usb-1.0 ALIAS usb-1.0-static)
+			endif()
+		else()
+			add_library(usb-1.0-static INTERFACE)
 		endif()
 	endif()
 endif()
 
 
 # hidapi
-add_subdirectory(hidapi)
+if(NOT IOS)
+	add_subdirectory(hidapi)
+else()
+	# hidapi's darwin backend needs IOKit HID, which iOS lacks; an empty target keeps the alias valid.
+	add_library(3rdparty_hidapi INTERFACE)
+endif()
 
 # glslang
 add_subdirectory(glslang EXCLUDE_FROM_ALL)
