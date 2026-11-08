@@ -1323,6 +1323,11 @@ void VKGSRender::on_semaphore_acquire_wait()
 #endif
 }
 
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+// Set while the frame-end quota check asks on_vram_exhausted for an eviction
+static bool s_texture_quota_eviction = false;
+#endif
+
 bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)
 {
 	ensure(rsx::get_current_renderer()->is_current_thread());
@@ -1371,7 +1376,7 @@ bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)
 #if TARGET_OS_IPHONE
 	// iOS is often killed before fatal, so evict at severe too, at most every 5 s as it needs the hard sync
 	static std::chrono::steady_clock::time_point s_last_severe_eviction{};
-	bool severe_eviction = false;
+	bool severe_eviction = s_texture_quota_eviction;
 
 	if (const auto now = std::chrono::steady_clock::now();
 		severity == rsx::problem_severity::severe && resources && now - s_last_severe_eviction >= std::chrono::seconds(5))
@@ -1541,6 +1546,45 @@ bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)
 
 	return any_cache_relieved;
 }
+
+#ifdef __APPLE__
+void VKGSRender::enforce_texture_cache_quota()
+{
+#if TARGET_OS_IPHONE
+	// Once a second, as is_overallocated logs each time it trips
+	static std::chrono::steady_clock::time_point s_last_check{};
+	static bool s_released_without_sync = false;
+
+	const auto resources = res();
+	const auto now = std::chrono::steady_clock::now();
+	if (!resources || now - s_last_check < std::chrono::seconds(1))
+	{
+		return;
+	}
+
+	s_last_check = now;
+	if (!resources->texture_cache.is_overallocated())
+	{
+		s_released_without_sync = false;
+		return;
+	}
+
+	if (!s_released_without_sync)
+	{
+		// Released sections and temporary copies go first, as dropping them needs no hard sync
+		s_released_without_sync = true;
+		resources->texture_cache.handle_memory_pressure(rsx::problem_severity::moderate);
+		return;
+	}
+
+	// Still over a second later, so evict unused textures; low severity leaves the surface cache alone
+	s_released_without_sync = false;
+	s_texture_quota_eviction = true;
+	on_vram_exhausted(rsx::problem_severity::low);
+	s_texture_quota_eviction = false;
+#endif
+}
+#endif
 
 void VKGSRender::on_descriptor_pool_fragmentation(bool is_fatal)
 {

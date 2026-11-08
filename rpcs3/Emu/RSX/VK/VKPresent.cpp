@@ -816,6 +816,9 @@ void VKGSRender::advance_queued_frames()
 	// Run video memory balancer
 	m_device->rebalance_memory_type_usage();
 	vk::vmm_check_memory_usage();
+#ifdef __APPLE__
+	enforce_texture_cache_quota();
+#endif
 
 	if (const auto resources = res())
 	{
