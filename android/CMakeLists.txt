@@ -94,6 +94,23 @@ target_include_directories(rpcs3_emu PRIVATE
     ${CMAKE_SOURCE_DIR}/3rdparty/librashader/include
 )
 
+# The SPU object cache key's code identity (spu_codegen_identity.py, which says what it covers).
+# Worked out on every build before anything in rpcs3_emu compiles, so no core can be built with an
+# identity its own sources did not produce, whatever builds it. Each build directory has its own,
+# since each variant compiles with its own flags; only SPUCommonRecompiler.cpp includes it, and
+# the header is rewritten only when the identity changes.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(ARMSX3_SPU_IDENTITY_DIR "${CMAKE_CURRENT_BINARY_DIR}/spu_codegen_identity")
+add_custom_target(armsx3_spu_codegen_identity
+    COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_CURRENT_SOURCE_DIR}/spu_codegen_identity.py"
+        "${CMAKE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}" "${ARMSX3_SPU_IDENTITY_DIR}/spu_codegen_identity_android.h"
+    BYPRODUCTS "${ARMSX3_SPU_IDENTITY_DIR}/spu_codegen_identity_android.h"
+    VERBATIM)
+add_dependencies(rpcs3_emu armsx3_spu_codegen_identity)
+# A per-source include directory, so no other translation unit's command line changes.
+set_property(SOURCE "${CMAKE_SOURCE_DIR}/rpcs3/Emu/Cell/SPUCommonRecompiler.cpp"
+    TARGET_DIRECTORY rpcs3_emu APPEND PROPERTY INCLUDE_DIRECTORIES "${ARMSX3_SPU_IDENTITY_DIR}")
+
 target_include_directories(armsx3-core PRIVATE
     ${CMAKE_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/rpcs3

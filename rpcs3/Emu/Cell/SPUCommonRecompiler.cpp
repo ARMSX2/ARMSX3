@@ -47,6 +47,15 @@
 #include "rpcs3_version.h"
 #include <elf.h>
 #include <link.h>
+// The SPU object cache key's code identity, which android/spu_codegen_identity.py writes into the
+// build directory before anything here compiles. While that script hashes this file a placeholder
+// stands in, so the file does not depend on its own result and is otherwise hashed exactly as it
+// compiles. Without the header the key falls back to the build itself.
+#if defined(ARMSX3_SPU_IDENTITY_HASHING)
+#define ARMSX3_ANDROID_SPU_CODEGEN_IDENTITY "hashing"
+#elif __has_include(<spu_codegen_identity_android.h>)
+#include <spu_codegen_identity_android.h>
+#endif
 #endif
 
 const extern spu_decoder<spu_itype> g_spu_itype;
@@ -1810,7 +1819,9 @@ static const char* spu_obj_cache_off_reason()
 		return "ARMSX3_SPU_OBJ_CACHE=0";
 	}
 
-	for (const char* lever : {"ARMSX3_SPU_INTERP", "ARMSX3_SPU_INTERP_RANGE", "ARMSX3_SPU_TRAP_PC", "ARMSX3_SHUFB_CHECK", "ARMSX3_SHUFB_SKIP"})
+	// ARMSX3_WATCH_LS and ARMSX3_KZ3_SYNC make WRCH call the C++ DMA path instead of inlining the
+	// transfer (spu_ls_watch_enabled, kz3_sync_probe_enabled), so a cached object would bypass them.
+	for (const char* lever : {"ARMSX3_SPU_INTERP", "ARMSX3_SPU_INTERP_RANGE", "ARMSX3_SPU_TRAP_PC", "ARMSX3_SHUFB_CHECK", "ARMSX3_SHUFB_SKIP", "ARMSX3_WATCH_LS", "ARMSX3_KZ3_SYNC"})
 	{
 		if (set(std::getenv(lever)))
 		{
@@ -1827,7 +1838,7 @@ static const char* spu_obj_cache_off_reason()
 // before it. Folded into the object cache key, it keeps objects from one binary away from any
 // other: the SPU codegen also lives in files that hold no build stamp of their own
 // (JITLLVM.cpp, CPUTranslator.cpp, the AArch64 GHC pass).
-static std::string spu_obj_cache_build_id()
+[[maybe_unused]] static std::string spu_obj_cache_build_id()
 {
 	struct search_t
 	{
@@ -1952,7 +1963,8 @@ static u64 spu_obj_cache_settings()
 		static_cast<u64>(g_cfg.core.spu_loop_detection.get()) << 32 |
 		static_cast<u64>(g_cfg.core.mfc_debug.get()) << 33 |
 		static_cast<u64>(g_cfg.core.rsx_accurate_res_access.get()) << 34 |
-		static_cast<u64>(g_cfg.savestate.compatible_mode.get()) << 35;
+		static_cast<u64>(g_cfg.savestate.compatible_mode.get()) << 35 |
+		static_cast<u64>(g_cfg.core.spu_debug.get()) << 36;
 }
 
 const std::string& spu_runtime::get_obj_cache_path() const
@@ -2065,6 +2077,13 @@ spu_runtime::spu_runtime()
 		static constexpr std::string_view s_llvm_version = LLVM_VERSION_STRING;
 		sha1_update(&ctx, reinterpret_cast<const u8*>(s_llvm_version.data()), s_llvm_version.size());
 #endif
+#elif defined(ARMSX3_ANDROID_SPU_CODEGEN_IDENTITY)
+		// A hash of the code that decides what SPU machine code comes out, LLVM included
+		// (android/spu_codegen_identity.py), in place of the build stamps below and the build in
+		// the Android block further down: an update that leaves that code alone keeps every
+		// player's cache, and any change to it, a header it includes or LLVM starts a fresh one.
+		static constexpr std::string_view s_codegen_identity = ARMSX3_ANDROID_SPU_CODEGEN_IDENTITY;
+		sha1_update(&ctx, reinterpret_cast<const u8*>(s_codegen_identity.data()), s_codegen_identity.size());
 #else
 		// Build stamp, so a remembered version bump is not the only thing between a new binary and
 		// the objects an old one emitted.
@@ -2162,6 +2181,16 @@ spu_runtime::spu_runtime()
 		fold(hw2);
 		const u32 spu_decoder = static_cast<u32>(g_cfg.core.spu_decoder.get());
 		fold(spu_decoder);
+		// The translator takes the SVE paths only at a 128-bit vector length (CPUTranslator.cpp),
+		// and SPU Debug stores block hashes into the emitted code the way SPU Profiler does.
+		// sve_length() executes an SVE instruction, so only a core with SVE may ask.
+		const s32 sve_bits = utils::has_sve() ? utils::sve_length() : 0;
+		fold(sve_bits);
+		const u32 spu_debug = static_cast<u32>(g_cfg.core.spu_debug.get());
+		fold(spu_debug);
+#ifdef ARMSX3_ANDROID_SPU_CODEGEN_IDENTITY
+		spu_log.notice("SPU object cache key: codegen %s", ARMSX3_ANDROID_SPU_CODEGEN_IDENTITY);
+#else
 		const auto [app_commit, app_hash] = rpcs3::get_commit_and_hash();
 		sha1_update(&ctx, reinterpret_cast<const u8*>(app_commit.data()), app_commit.size());
 		sha1_update(&ctx, reinterpret_cast<const u8*>(app_hash.data()), app_hash.size());
@@ -2170,6 +2199,7 @@ spu_runtime::spu_runtime()
 		const std::string build_id = spu_obj_cache_build_id();
 		sha1_update(&ctx, reinterpret_cast<const u8*>(build_id.data()), build_id.size());
 		spu_log.notice("SPU object cache key: build %s, commit %s-%s", build_id.empty() ? "(no build ID)" : build_id, app_commit, app_hash);
+#endif
 
 #endif
 		// The key's settings as they are now, so a change during play turns the cache off (get_obj_cache_path)

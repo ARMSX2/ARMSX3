@@ -2,6 +2,10 @@
 #include <charconv>
 #include "SPURecompiler.h"
 
+// On Android the persistent SPU object cache is keyed on this file as the compiler sees it, along
+// with the other code that decides what SPU machine code comes out (android/spu_codegen_identity.py).
+// Code elsewhere that this starts running or copying while it compiles goes in that script's lists.
+
 #include "Emu/System.h"
 #include "Emu/system_config.h"
 #include "Emu/IdManager.h"
