@@ -5666,7 +5666,11 @@ extern void ppu_precompile(std::vector<std::string>& dir_queue, std::vector<ppu_
 					_main.name = ' '; // Make ppu_finalize work
 					Emu.ConfigurePPUCache();
 					ppu_initialize(_main, false, file_size);
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+					// JIT pool 2 is not reset before the game runs, so another executable's SPU programs would only take its room.
+#else
 					spu_cache::initialize(false);
+#endif
 					ppu_finalize(_main, true);
 					_main = {};
 					g_fxo->get<spu_cache>() = std::move(current_cache);
