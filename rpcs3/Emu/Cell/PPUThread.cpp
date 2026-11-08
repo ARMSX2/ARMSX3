@@ -4345,7 +4345,7 @@ static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, u64 reg_value)
 	{
 		if (ppu.use_full_rdata) [[unlikely]]
 		{
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 			// Fault before rsrv_unique_lock, as the fault can wait on RSX; fetch_op and cmp_rdata re-check after.
 			data += 0;
 #endif
@@ -4372,7 +4372,7 @@ static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, u64 reg_value)
 			// Cache line data
 			//auto& cline_data = vm::_ref<spu_rdata_t>(addr);
 
-#ifndef __APPLE__
+#if !defined(__APPLE__) && !defined(__ANDROID__)
 			data += 0;
 #endif
 			auto range_lock = vm::alloc_range_lock();

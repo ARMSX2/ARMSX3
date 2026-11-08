@@ -1308,7 +1308,7 @@ void VKGSRender::on_semaphore_acquire_wait()
 	{
 		RSX(m_ctx)->do_local_task(rsx::FIFO::state::lock_wait);
 	}
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 	else if (RSX(m_ctx)->eng_interrupt_mask & rsx::pipe_flush_interrupt)
 	{
 		// A ZCULL report fault asks for a pipe flush; a guest spinning on a semaphore it guards waits for that flush.

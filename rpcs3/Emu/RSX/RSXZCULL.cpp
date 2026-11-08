@@ -1058,7 +1058,7 @@ namespace rsx
 						{
 							// R/W to active block
 							need_disable_optimizations = true;    // Defer actual operation
-#ifndef __APPLE__
+#if !defined(__APPLE__) && !defined(__ANDROID__)
 							m_pages_accessed[location] = true;
 #endif
 						}
@@ -1080,7 +1080,7 @@ namespace rsx
 				auto thr = rsx::get_current_renderer();
 				rsx::eng_lock rlock(thr);
 				std::scoped_lock lock(m_pages_mutex);
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 				// A fault that waited for the engine lock can find the pages already unlocked
 				if (!m_pages_accessed[location])
 				{
