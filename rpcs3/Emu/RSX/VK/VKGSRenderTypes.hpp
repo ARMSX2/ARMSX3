@@ -23,7 +23,12 @@
 #define VK_FRAGMENT_CONSTANTS_BUFFER_SIZE_M 16
 #define VK_INDEX_RING_BUFFER_SIZE_M 16
 
+#ifdef __APPLE__
+// MoltenVK keeps a command buffer's commands until it is reset, so a 512-entry ring holds hundreds of frames
+#define VK_MAX_ASYNC_CB_COUNT 32
+#else
 #define VK_MAX_ASYNC_CB_COUNT 512
+#endif
 
 #define FRAME_PRESENT_TIMEOUT 10000000ull // 10 seconds
 #define GENERAL_WAIT_TIMEOUT  2000000ull  // 2 seconds

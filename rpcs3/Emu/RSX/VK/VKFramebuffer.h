@@ -7,6 +7,10 @@ namespace vk
 	struct framebuffer_holder : public vk::framebuffer, public rsx::ref_counted
 	{
 		using framebuffer::framebuffer;
+#ifdef __APPLE__
+		// Set under the cache lock when an image dies while the holder is still referenced; read unlocked
+		atomic_t<bool> retired = false;
+#endif
 	};
 
 	vk::framebuffer_holder* get_framebuffer(VkDevice dev, u16 width, u16 height, VkBool32 has_input_attachments, VkRenderPass renderpass, const std::vector<vk::image*>& image_list);

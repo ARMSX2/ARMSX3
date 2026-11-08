@@ -2,6 +2,11 @@
 #include "Emu/RSX/rsx_profiler.h"
 #include "util/vm.hpp"
 #include "util/asm.hpp"
+#ifdef __APPLE__
+#include "ios_shm_backend.h"
+#include "ios_jit_backend.h"
+#include "ios_jit_dual_map.h"
+#endif
 #ifdef _WIN32
 #include "Utilities/File.h"
 #include "util/dyn_lib.hpp"
@@ -256,12 +261,8 @@ namespace utils
 		// (via shm::map), which is incompatible with MAP_JIT. Only use MAP_JIT for
 		// non-mapping regions that need JIT executable support.
 #ifdef __APPLE__
-		const int jit_flag = is_memory_mapping || !can_be_jit ? 0 : MAP_JIT;
-#ifdef ARCH_ARM64
-		auto ptr = ::mmap(use_addr, size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE | jit_flag | c_map_noreserve, -1, 0);
-#else
-		auto ptr = ::mmap(use_addr, size, PROT_NONE, MAP_ANON | MAP_PRIVATE | jit_flag | c_map_noreserve, -1, 0);
-#endif
+		// The JIT backend picks flags and protection; a reservation that never holds code is unreadable, so stray pointers fault at once.
+		auto ptr = ::mmap(use_addr, size, utils::jit_backend_reservation_prot(is_memory_mapping, can_be_jit), MAP_ANON | MAP_PRIVATE | utils::jit_backend_reservation_flags(is_memory_mapping, can_be_jit) | c_map_noreserve, -1, 0);
 #else
 		auto ptr = ::mmap(use_addr, size, PROT_NONE, MAP_ANON | MAP_PRIVATE | c_map_noreserve, -1, 0);
 #endif
@@ -323,6 +324,16 @@ namespace utils
 		ensure(::VirtualAlloc(pointer, size, MEM_COMMIT, +prot));
 #else
 		const u64 ptr64 = reinterpret_cast<u64>(pointer);
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+		// On iOS an mprotect asking for W+X reports success but grants less, and one with PROT_WRITE inside an
+		// executable range removes execute for good. The dual-map block got its access once at creation,
+		// so a commit there only confirms it and never reaches the mprotect below.
+		if (utils::jit_dual_map_contains(pointer))
+		{
+			ensure(utils::jit_dual_map_commit(pointer, size, (+prot & PROT_EXEC) != 0));
+			return;
+		}
+#endif
 		ensure(::mprotect(reinterpret_cast<void*>(ptr64 & -get_page_size()), size + (ptr64 & (get_page_size() - 1)), +prot) != -1);
 
 		if constexpr (c_madv_dump != 0)
@@ -346,6 +357,14 @@ namespace utils
 #ifdef _WIN32
 		return ::VirtualAlloc(pointer, size, MEM_COMMIT, +prot) != nullptr;
 #else
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+		// Same W+X trap as memory_commit; ensure, because a false here would quietly send the module to the interpreter.
+		if (utils::jit_dual_map_contains(pointer))
+		{
+			ensure(utils::jit_dual_map_commit(pointer, size, (+prot & PROT_EXEC) != 0));
+			return true;
+		}
+#endif
 		const u64 ptr64 = reinterpret_cast<u64>(pointer);
 		void* const base = reinterpret_cast<void*>(ptr64 & -get_page_size());
 		const usz len = size + (ptr64 & (get_page_size() - 1));
@@ -382,12 +401,20 @@ namespace utils
 #else
 		const u64 ptr64 = reinterpret_cast<u64>(pointer);
 #if defined(__APPLE__) && defined(ARCH_ARM64)
+		// Never munmap an executable range while its write alias lives; the mechanism frees the pages instead.
+		if (utils::jit_dual_map_contains(pointer))
+		{
+			ensure(utils::jit_dual_map_decommit(pointer, size));
+			return;
+		}
+
 		// Hack: on macOS, Apple explicitly fails mmap if you combine MAP_FIXED and MAP_JIT.
 		// So we unmap the space and just hope it maps to the same address we got before instead.
 		// The Xcode manpage says the pointer is a hint and the OS will try to map at the hint location
 		// so this isn't completely undefined behavior.
 		ensure(::munmap(pointer, size) != -1);
-		ensure(::mmap(pointer, size, PROT_NONE,  MAP_ANON | MAP_PRIVATE | (can_be_jit ? MAP_JIT : 0), -1, 0) == pointer);
+		// The same flags the reservation was created with.
+		ensure(::mmap(pointer, size, PROT_NONE, MAP_ANON | MAP_PRIVATE | utils::jit_backend_reservation_flags(false, can_be_jit), -1, 0) == pointer);
 #else
 		ensure(::mmap(pointer, size, PROT_NONE, MAP_FIXED | MAP_ANON | MAP_PRIVATE | c_map_noreserve, -1, 0) != reinterpret_cast<void*>(uptr{umax}));
 #endif
@@ -416,8 +443,17 @@ namespace utils
 #else
 		const u64 ptr64 = reinterpret_cast<u64>(pointer);
 #if defined(__APPLE__) && defined(ARCH_ARM64)
+		// A reset is a decommit then a commit, and on a dual-map range both belong to the mechanism.
+		if (utils::jit_dual_map_contains(pointer))
+		{
+			ensure(utils::jit_dual_map_decommit(pointer, size));
+			ensure(utils::jit_dual_map_commit(pointer, size, (+prot & PROT_EXEC) != 0));
+			return;
+		}
+
 		ensure(::munmap(pointer, size) != -1);
-		ensure(::mmap(pointer, size, +prot,  MAP_ANON | MAP_PRIVATE | (can_be_jit ? MAP_JIT : 0), -1, 0) == pointer);
+		// The same flags the reservation was created with; the protection stays the caller's.
+		ensure(::mmap(pointer, size, +prot, MAP_ANON | MAP_PRIVATE | utils::jit_backend_reservation_flags(false, can_be_jit), -1, 0) == pointer);
 #else
 		ensure(::mmap(pointer, size, +prot, MAP_FIXED | MAP_ANON | MAP_PRIVATE, -1, 0) != reinterpret_cast<void*>(uptr{umax}));
 #endif
@@ -506,6 +542,14 @@ namespace utils
 		}
 #else
 		const u64 ptr64 = reinterpret_cast<u64>(pointer);
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+		// No caller reaches this with a dual-map range today, but one mprotect there would lose execute for good.
+		if (utils::jit_dual_map_contains(pointer))
+		{
+			ensure(utils::jit_dual_map_commit(pointer, size, (+prot & PROT_EXEC) != 0));
+			return;
+		}
+#endif
 		ensure(::mprotect(reinterpret_cast<void*>(ptr64 & -get_page_size()), size + (ptr64 & (get_page_size() - 1)), +prot) != -1);
 #endif
 	}
@@ -568,6 +612,45 @@ namespace utils
 		ensure(m_file >= 0);
 		ensure(::ftruncate(m_file, m_size) >= 0);
 #else
+#ifdef __APPLE__
+		// The iOS sandbox refuses shm_open whatever the name length, so the container rung opens a file instead.
+		if (shm_backend() == shm_backend_kind::container_file)
+		{
+			const std::string path = shm_container_dir() + "rpcs3-mem-" + std::to_string(reinterpret_cast<u64>(this)) + ".tmp";
+
+			while ((m_file = ::open(path.c_str(), O_RDWR | O_CREAT | O_EXCL, S_IWUSR | S_IRUSR)) == -1)
+			{
+				if (errno == EMFILE)
+				{
+					fmt::throw_exception("Too many open files. Raise the limit and try again.");
+				}
+
+				// A leftover from a crashed run at the same address: unlink and retry.
+				ensure(errno == EEXIST);
+				ensure(::unlink(path.c_str()) >= 0);
+			}
+
+			// Unlinked at once, so nothing is left behind if this process dies.
+			ensure(::unlink(path.c_str()) >= 0);
+		}
+		else
+		{
+			const std::string name = "/rpcs3-mem-" + std::to_string(reinterpret_cast<u64>(this));
+
+			while ((m_file = ::shm_open(name.c_str(), O_RDWR | O_CREAT | O_EXCL, S_IWUSR | S_IRUSR)) == -1)
+			{
+				if (errno == EMFILE)
+				{
+					fmt::throw_exception("Too many open files. Raise the limit and try again.");
+				}
+
+				ensure(errno == EEXIST);
+			}
+
+			ensure(::shm_unlink(name.c_str()) >= 0);
+		}
+
+#else
 		const std::string name = "/rpcs3-mem-" + std::to_string(reinterpret_cast<u64>(this));
 
 		while ((m_file = ::shm_open(name.c_str(), O_RDWR | O_CREAT | O_EXCL, S_IWUSR | S_IRUSR)) == -1)
@@ -581,6 +664,7 @@ namespace utils
 		}
 
 		ensure(::shm_unlink(name.c_str()) >= 0);
+#endif
 		ensure(::ftruncate(m_file, m_size) >= 0);
 #endif
 	}
@@ -778,6 +862,10 @@ namespace utils
 #if defined(__NetBSD__) || defined(__APPLE__)
 		// Always ON
 		vm_overcommit = 0;
+#ifdef __APPLE__
+		// A non-zero answer takes the open-then-unlink storage path below when the container rung is in use.
+		vm_overcommit = shm_backend() == shm_backend_kind::container_file ? -1 : 0;
+#endif
 #elif defined(__FreeBSD__)
 		auto vm_sz = sizeof(int);
 		int mib[2]{CTL_VM, VM_OVERCOMMIT};

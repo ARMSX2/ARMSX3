@@ -1408,7 +1408,11 @@ bool cpu_thread::suspend_work::push(cpu_thread* _this) noexcept
 	if (!next)
 	{
 		// Monitor the performance only of the actual suspend processing owner
+#ifdef __APPLE__
+		perf_meter<"SUSPEND"_u64> perf0(nullptr);
+#else
 		perf_meter<"SUSPEND"_u64> perf0;
+#endif
 
 		// First thread to push the work to the workload list pauses all threads and processes it
 		std::lock_guard lock(s_cpu_lock);

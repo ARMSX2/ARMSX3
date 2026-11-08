@@ -862,7 +862,11 @@ template <spu_exec_bit... Flags>
 bool ROTQMBI(spu_thread& spu, spu_opcode_t op)
 {
 	const auto a = spu.gpr[op.ra];
+#ifdef __APPLE__
+	const s32 n = (0 - spu.gpr[op.rb]._u32[3]) & 0x7;
+#else
 	const s32 n = -spu.gpr[op.rb]._s32[3] & 0x7;
+#endif
 	spu.gpr[op.rt] = _mm_or_si128(_mm_srli_epi64(a, n), _mm_slli_epi64(_mm_srli_si128(a, 8), 64 - n));
 	return true;
 }

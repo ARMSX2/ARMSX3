@@ -22,6 +22,11 @@ DYNAMIC_IMPORT("ntdll.dll", RtlGetVersion, NTSTATUS(OSVERSIONINFOW* lpVersionInf
 #include <sys/resource.h>
 #ifdef __APPLE__
 #include <sys/sysctl.h>
+// Included directly: an undefined TARGET_OS_IPHONE in an #if is silently 0.
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+#include <os/proc.h>
+#endif
 #else
 #include <sys/utsname.h>
 #include <errno.h>
@@ -378,6 +383,18 @@ bool utils::has_neon()
 #if defined(__linux__)
 		return (getauxval(AT_HWCAP) & HWCAP_ASIMD) != 0;
 #elif defined(__APPLE__)
+#if TARGET_OS_IPHONE
+		// AdvSIMD is mandatory on ARMv8-A, so a missing key must not report NEON absent.
+		static constexpr bool ios_advsimd_is_mandatory = true;
+
+		int val = 0;
+		size_t len = sizeof(val);
+		if (sysctlbyname("hw.optional.AdvSIMD", &val, &len, nullptr, 0) != 0)
+		{
+			return ios_advsimd_is_mandatory;
+		}
+		return val != 0;
+#else
 		int val = 0;
 		size_t len = sizeof(val);
 		sysctlbyname("hw.optional.AdvSIMD", &val, &len, nullptr, 0);
@@ -385,6 +402,7 @@ bool utils::has_neon()
 		size_t len_legacy = sizeof(val_legacy);
 		sysctlbyname("hw.optional.neon", &val_legacy, &len_legacy, nullptr, 0);
 		return val != 0 || val_legacy != 0;
+#endif
 #elif defined(_WIN32)
 		return IsProcessorFeaturePresent(PF_ARM_VFP_32_REGISTERS_AVAILABLE) != 0;
 #endif
@@ -844,7 +862,12 @@ utils::OS_version utils::get_OS_version()
 #elif __linux__
 	res.type = "linux";
 #elif __APPLE__
+#if TARGET_OS_IPHONE
+	// iOS defines __APPLE__ too; without this a phone reports itself as macOS.
+	res.type = "ios";
+#else
 	res.type = "macos";
+#endif
 #elif __FreeBSD__
 	res.type = "freebsd";
 #else
@@ -927,12 +950,22 @@ std::string utils::get_OS_version_string(bool simple)
 	const int minor_version = Darwin_Version::getNSminorVersion();
 	const int patch_version = Darwin_Version::getNSpatchVersion();
 
+	// The numbers are already the iOS version; only the label differs.
+#if TARGET_OS_IPHONE
+	if (simple)
+	{
+		return fmt::format("iOS %d.%d.%d", major_version, minor_version, patch_version);
+	}
+
+	return fmt::format("Operating system: iOS, Version: %d.%d.%d", major_version, minor_version, patch_version);
+#else
 	if (simple)
 	{
 		return fmt::format("macOS %d.%d.%d", major_version, minor_version, patch_version);
 	}
 
 	return fmt::format("Operating system: macOS, Version: %d.%d.%d", major_version, minor_version, patch_version);
+#endif
 #else
 	struct utsname details = {};
 
@@ -1224,6 +1257,9 @@ u64 utils::get_avail_memory()
 			}
 		}
 	}
+#elif defined(__APPLE__) && TARGET_OS_IPHONE
+	// What jetsam still allows this process; 0 when no limit applies.
+	return os_proc_available_memory();
 #endif
 
 	return 0;

@@ -4,6 +4,9 @@
 #include "vk_vspec.h"
 #include "vkutils/device.h"
 #include "Utilities/Thread.h"
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+#include <sys/sysctl.h>
+#endif
 #include "Emu/system_config.h"
 
 #include "util/sysinfo.hpp"
@@ -14,6 +17,10 @@ namespace vk
 	std::unique_ptr<named_thread_group<pipe_compiler>> g_pipe_compilers;
 	int g_num_pipe_compilers = 0;
 	atomic_t<int> g_compiler_index{};
+#ifdef __APPLE__
+	// Set by destroy only, so a Stop drops queued compiles; a resize must still compile them.
+	atomic_t<bool> g_pipe_compilers_stopping{};
+#endif
 	VkPipelineCache g_pipeline_cache = VK_NULL_HANDLE;
 
 	static bool extended_dynamic_state_active()
@@ -109,14 +116,66 @@ namespace vk
 		thread_ctrl::set_thread_affinity_mask(thread_ctrl::get_affinity_mask(thread_class::general));
 		thread_ctrl::scoped_priority low_prio(-1);
 
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+		// A worker with a backlog raises itself from utility QoS to the class iOS threads start with.
+		constexpr u32 backlog_raise_threshold = 4;
+		bool raised = false;
+		u32 spell_raises = 0;
+		u32 spell_peak = 0;
+
+#endif
 		while (thread_ctrl::state() != thread_state::aborting)
 		{
 			for (auto&& job : m_work_queue.pop_all())
 			{
+#ifdef __APPLE__
+				// Stopping: the rest of the queue is dropped and compiled again on a later boot.
+				if (g_pipe_compilers_stopping)
+				{
+					m_pending_jobs--;
+					continue;
+				}
+
+#ifdef ARCH_ARM64
+				// Only on a transition, so a burst costs two calls; pending_jobs() counts this job too.
+				const u32 pending = pending_jobs();
+				if (const bool backlog = pending >= backlog_raise_threshold; backlog != raised)
+				{
+					thread_ctrl::set_native_priority(backlog ? 0 : -1);
+					raised = backlog;
+
+					if (backlog)
+					{
+						if (spell_raises == 0)
+						{
+							rsx_log.notice("Async pipeline compiler worker raised to priority 0 with %u job(s) pending.", pending);
+						}
+
+						spell_raises++;
+					}
+				}
+
+				if (spell_raises != 0)
+				{
+					spell_peak = std::max(spell_peak, pending);
+
+					if (pending == 1)
+					{
+						rsx_log.notice("Async pipeline compiler worker back at priority -1, its backlog down to the job in hand: %u raise(s), peak %u job(s) pending.", spell_raises, spell_peak);
+						spell_raises = 0;
+						spell_peak = 0;
+					}
+				}
+#endif
+
+#endif
 				if (!job.is_graphics_job)
 				{
 					auto compiled = int_compile_compute_pipe(job.compute_data, job.inputs, job.flags);
 					job.callback_func(compiled);
+#ifdef __APPLE__
+					m_pending_jobs--;
+#endif
 					continue;
 				}
 
@@ -124,11 +183,17 @@ namespace vk
 				{
 					auto compiled = int_compile_graphics_pipe(job.create_info_func, job.inputs, {}, job.flags);
 					job.callback_func(compiled);
+#ifdef __APPLE__
+					m_pending_jobs--;
+#endif
 					continue;
 				}
 
 				auto compiled = int_compile_graphics_pipe(job.graphics_data, job.graphics_modules, job.inputs, {}, job.flags, &job.vtx_spec);
 				job.callback_func(compiled);
+#ifdef __APPLE__
+				m_pending_jobs--;
+#endif
 			}
 
 			thread_ctrl::wait_on(m_work_queue);
@@ -350,6 +415,9 @@ namespace vk
 			return int_compile_compute_pipe(create_info, cs_inputs, flags);
 		}
 
+#ifdef __APPLE__
+		m_pending_jobs++;
+#endif
 		m_work_queue.push(create_info, cs_inputs, flags, callback);
 		return {};
 	}
@@ -379,6 +447,9 @@ namespace vk
 			return int_compile_graphics_pipe(create_info, modules, vs_inputs, fs_inputs, flags);
 		}
 
+#ifdef __APPLE__
+		m_pending_jobs++;
+#endif
 		m_work_queue.push(create_info, modules, vs_inputs, fs_inputs, flags, callback);
 		return {};
 	}
@@ -398,6 +469,9 @@ namespace vk
 			return int_compile_graphics_pipe(create_info, modules, vs_inputs, fs_inputs, flags, &vtx_spec);
 		}
 
+#ifdef __APPLE__
+		m_pending_jobs++;
+#endif
 		m_work_queue.push(create_info, modules, vs_inputs, fs_inputs, flags, callback, vtx_spec);
 		return {};
 	}
@@ -413,6 +487,9 @@ namespace vk
 			return int_compile_graphics_pipe(get_create_info, vs_inputs, fs_inputs, flags);
 		}
 
+#ifdef __APPLE__
+		m_pending_jobs++;
+#endif
 		m_work_queue.push(get_create_info, vs_inputs, fs_inputs, flags, callback);
 		return {};
 	}
@@ -464,11 +541,32 @@ namespace vk
 			{
 				num_worker_threads = 2;
 			}
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+			else if (hw_threads >= 6)
+			{
+				// Apple reports a general-class mask of 0, so the cluster branch above never fires.
+				num_worker_threads = 2;
+			}
+#endif
 			else
 			{
 				num_worker_threads = 1;
 			}
 
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+			// The efficiency-core count is a floor over the table, so no Apple host gets fewer workers.
+			int efficiency_cores = 0;
+			usz efficiency_cores_size = sizeof(efficiency_cores);
+			if (sysctlbyname("hw.perflevel1.logicalcpu", &efficiency_cores, &efficiency_cores_size, nullptr, 0) != 0)
+			{
+				efficiency_cores = 0;
+			}
+
+			rsx_log.notice("Async pipeline compiler: %d efficiency core(s) from sysctl hw.perflevel1.logicalcpu, %d worker(s) from the host-thread table; using %d.",
+				efficiency_cores, num_worker_threads, std::max(num_worker_threads, efficiency_cores));
+			num_worker_threads = std::max(num_worker_threads, efficiency_cores);
+
+#endif
 			rsx_log.notice("Async pipeline compiler auto-selected %d worker(s) for %u host thread(s).",
 				num_worker_threads, hw_threads);
 		}
@@ -489,6 +587,10 @@ namespace vk
 		// resize_pipe_compiler() hands the same cache back in.
 		g_pipeline_cache = pipe_cache ? pipe_cache : g_render_device->get_pipeline_cache();
 
+#ifdef __APPLE__
+		g_pipe_compilers_stopping = false;
+
+#endif
 		// Create the thread pool
 		g_pipe_compilers = std::make_unique<named_thread_group<pipe_compiler>>("RSX.W", num_worker_threads);
 		g_num_pipe_compilers = num_worker_threads;
@@ -519,6 +621,23 @@ namespace vk
 
 	void destroy_pipe_compiler()
 	{
+#ifdef __APPLE__
+		// Workers drop the jobs they have not started; each finishes only the compile in hand.
+		g_pipe_compilers_stopping = true;
+
+		if (g_pipe_compilers)
+		{
+			u32 pending = 0;
+			for (pipe_compiler& compiler : *g_pipe_compilers.get())
+			{
+				pending += compiler.pending_jobs();
+			}
+
+			rsx_log.notice("Async pipeline compiler stopping with %u job(s) pending; queued jobs are dropped, "
+				"the ones compiling finish.", pending);
+		}
+
+#endif
 		g_pipe_compilers.reset();
 
 		// Owned by the render_device, which saves and destroys it. Just drop the borrow.
@@ -528,8 +647,36 @@ namespace vk
 	pipe_compiler* get_pipe_compiler()
 	{
 		ensure(g_pipe_compilers);
+#ifdef __APPLE__
+		// The worker with the fewest pending jobs wins; the scan start rotates so equal loads round-robin.
+		const u32 start = g_compiler_index++;
+		const auto first = g_pipe_compilers->begin();
+
+		pipe_compiler* best = nullptr;
+		u32 best_load = umax;
+
+		for (int i = 0; i < g_num_pipe_compilers; ++i)
+		{
+			pipe_compiler* candidate = first + (start + i) % g_num_pipe_compilers;
+			const u32 load = candidate->pending_jobs();
+
+			if (load < best_load)
+			{
+				best = candidate;
+				best_load = load;
+
+				if (load == 0)
+				{
+					break;
+				}
+			}
+		}
+
+		return best;
+#else
 		int thread_index = g_compiler_index++;
 
 		return g_pipe_compilers.get()->begin() + (thread_index % g_num_pipe_compilers);
+#endif
 	}
 }

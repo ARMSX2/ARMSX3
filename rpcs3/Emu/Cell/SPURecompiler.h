@@ -1,6 +1,9 @@
 #pragma once
 
 #include "Utilities/File.h"
+#ifdef __APPLE__
+#include "Utilities/JIT.h"
+#endif
 #include "Utilities/lockless.h"
 #include "Utilities/address_range.h"
 #include "util/bit_set.hpp"
@@ -143,6 +146,10 @@ class spu_runtime
 	std::string m_obj_cache_path;
 
 public:
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+	jit_obj_cache_stats obj_cache_stats;
+
+#endif
 	// Trampoline to spu_recompiler_base::dispatch
 	static const spu_function_t tr_dispatch;
 

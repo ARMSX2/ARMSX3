@@ -55,7 +55,14 @@ namespace vk
 		const auto key = hash_image_properties(data->format(), data->width(), data->height(), data->depth(), data->mipmaps(), data->info.imageType, data->info.flags, data->info.sharingMode);
 		std::lock_guard lock(parent->m_cached_pool_lock);
 
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+		// The pool is trimmed only at frame end, so an image that would pass its bounds is not admitted.
+		const bool pool_full = parent->m_cached_images.size() >= parent->max_cached_image_pool_size || parent->m_cached_memory_size + data->memory->size() > 256 * 0x100000;
+
+		if (!parent->m_cache_is_exiting && !pool_full)
+#else
 		if (!parent->m_cache_is_exiting)
+#endif
 		{
 			parent->m_cached_memory_size += data->memory->size();
 			parent->m_cached_images.emplace_front(key, data);
@@ -496,6 +503,10 @@ namespace vk
 		}
 		baseclass::clear();
 
+#ifdef __APPLE__
+		// Not held across baseclass::clear(), whose disposals take the same lock.
+		std::lock_guard lock(m_cached_pool_lock);
+#endif
 		m_cached_images.clear();
 		m_cached_memory_size = 0;
 	}
@@ -1775,6 +1786,22 @@ namespace vk
 		}
 
 		// Nuke temporary resources. They will still be visible to the GPU.
+#ifdef __APPLE__
+		// The driver thread pushes into the pool under its lock, so swap it out and dispose outside it.
+		auto gc = vk::get_resource_manager();
+		std::deque<cached_image_t> released_images;
+		{
+			std::lock_guard pool_lock(m_cached_pool_lock);
+			released_images.swap(m_cached_images);
+			m_cached_memory_size = 0;
+		}
+
+		any_released |= !released_images.empty();
+		for (auto& img : released_images)
+		{
+			gc->dispose(img.data);
+		}
+#else
 		auto gc = vk::get_resource_manager();
 		any_released |= !m_cached_images.empty();
 		for (auto& img : m_cached_images)
@@ -1783,6 +1810,7 @@ namespace vk
 		}
 		m_cached_images.clear();
 		m_cached_memory_size = 0;
+#endif
 
 		any_released |= !m_temporary_subresource_cache.empty();
 		for (auto& e : m_temporary_subresource_cache)
@@ -1804,11 +1832,18 @@ namespace vk
 			purge_unreleased_sections();
 		}
 
+#ifdef __APPLE__
+		if (std::lock_guard lock(m_cached_pool_lock);
+			m_cached_images.size() > max_cached_image_pool_size ||
+			m_cached_memory_size > 256 * 0x100000)
+		{
+#else
 		if (m_cached_images.size() > max_cached_image_pool_size ||
 			m_cached_memory_size > 256 * 0x100000)
 		{
 			std::lock_guard lock(m_cached_pool_lock);
 
+#endif
 			const auto new_size = m_cached_images.size() / 2;
 			for (usz i = new_size; i < m_cached_images.size(); ++i)
 			{
@@ -1908,7 +1943,14 @@ namespace vk
 
 	u32 texture_cache::get_unreleased_textures_count() const
 	{
+#ifdef __APPLE__
+		// Taken after the baseclass call, so this never holds it while the base takes its own.
+		const u32 base_count = baseclass::get_unreleased_textures_count();
+		reader_lock lock(m_cached_pool_lock);
+		return base_count + ::size32(m_cached_images);
+#else
 		return baseclass::get_unreleased_textures_count() + ::size32(m_cached_images);
+#endif
 	}
 
 	u64 texture_cache::get_temporary_memory_in_use() const

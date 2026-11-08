@@ -82,6 +82,14 @@ namespace rsx
 				return true;
 			}
 
+#ifdef __APPLE__
+			if (samples == 1 && rsx::get_current_renderer()->get_backend_config().requires_copy_for_feedback_reads)
+			{
+				// In-place feedback reads are not coherent on this host, so sample a copy
+				return true;
+			}
+
+#endif
 			if (g_cfg.video.antialiasing_level == msaa_level::none)
 			{
 				// MSAA disabled. All access is fast.

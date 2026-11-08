@@ -17,6 +17,14 @@ u32 RSXDisAsm::disasm(u32 pc)
 
 	auto try_read_op = [this](u32 pc) -> bool
 	{
+#ifdef __APPLE__
+		// RSX commands are word-aligned, and a misaligned 4-byte load here can straddle a granule and fault
+		if (pc % 4 != 0)
+		{
+			return false;
+		}
+
+#endif
 		if (pc < m_start_pc)
 		{
 			return false;

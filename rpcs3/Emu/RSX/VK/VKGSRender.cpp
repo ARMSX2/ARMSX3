@@ -30,6 +30,10 @@
 
 #include "util/asm.hpp"
 #include <vulkan/vulkan_core.h>
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#include "ios_jit_dual_map.h"
+#endif
 
 namespace vk
 {
@@ -530,6 +534,18 @@ VKGSRender::VKGSRender(rsx::context* ctx, rsx::display_output* output) noexcept 
 		m_occlusion_query_manager->set_control_flags(VK_QUERY_CONTROL_PRECISE_BIT, 0);
 	}
 
+#ifdef __APPLE__
+	// A low-memory device starts these 64 MiB rings at 16 MiB; each still grows in 64 MiB steps
+	u32 big_ring_m = 64;
+#ifdef ARCH_ARM64
+	if (utils::low_memory_device())
+	{
+		big_ring_m = 16;
+		rsx_log.notice("Low-memory device: the attrib and shader interpreter rings start at %u MiB", big_ring_m);
+	}
+#endif
+
+#endif
 	// ARMSX3: vertex fetch specialization, decided once per boot from this boot's configuration,
 	// before any vertex program exists (vk_vspec.h). It fetches attributes straight from the
 	// attribute ring through vertex input bindings, so only then does the ring need that usage.
@@ -541,7 +557,11 @@ VKGSRender::VKGSRender(rsx::context* ctx, rsx::display_output* output) noexcept 
 
 	// VRAM allocation
 	// This first set is bound persistently, so grow notifications are enabled.
+#ifdef __APPLE__
+	m_attrib_ring_info.create(attrib_ring_usage, big_ring_m * 0x100000, vk::heap_pool_default, "attrib buffer", 0x400000, VK_TRUE);
+#else
 	m_attrib_ring_info.create(attrib_ring_usage, VK_ATTRIB_RING_BUFFER_SIZE_M * 0x100000, vk::heap_pool_default, "attrib buffer", 0x400000, VK_TRUE);
+#endif
 	m_fragment_env_ring_info.create(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_UBO_RING_BUFFER_SIZE_M * 0x100000, vk::heap_pool_low_latency, "fragment env buffer", 0x10000, VK_TRUE);
 	m_vertex_env_ring_info.create(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_UBO_RING_BUFFER_SIZE_M * 0x100000, vk::heap_pool_default, "vertex env buffer", 0x10000, VK_TRUE);
 	m_fragment_texture_params_ring_info.create(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_UBO_RING_BUFFER_SIZE_M * 0x100000, vk::heap_pool_low_latency, "fragment texture params buffer", 0x10000, VK_TRUE);
@@ -575,8 +595,13 @@ VKGSRender::VKGSRender(rsx::context* ctx, rsx::display_output* output) noexcept 
 
 	if (shadermode == shader_mode::async_with_interpreter || shadermode == shader_mode::interpreter_only)
 	{
+#ifdef __APPLE__
+		m_vertex_instructions_buffer.create(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, big_ring_m * 0x100000, vk::heap_pool_low_latency, "vertex instructions buffer", 512 * 16);
+		m_fragment_instructions_buffer.create(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, big_ring_m * 0x100000, vk::heap_pool_low_latency, "fragment instructions buffer", 2048);
+#else
 		m_vertex_instructions_buffer.create(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 64 * 0x100000, vk::heap_pool_low_latency, "vertex instructions buffer", 512 * 16);
 		m_fragment_instructions_buffer.create(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 64 * 0x100000, vk::heap_pool_low_latency, "fragment instructions buffer", 2048);
+#endif
 
 		vk::data_heap_manager::register_ring_buffers
 		({
@@ -638,6 +663,9 @@ VKGSRender::VKGSRender(rsx::context* ctx, rsx::display_output* output) noexcept 
 	// several on each little core: no faster, and each extra concurrent pipeline compile is more
 	// driver memory on phones that already run close to the low-memory killer.
 	const int preferred_compiler_threads = g_cfg.video.shader_compiler_threads_count;
+#elif defined(__APPLE__) && defined(ARCH_ARM64)
+	// 0 picks the efficiency-core count, and iOS kills its shader compiler service under memory pressure
+	const int preferred_compiler_threads = g_cfg.video.shader_compiler_threads_count;
 #else
 	const int preferred_compiler_threads = g_cfg.video.shader_compiler_threads_count == 0
 		? utils::get_thread_count()                   // We spawn the initial pipe compiler with all threads during the boot sequence by default.
@@ -682,7 +710,12 @@ VKGSRender::VKGSRender(rsx::context* ctx, rsx::display_output* output) noexcept 
 	// already clamps the layout on any device that lacks it -- so MoltenVK, pre-2023
 	// NVIDIA/AMD/Intel and older Mesa keep the directory they are using instead of eating a
 	// live mid-gameplay rebuild of the whole pipeline cache.
+#ifdef __APPLE__
+	// The leading-literal skip changes fragment program hashes, so pipelines cached before it must not be replayed
+	std::string shader_cache_version = m_device->get_extended_dynamic_state_support() ? "v1.96.1-eds" : "v1.96.1";
+#else
 	std::string shader_cache_version = m_device->get_extended_dynamic_state_support() ? "v1.96-eds" : "v1.96";
+#endif
 #ifdef __ANDROID__
 	if (!m_device->get_framebuffer_loops_support())
 	{
@@ -782,6 +815,11 @@ VKGSRender::VKGSRender(rsx::context* ctx, rsx::display_output* output) noexcept 
 	// If we break the renderpasses, MVK loses around 75% of its performance in troublesome spots compared to just doing a CPU sync
 	m_config.supports_hw_conditional_render = (vk::get_driver_vendor() != vk::driver_vendor::MVK);
 
+#ifdef __APPLE__
+	// Tile-based GPUs read a bound target's neighbouring pixels stale in place, so sample a copy
+	m_config.requires_copy_for_feedback_reads = (vk::get_driver_vendor() == vk::driver_vendor::MVK);
+
+#endif
 	// Passthrough DMA
 	m_config.supports_passthrough_dma = m_device->get_external_memory_host_support();
 
@@ -832,6 +870,16 @@ VKGSRender::VKGSRender(rsx::context* ctx, rsx::display_output* output) noexcept 
 		if (m_config.supports_passthrough_dma)
 		{
 			rsx_log.error("AMDGPU kernel driver on Linux and INTEL driver on some platforms cannot support passthrough DMA buffers.");
+			m_config.supports_passthrough_dma = false;
+		}
+		break;
+#endif
+#ifdef __APPLE__
+	case vk::driver_vendor::MVK:
+		// MoltenVK 1.4.0 advertises host memory import but cannot create a buffer over host memory
+		if (m_config.supports_passthrough_dma)
+		{
+			rsx_log.warning("MoltenVK cannot create buffers over imported host memory. Passthrough DMA is disabled.");
 			m_config.supports_passthrough_dma = false;
 		}
 		break;
@@ -1260,6 +1308,19 @@ void VKGSRender::on_semaphore_acquire_wait()
 	{
 		RSX(m_ctx)->do_local_task(rsx::FIFO::state::lock_wait);
 	}
+#ifdef __APPLE__
+	else if (RSX(m_ctx)->eng_interrupt_mask & rsx::pipe_flush_interrupt)
+	{
+		// A ZCULL report fault asks for a pipe flush; a guest spinning on a semaphore it guards waits for that flush.
+		static atomic_t<bool> s_logged = false;
+		if (!s_logged.exchange(true))
+		{
+			rsx_log.notice("RSX: pipe flush serviced during semaphore wait");
+		}
+
+		RSX(m_ctx)->do_local_task(rsx::FIFO::state::lock_wait);
+	}
+#endif
 }
 
 bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)
@@ -1306,14 +1367,37 @@ bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)
 
 	const auto resources = res();
 	bool texture_cache_relieved = false;
+#ifdef __APPLE__
+#if TARGET_OS_IPHONE
+	// iOS is often killed before fatal, so evict at severe too, at most every 5 s as it needs the hard sync
+	static std::chrono::steady_clock::time_point s_last_severe_eviction{};
+	bool severe_eviction = false;
+
+	if (const auto now = std::chrono::steady_clock::now();
+		severity == rsx::problem_severity::severe && resources && now - s_last_severe_eviction >= std::chrono::seconds(5))
+	{
+		s_last_severe_eviction = now;
+		severe_eviction = resources->texture_cache.is_overallocated();
+	}
+#else
+	constexpr bool severe_eviction = false;
+#endif
+
+	if (severity >= rsx::problem_severity::fatal || severe_eviction)
+#else
 	if (severity >= rsx::problem_severity::fatal)
+#endif
 	{
 		// Hard sync before trying to evict anything. This guarantees no UAF crashes in the driver.
 		// As a bonus, we also get a free gc pass
 		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[1]++; flush_command_queue(true, true);
 		g_fxo->get<vk::driver_manager_thread>().drain();
 
+#ifdef __APPLE__
+		if (resources && (severe_eviction || resources->texture_cache.is_overallocated()))
+#else
 		if (resources && resources->texture_cache.is_overallocated())
+#endif
 		{
 			// Evict some unused textures. Do not evict any active references
 			std::set<u32> exclusion_list;
@@ -1322,8 +1406,21 @@ bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)
 				for (auto i = 0ull; i < texture_array.size(); ++i)
 				{
 					const auto& tex = texture_array[i];
+#ifdef __APPLE__
+					// A disabled slot keeps a stale offset, and the throwing get_address would end the RSX thread
+					if (!tex.enabled())
+					{
+						continue;
+					}
+
+					if (const auto addr = rsx::get_address(m_ctx, tex.offset(), tex.location(), 1))
+					{
+						exclusion_list.insert(addr);
+					}
+#else
 					const auto addr = rsx::get_address(m_ctx, tex.offset(), tex.location());
 					exclusion_list.insert(addr);
+#endif
 				}
 			};
 
@@ -1367,6 +1464,39 @@ bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)
 		resources->surface_cache.trim(*m_current_command_buffer, severity);
 	}
 
+#ifdef __APPLE__
+	// A surface-cache relief can destroy views bound descriptors use, so mark every such slot dirty at any severity
+	if (surface_cache_relieved)
+	{
+		bool invalidate_samplers = false;
+		auto mark_framebuffer_slots = [&](const auto& sampler_states, rsx::flags32_t& dirty_bits)
+		{
+			for (usz i = 0; i < sampler_states.size(); ++i)
+			{
+				if (sampler_states[i] &&
+					sampler_states[i]->upload_context == rsx::texture_upload_context::framebuffer_storage)
+				{
+					dirty_bits |= (1u << i);
+					invalidate_samplers = true;
+				}
+			}
+		};
+
+		mark_framebuffer_slots(m_fs_sampler_descriptors, m_ctx->textures.fragment_textures_dirty);
+		mark_framebuffer_slots(m_vs_sampler_descriptors, m_ctx->textures.vertex_textures_dirty);
+
+		if (invalidate_samplers)
+		{
+			m_samplers_dirty.store(true);
+		}
+	}
+
+	const bool any_cache_relieved = (texture_cache_relieved || surface_cache_relieved);
+	if (severity < rsx::problem_severity::fatal)
+	{
+		return any_cache_relieved;
+	}
+#else
 	const bool any_cache_relieved = (texture_cache_relieved || surface_cache_relieved);
 	if (severity < rsx::problem_severity::fatal)
 	{
@@ -1404,6 +1534,7 @@ bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)
 			m_samplers_dirty.store(true);
 		}
 	}
+#endif
 
 	// Imminent crash, full GPU sync is the least of our problems
 	if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[2]++; flush_command_queue(true, true);
@@ -2124,6 +2255,14 @@ bool VKGSRender::on_local_task(rsx::FIFO::state state)
 		}
 	}
 
+#ifdef __APPLE__
+	if (state == rsx::FIFO::state::paused)
+	{
+		// iOS often kills a paused app without teardown, so write the cache now, at most once a second
+		m_device->save_pipeline_cache(std::chrono::seconds(1));
+	}
+
+#endif
 	// Once per 64 FIFO commands while the RSX is busy. Not while it waits on a lock another thread
 	// holds: the present takes the queue's submit lock.
 	if (m_present_after_generated && state != rsx::FIFO::state::lock_wait)
@@ -2254,8 +2393,15 @@ bool VKGSRender::load_program()
 
 		// Load current program from cache
 		// The shader interpreter does not emulate the depth range; compile those programs synchronously instead
+#ifdef __APPLE__
+		// Async Recompiler skips a draw whose pipeline is not ready, and a skipped fill or copy leaves its target unwritten
+		const bool tiny_fp = shadermode == shader_mode::async_recompiler && fragment_program.ucode_length <= sync_compile_max_fp_ucode_bytes;
+		const bool allow_async = shadermode != shader_mode::recompiler &&
+			!(fragment_program.ctrl & RSX_SHADER_CONTROL_EMULATE_DEPTH_RANGE) && !tiny_fp;
+#else
 		const bool allow_async = shadermode != shader_mode::recompiler &&
 			!(fragment_program.ctrl & RSX_SHADER_CONTROL_EMULATE_DEPTH_RANGE);
+#endif
 
 		std::tie(m_program, m_vertex_prog, m_fragment_prog) = m_prog_buffer->get_graphics_pipeline(
 			&m_ctx->program.cache_hint,
@@ -2948,11 +3094,25 @@ void VKGSRender::close_and_submit_command_buffer(vk::fence* pFence, VkSemaphore 
 
 bool VKGSRender::is_framebuffer_bound() const
 {
+#ifdef __APPLE__
+	// A retired framebuffer does not count as bound, so on_framebuffer_bound rebuilds it
+	return m_draw_fbo && !m_draw_fbo->retired;
+#else
 	return !!m_draw_fbo;
+#endif
 }
 
 bool VKGSRender::on_framebuffer_bound(const rsx::framebuffer_layout& layout)
 {
+#ifdef __APPLE__
+	if (m_draw_fbo && m_draw_fbo->retired)
+	{
+		// Nulling the pointer defeats the ignore_change early return; release while the holder is alive
+		m_draw_fbo->release();
+		m_draw_fbo = nullptr;
+	}
+
+#endif
 	// Frame dump, every pass: the targets about to be replaced are finished, so save them first.
 	if (m_frame_dump.active && m_frame_dump.mode == rsx::frame_dump::dump_mode::every_pass && m_draw_fbo && m_frame_dump.draws) [[unlikely]]
 	{

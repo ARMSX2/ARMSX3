@@ -242,7 +242,7 @@ namespace vk
 					}
 				}
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__APPLE__)
 				// Spin briefly, then hand the core back.
 				//
 				// A pure pause() spin is reasonable on a desktop, where the result lands in
@@ -378,6 +378,9 @@ namespace vk
 			return;
 		}
 
+#ifdef __APPLE__
+		std::lock_guard lock(m_query_pool_cache_lock);
+#endif
 		m_query_pool_cache.emplace_back(std::move(pool));
 	}
 

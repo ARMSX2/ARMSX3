@@ -40,9 +40,15 @@
 #endif
 
 #if defined(__FreeBSD__) || defined(__APPLE__)
+#ifdef __APPLE__
+// The iOS SDK has no <net/route.h>, so iOS skips the route-table read and keeps the subnet .1 gateway.
+#include <TargetConditionals.h>
+#endif
 #include <net/if_dl.h>
+#if !defined(__APPLE__) || !TARGET_OS_IPHONE
 #include <net/route.h>
 #include <sys/sysctl.h>
+#endif
 #endif
 
 #include "util/yaml.hpp"
@@ -788,6 +794,7 @@ namespace np
 		}
 
 #if defined(__FreeBSD__) || defined(__APPLE__)
+#if !defined(__APPLE__) || !TARGET_OS_IPHONE
 		int mib[] = {CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_FLAGS, RTF_GATEWAY};
 		usz size = 0;
 
@@ -822,6 +829,7 @@ namespace np
 				}
 			}
 		}
+#endif
 #elif defined(__linux__)
 		if (fs::file route{"/proc/net/route"})
 		{

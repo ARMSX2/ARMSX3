@@ -1,4 +1,7 @@
 #include "stdafx.h"
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 #include "pad_config_types.h"
 
 template <>
@@ -25,7 +28,7 @@ void fmt_class_string<pad_handler>::format(std::string& out, u64 arg)
 #ifdef HAVE_LIBEVDEV
 		case pad_handler::evdev: return "Evdev";
 #endif
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__APPLE__)
 		case pad_handler::virtual_pad: return "Virtual";
 #endif
 		}

@@ -2,12 +2,19 @@
 #include "pad_thread.h"
 #include "Emu/android_app_state.h"
 #include "product_info.h"
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+#if !TARGET_OS_IPHONE
 #include "ds3_pad_handler.h"
 #include "ds4_pad_handler.h"
 #include "dualsense_pad_handler.h"
 #include "skateboard_pad_handler.h"
 #include "ps_move_handler.h"
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__APPLE__)
+#include "virtual_pad_handler.h"
+#endif
+#else
 #include "virtual_pad_handler.h"
 #endif
 #ifdef _WIN32
@@ -19,7 +26,7 @@
 #ifdef HAVE_SDL3
 #include "sdl_pad_handler.h"
 #endif
-#ifndef ANDROID
+#if !defined(ANDROID) && (!defined(__APPLE__) || defined(RPCS3_DESKTOP_FRONTEND))
 #include "keyboard_pad_handler.h"
 #endif
 #include "Emu/Io/Null/NullPadHandler.h"
@@ -161,7 +168,7 @@ void pad_thread::Init()
 
 	input_log.trace("Using pad config:\n%s", g_cfg_input);
 
-#ifndef ANDROID
+#if !defined(ANDROID) && (!defined(__APPLE__) || defined(RPCS3_DESKTOP_FRONTEND))
 	std::shared_ptr<keyboard_pad_handler> keyptr;
 #endif
 
@@ -184,7 +191,7 @@ void pad_thread::Init()
 		{
 			if (handler_type == pad_handler::keyboard)
 			{
-#ifndef ANDROID
+#if !defined(ANDROID) && (!defined(__APPLE__) || defined(RPCS3_DESKTOP_FRONTEND))
 				keyptr = std::make_shared<keyboard_pad_handler>();
 				keyptr->moveToThread(static_cast<QThread*>(m_curthread));
 				keyptr->SetTargetWindow(static_cast<QWindow*>(m_curwindow));
@@ -945,11 +952,20 @@ std::shared_ptr<PadHandlerBase> pad_thread::GetHandler(pad_handler type)
 	case pad_handler::null:
 		return std::make_shared<NullPadHandler>();
 	case pad_handler::keyboard:
-#ifdef ANDROID
+#if defined(ANDROID) || (defined(__APPLE__) && !defined(RPCS3_DESKTOP_FRONTEND))
 		return std::make_shared<NullPadHandler>();
 #else
 		return std::make_shared<keyboard_pad_handler>();
 #endif
+#if TARGET_OS_IPHONE
+	// The HID handlers reach IOKit through hidapi, which the iOS SDK lacks, so they are not built there.
+	case pad_handler::ds3:
+	case pad_handler::ds4:
+	case pad_handler::dualsense:
+	case pad_handler::skateboard:
+	case pad_handler::move:
+		return std::make_shared<NullPadHandler>();
+#else
 	case pad_handler::ds3:
 		return std::make_shared<ds3_pad_handler>();
 	case pad_handler::ds4:
@@ -960,6 +976,7 @@ std::shared_ptr<PadHandlerBase> pad_thread::GetHandler(pad_handler type)
 		return std::make_shared<skateboard_pad_handler>();
 	case pad_handler::move:
 		return std::make_shared<ps_move_handler>();
+#endif
 #ifdef _WIN32
 	case pad_handler::xinput:
 		return std::make_shared<xinput_pad_handler>();
@@ -974,7 +991,7 @@ std::shared_ptr<PadHandlerBase> pad_thread::GetHandler(pad_handler type)
 	case pad_handler::evdev:
 		return std::make_shared<evdev_joystick_handler>();
 #endif
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__APPLE__)
 	// ARMSX3: on-screen touch controls. Guard must match the enum value in
 	// Emu/Io/pad_config_types.h and the fmt_class_string case beside it.
 	case pad_handler::virtual_pad:
@@ -1046,7 +1063,7 @@ void pad_thread::set_target_window(void* window)
 {
 	m_curwindow = window;
 
-#ifndef ANDROID
+#if !defined(ANDROID) && (!defined(__APPLE__) || defined(RPCS3_DESKTOP_FRONTEND))
 	for (const auto& [type, handler] : m_handlers)
 	{
 		if (type == pad_handler::keyboard)

@@ -1,4 +1,7 @@
 #include "stdafx.h"
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 #include "system_config_types.h"
 
 template <>
@@ -737,10 +740,12 @@ void fmt_class_string<output_scaling_mode>::format(std::string& out, u64 arg)
 		case output_scaling_mode::nearest: return "Nearest";
 		case output_scaling_mode::bilinear: return "Bilinear";
 		case output_scaling_mode::fsr: return "FidelityFX Super Resolution";
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
 		// Missing case here would serialise as `unknown` and the mode would
 		// silently never be selectable -- same trap as pad_handler::virtual_pad.
 		case output_scaling_mode::shader: return "Shader chain (librashader)";
+#endif
+#ifdef __ANDROID__
 		case output_scaling_mode::sgsr: return "Snapdragon Game Super Resolution";
 		case output_scaling_mode::sgsr_edge: return "Snapdragon Game Super Resolution (Edge Direction)";
 #endif

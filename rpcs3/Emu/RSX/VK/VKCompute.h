@@ -419,8 +419,14 @@ namespace vk
 			create();
 
 			m_src =
+#ifdef __APPLE__
+			// Apple builds take the 3D-aware mip loop
+			#include "ios_gpu_deswizzle.glsl"
+			;
+#else
 			#include "../Program/GLSLSnippets/GPUDeswizzle.glsl"
 			;
+#endif
 
 			std::string transform;
 			if constexpr (_SwapBytes)

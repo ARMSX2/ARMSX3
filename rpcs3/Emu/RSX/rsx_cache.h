@@ -10,6 +10,9 @@
 #include "Emu/Memory/vm.h"
 #include "Emu/RSX/Program/RSXVertexProgram.h"
 #include "Emu/RSX/Program/RSXFragmentProgram.h"
+#ifdef __APPLE__
+#include "Emu/RSX/Program/ProgramStateCache.h"
+#endif
 #include "Overlays/Shaders/shader_loading_dialog.h"
 
 #include <chrono>
@@ -74,6 +77,40 @@ namespace rsx
 
 		backend_storage& m_storage;
 
+#ifdef __APPLE__
+		// A killed process must leave the old file or the new one, never a cut one
+		static bool write_cache_file(const std::string& path, const void* data, usz size)
+		{
+			fs::pending_file file(path);
+			return file.file && file.file.write(data, size) == size && file.commit();
+		}
+
+		// The decompiler walks a saved .fp to its end bit with no bound, so a cut file must not reach it
+		static bool holds_complete_fragment_program(const u8* data, u32 size)
+		{
+			for (u32 index = 0; (index + 1) * 16 <= size;)
+			{
+				const v128 inst = v128::loadu(data, index);
+				const bool end = (inst._u32[0] >> 8) & 0x1;
+
+				if (end && index == 0 && size == 16 && ((inst._u32[0] >> 16) & 0x3F) == 0)
+				{
+					// analyse_fragment_program saves a lone end NOP as 16 bytes even when it carries a literal flag
+					return true;
+				}
+
+				index += program_hash_util::fragment_program_utils::is_any_src_constant(inst) ? 2 : 1;
+
+				if (end)
+				{
+					return index * 16 == size;
+				}
+			}
+
+			return false;
+		}
+
+#endif
 		static std::string get_message(u32 index, u32 processed, u32 entry_count)
 		{
 			return fmt::format("%s pipeline object %u of %u", index == 0 ? "Loading" : "Compiling", processed, entry_count);
@@ -294,7 +331,12 @@ namespace rsx
 
 			// Preload everything needed to compile the shaders
 			unpacked_type unpacked;
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+			// iOS kills Apple's shader compiler service under memory pressure when every core links at once
+			uint nb_workers = g_cfg.video.renderer == video_renderer::vulkan ? std::max(1u, utils::get_thread_count() / 2) : 1;
+#else
 			uint nb_workers = g_cfg.video.renderer == video_renderer::vulkan ? utils::get_thread_count() : 1;
+#endif
 
 			load_shaders(nb_workers, unpacked, directory_path, entries, entry_count, dlg);
 
@@ -326,6 +368,25 @@ namespace rsx
 			std::string vp_name = root_path + "/raw/" + fmt::format("%llX.vp", data.vertex_program_hash);
 
 			// Writeback to cache either if file does not exist or it is invalid (unexpected size)
+#ifdef __APPLE__
+			if (fs::stat_t s{}; !fs::get_stat(fp_name, s) || s.size != fp.ucode_length)
+			{
+				if (!write_cache_file(fp_name, fp.get_data(), fp.ucode_length))
+				{
+					rsx_log.error("shaders_cache: failed to write %s (%s)", fp_name, fs::g_tls_error);
+					return;
+				}
+			}
+
+			if (fs::stat_t s{}; !fs::get_stat(vp_name, s) || s.size != vp.data.size() * sizeof(u32))
+			{
+				if (!write_cache_file(vp_name, vp.data.data(), vp.data.size() * sizeof(u32)))
+				{
+					rsx_log.error("shaders_cache: failed to write %s (%s)", vp_name, fs::g_tls_error);
+					return;
+				}
+			}
+#else
 			// Note: fs::write_file is not atomic, if the process is terminated in the middle an empty file is created
 			if (fs::stat_t s{}; !fs::get_stat(fp_name, s) || s.size != fp.ucode_length)
 			{
@@ -336,6 +397,7 @@ namespace rsx
 			{
 				fs::write_file(vp_name, fs::rewrite, vp.data);
 			}
+#endif
 
 			const u32 state_params[] =
 			{
@@ -358,7 +420,14 @@ namespace rsx
 
 			const std::string pipeline_file_name = fmt::format("%llX+%llX+%llX+%llX.bin", data.vertex_program_hash, data.fragment_program_hash, data.pipeline_storage_hash, state_hash);
 			const std::string pipeline_path = root_path + "/pipelines/" + pipeline_class_name + "/" + version_prefix + "/" + pipeline_file_name;
+#ifdef __APPLE__
+			if (!write_cache_file(pipeline_path, &data, sizeof(data)))
+			{
+				rsx_log.error("shaders_cache: failed to write %s (%s)", pipeline_path, fs::g_tls_error);
+			}
+#else
 			fs::write_file(pipeline_path, fs::rewrite, &data, sizeof(data));
+#endif
 		}
 
 		RSXVertexProgram load_vp_raw(u64 program_hash) const
@@ -385,8 +454,21 @@ namespace rsx
 			}
 
 			auto buf = std::make_unique<u8[]>(size);
+#ifdef __APPLE__
+			if (f.read(buf.get(), size) != size || !holds_complete_fragment_program(buf.get(), size))
+			{
+				rsx_log.error("Removing cached fragment program %llX.fp since it does not hold a complete program (%u bytes)", program_hash, size);
+				f.close();
+				fs::remove_file(fmt::format("%s/raw/%llX.fp", root_path, program_hash));
+				fp.ucode_length = 0;
+				return fp;
+			}
+
+			fp.data = buf.get();
+#else
 			fp.data = buf.get();
 			f.read(buf.get(), size);
+#endif
 			fragment_program_data[fragment_program_data.push_begin()] = std::move(buf);
 			return fp;
 		}

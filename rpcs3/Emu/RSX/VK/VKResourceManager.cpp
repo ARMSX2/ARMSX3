@@ -3,6 +3,14 @@
 #include "VKGSRender.h"
 #include "VKCommandStream.h"
 #include "Emu/RSX/rsx_profiler.h"
+#ifdef __APPLE__
+// Included directly: an undefined TARGET_OS_IPHONE would silently read as 0 below.
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+#include <malloc/malloc.h>
+#include <os/proc.h>
+#endif
+#endif
 
 namespace vk
 {
@@ -199,8 +207,87 @@ namespace vk
 		return vmm_get_application_pool_usage_impl(pool);
 	}
 
-	rsx::problem_severity vmm_determine_memory_load_severity()
+#ifdef __APPLE__
+	// Set from the system's critical memory-pressure event, which can come with a gigabyte of headroom left.
+	static std::atomic<s64> s_os_memory_critical_at{0}; // 0 means never
+
+	void vmm_notify_os_memory_critical()
 	{
+		s_os_memory_critical_at.store(std::chrono::steady_clock::now().time_since_epoch().count());
+	}
+
+	// Bytes for the IOSDIAG perf line, read under one lock so the three agree.
+	void vmm_get_usage_snapshot(u64& texture_cache, u64& surface_cache, u64& total)
+	{
+		reader_lock lock(g_vmm_stats.mutex);
+
+		texture_cache = vmm_get_application_pool_usage_impl(VMM_ALLOCATION_POOL_TEXTURE_CACHE);
+		surface_cache = vmm_get_application_pool_usage_impl(VMM_ALLOCATION_POOL_SURFACE_CACHE);
+
+		total = 0;
+		for (const auto& [type, usage] : g_vmm_stats.memory_usage)
+		{
+			total += usage.observe();
+		}
+	}
+
+	// Pressure from the process's jetsam headroom, since MoltenVK reports unified memory as device-local.
+	static rsx::problem_severity headroom_load_severity()
+	{
+#if TARGET_OS_IPHONE
+		constexpr u64 moderate_below_mib = 1536;
+		constexpr u64 severe_below_mib = 1024;
+		constexpr auto relief_interval = std::chrono::seconds(5);
+		constexpr auto critical_hold = std::chrono::seconds(5);
+
+		const s64 now = std::chrono::steady_clock::now().time_since_epoch().count();
+		const bool os_critical = now - s_os_memory_critical_at.load() < std::chrono::duration_cast<std::chrono::steady_clock::duration>(critical_hold).count();
+
+		// 0 means the kernel has no figure (or the process is already over), not "no memory left".
+		const u64 headroom = os_proc_available_memory();
+		if (!headroom && !os_critical)
+		{
+			return rsx::problem_severity::low;
+		}
+
+		const u64 headroom_mib = headroom / 0x100000;
+		const auto severity =
+			os_critical || headroom_mib < severe_below_mib ? rsx::problem_severity::severe :
+			headroom_mib < moderate_below_mib ? rsx::problem_severity::moderate :
+			rsx::problem_severity::low;
+
+		if (severity == rsx::problem_severity::low)
+		{
+			return severity;
+		}
+
+		static std::atomic<s64> s_last_relief{0};
+		s64 last = s_last_relief.load();
+		if (now - last >= std::chrono::duration_cast<std::chrono::steady_clock::duration>(relief_interval).count() &&
+			s_last_relief.compare_exchange_strong(last, now))
+		{
+			const u64 released = malloc_zone_pressure_relief(nullptr, 0);
+			rsx_log.warning("Process memory headroom is %lluM (%s pressure%s). Returned %llu bytes of free heap to the system.",
+				headroom_mib, severity == rsx::problem_severity::severe ? "severe" : "moderate",
+				os_critical ? ", system critical" : "", released);
+		}
+
+		return severity;
+#else
+		return rsx::problem_severity::low;
+#endif
+	}
+
+	rsx::problem_severity vmm_determine_memory_load_severity(bool include_headroom)
+#else
+	rsx::problem_severity vmm_determine_memory_load_severity()
+#endif
+	{
+#ifdef __APPLE__
+		// Read before the stats lock, so the malloc relief never runs under it.
+		const auto headroom_severity = include_headroom ? headroom_load_severity() : rsx::problem_severity::low;
+
+#endif
 		reader_lock lock(g_vmm_stats.mutex);
 
 		const auto vmm_load = get_current_mem_allocator()->get_memory_usage();
@@ -261,7 +348,11 @@ namespace vk
 			}
 		}
 
+#ifdef __APPLE__
+		return std::max(load_severity, headroom_severity);
+#else
 		return load_severity;
+#endif
 	}
 
 	std::string vmm_describe_memory_usage()

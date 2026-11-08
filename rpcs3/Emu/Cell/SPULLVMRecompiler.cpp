@@ -24,6 +24,9 @@ bool spu_is_killzone3(); // SPUThread.cpp
 #include "util/v128.hpp"
 #include "util/simd.hpp"
 #include "util/sysinfo.hpp"
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 
 const extern spu_decoder<spu_itype> g_spu_itype;
 const extern spu_decoder<spu_iname> g_spu_iname;
@@ -251,6 +254,10 @@ class spu_llvm_recompiler : public spu_recompiler_base, public cpu_translator
 	// Module name
 	std::string m_hash;
 
+#ifdef __APPLE__
+	std::vector<std::pair<u32, u32>> m_poll_park_sites;
+
+#endif
 	// Patchpoint unique id
 	u32 m_pp_id = 0;
 
@@ -1569,7 +1576,11 @@ class spu_llvm_recompiler : public spu_recompiler_base, public cpu_translator
 		// Touch memory (on the opposite side of the page)
 		m_ir->CreateAtomicRMW(llvm::AtomicRMWInst::Or, _ptr(m_memptr, m_ir->CreateXor(_eal, 4096 / 2)), m_ir->getInt8(0), llvm::MaybeAlign{16}, llvm::AtomicOrdering::SequentiallyConsistent);
 
+#ifdef __APPLE__
+		const auto rptr = _ptr(m_ir->CreateLoad(get_type<u8*>(), spu_ptr(&spu_thread::reserv_base_addr)), vm::reservation_slot_offset(eal_val).eval(m_ir));
+#else
 		const auto rptr = _ptr(m_ir->CreateLoad(get_type<u8*>(), spu_ptr(&spu_thread::reserv_base_addr)), ((eal_val & 0xff80) >> 1).eval(m_ir));
+#endif
 		const auto rtime = m_ir->CreateLoad(get_type<u64>(), spu_ptr(&spu_thread::rtime));
 
 		m_ir->CreateBr(_repeat_lock);
@@ -1630,7 +1641,11 @@ class spu_llvm_recompiler : public spu_recompiler_base, public cpu_translator
 
 		// Perform unlocked vm::reservation_update if no physical memory changes needed
 		m_ir->SetInsertPoint(_inc_res);
+#ifdef __APPLE__
+		const auto rptr2 = _ptr(m_ir->CreateLoad(get_type<u8*>(), spu_ptr(&spu_thread::reserv_base_addr)), vm::reservation_slot_offset(eal_val).eval(m_ir));
+#else
 		const auto rptr2 = _ptr(m_ir->CreateLoad(get_type<u8*>(), spu_ptr(&spu_thread::reserv_base_addr)), ((eal_val & 0xff80) >> 1).eval(m_ir));
+#endif
 
 		llvm::Value* old_val{};
 
@@ -1740,7 +1755,11 @@ class spu_llvm_recompiler : public spu_recompiler_base, public cpu_translator
 		value_t<u32> eal_val;
 		eal_val.value = _eal;
 
+#ifdef __APPLE__
+		const auto rptr = _ptr(m_ir->CreateLoad(get_type<u8*>(), spu_ptr(&spu_thread::reserv_base_addr)), vm::reservation_slot_offset(eal_val).eval(m_ir));
+#else
 		const auto rptr = _ptr(m_ir->CreateLoad(get_type<u8*>(), spu_ptr(&spu_thread::reserv_base_addr)), ((eal_val & 0xff80) >> 1).eval(m_ir));
+#endif
 		const auto rval = m_ir->CreateLoad(get_type<u64>(), spu_ptr(&spu_thread::rtime));
 		m_ir->CreateCondBr(
 			m_ir->CreateExtractValue(m_ir->CreateAtomicCmpXchg(rptr, rval, m_ir->CreateAdd(rval, m_ir->getInt64(128)), llvm::MaybeAlign{16}, llvm::AtomicOrdering::SequentiallyConsistent, llvm::AtomicOrdering::SequentiallyConsistent), 1)
@@ -1777,6 +1796,38 @@ public:
 			m_spurt = &g_fxo->get<spu_runtime>();
 			cpu_translator::initialize(m_jit.get_context(), m_jit.get_engine());
 
+#ifdef __APPLE__
+			// SPU Poll Park Sites: "<hex pc>:<hex word>" entries separated by commas; a bad entry is logged and skipped
+			const std::string park_text = g_cfg.core.spu_poll_park_sites.to_string();
+
+			for (usz pos = 0; pos < park_text.size();)
+			{
+				const usz comma = std::min(park_text.find(',', pos), park_text.size());
+				const std::string_view entry = std::string_view{park_text}.substr(pos, comma - pos);
+				pos = comma + 1;
+
+				const usz colon = entry.find(':');
+				u32 pc = 0, word = 0;
+				const auto whole_hex = [](std::string_view field, u32& out)
+				{
+					const auto [ptr, ec] = std::from_chars(field.data(), field.data() + field.size(), out, 16);
+					return !field.empty() && ec == std::errc() && ptr == field.data() + field.size();
+				};
+
+				if (colon == umax || !whole_hex(entry.substr(0, colon), pc) || !whole_hex(entry.substr(colon + 1), word) ||
+					pc >= SPU_LS_SIZE || pc % 4)
+				{
+					spu_log.error("SPU Poll Park Sites: could not read '%s', expected <hex LS pc>:<hex instruction word>", entry);
+					continue;
+				}
+
+				m_poll_park_sites.emplace_back(pc, word);
+			}
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+			m_jit.set_obj_cache_stats(&m_spurt->obj_cache_stats);
+#endif
+
+#endif
 			const auto md_name = llvm::MDString::get(m_context, "branch_weights");
 			const auto md_low = llvm::ValueAsMetadata::get(llvm::ConstantInt::get(GetType<u32>(), 1));
 			const auto md_high = llvm::ValueAsMetadata::get(llvm::ConstantInt::get(GetType<u32>(), 999));
@@ -2014,7 +2065,12 @@ public:
 		}
 #endif
 
+#ifdef __APPLE__
+		// One notice per compiled function, cache hits included, floods the log
+		spu_log.trace("Building function 0x%x... (size %u, %s)", func.entry_point, func.data.size(), m_hash);
+#else
 		spu_log.notice("Building function 0x%x... (size %u, %s)", func.entry_point, func.data.size(), m_hash);
+#endif
 
 		// Say so on screen when SPU code compiles during play. That happens on the SPU thread that
 		// needs the code; the boot-time precompile runs on worker threads under its own progress
@@ -3818,6 +3874,18 @@ public:
 					else
 						m_next_op = func.data[(m_pos - start) / 4 + 1];
 
+#ifdef __APPLE__
+					// Park a failed guest poll before a listed instruction; the pc and the word must both match
+					for (const auto& [site_pc, site_word] : m_poll_park_sites)
+					{
+						if (m_pos == site_pc && op == site_word)
+						{
+							spu_log.notice("SPU poll park: compiled in at 0x%05x in %s", m_pos, m_hash);
+							call("spu_poll_park", &exec_poll_park, m_thread);
+						}
+					}
+
+#endif
 					switch (m_inst_attrs[(m_pos - start) / 4])
 					{
 					case inst_attr::putllc0:
@@ -4519,7 +4587,7 @@ public:
 			print_ir();
 		}
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && !defined(ARCH_ARM64)
 		// Apple Silicon W^X: enter write mode for JIT memory and pair
 		// it with an RAII guard so execute mode is restored on every
 		// exit path (the early "return nullptr" below would otherwise
@@ -4575,7 +4643,12 @@ public:
 					// two more places -- so the cache is only sound once every such site goes through
 					// a relocatable symbol instead of IntToPtr(getInt64(...)). Until then, correctness
 					// over the boot time: recompile per session, as ARM64 always did before.
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+					// Every host address goes through host_data_ptr here, so the cached object is safe to load
+					added = m_jit.try_add(std::move(_module), obj_cache, llvm_error);
+#else
 					added = m_jit.try_add(std::move(_module), llvm_error);
+#endif
 				}
 				else
 				{
@@ -4677,7 +4750,7 @@ public:
 			fs::write_file(m_spurt->get_cache_path() + "spu-ir.log", fs::create + fs::write + fs::append, llvm_log);
 		}
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && !defined(ARCH_ARM64)
 		pthread_jit_write_protect_np(true);
 #endif
 #if defined(ARCH_ARM64)
@@ -5363,6 +5436,40 @@ public:
 		return exec_rdch(_spu, SPU_RdInMbox);
 	}
 
+#ifdef __APPLE__
+	// Sleeps a guest poll that keeps failing, since nothing wakes a guest polling with a plain GET
+	static void exec_poll_park(spu_thread* _spu)
+	{
+		thread_local u64 streak_start = 0;
+		thread_local u64 last_exit = 0;
+		thread_local bool told = false;
+
+		const u64 now = get_system_time();
+
+		// A gap of more than 10 us since the previous call returned means the guest did other work: restart the count
+		if (now - last_exit > 10)
+		{
+			streak_start = now;
+		}
+
+		if (now - streak_start >= 100)
+		{
+			if (!told)
+			{
+				told = true;
+				spu_log.notice("SPU poll park: thread '%s' (id 0x%x) parks: its failed poll has repeated for 100 us", *_spu->spu_tname.load(), _spu->id);
+			}
+
+			_spu->state += cpu_flag::wait;
+			std::this_thread::sleep_for(std::chrono::microseconds(50));
+			static_cast<void>(_spu->test_stopped());
+		}
+
+		// Taken after any sleep, so the sleep never reads as a gap
+		last_exit = get_system_time();
+	}
+
+#endif
 	static u32 exec_read_dec(spu_thread* _spu)
 	{
 		const u32 res = _spu->read_dec().first;
@@ -5516,7 +5623,11 @@ public:
 #if defined(ARCH_X64) || defined(ARCH_ARM64)
 			if (utils::get_tsc_freq() && !(g_cfg.core.spu_loop_detection) && (g_cfg.core.clocks_scale == 100))
 			{
+#ifdef __APPLE__
+				const auto timebase_offs = m_ir->CreateLoad(get_type<u64>(), host_data_ptr("spu_host_g_timebase_offs", &g_timebase_offs));
+#else
 				const auto timebase_offs = m_ir->CreateLoad(get_type<u64>(), m_ir->CreateIntToPtr(m_ir->getInt64(reinterpret_cast<u64>(&g_timebase_offs)), get_type<u64*>()));
+#endif
 				const auto timestamp = m_ir->CreateLoad(get_type<u64>(), spu_ptr(&spu_thread::ch_dec_start_timestamp));
 				const auto dec_value = m_ir->CreateLoad(get_type<u32>(), spu_ptr(&spu_thread::ch_dec_value));
 				// Upstream 61a260482 widened this path to ARM64 using llvm.readcyclecounter, but on
@@ -6154,8 +6265,12 @@ public:
 							? (vm::page_readable | vm::page_allocated)
 							: (vm::page_writable | vm::page_allocated);
 
+#ifdef __APPLE__
+						const auto pages = host_data_ptr("spu_host_vm_g_pages", vm::g_pages.data());
+#else
 						const auto pages = m_ir->CreateIntToPtr(
 							m_ir->getInt64(reinterpret_cast<u64>(vm::g_pages.data())), get_type<u8*>());
+#endif
 
 						const auto flags_at = [&](llvm::Value* addr) -> llvm::Value*
 						{
@@ -6283,6 +6398,14 @@ public:
 						call("spu_memcpy", +spu_memcpy, dst, src, zext<u32>(size).eval(m_ir));
 					}
 
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+					// ARM can satisfy a later load before this GET's loads, which x86 never allows
+					if (cmd & MFC_GET_CMD)
+					{
+						m_ir->CreateFence(llvm::AtomicOrdering::Acquire);
+					}
+
+#endif
 					// Disable certain thing
 					m_ir->CreateStore(m_ir->getInt32(0), spu_ptr(&spu_thread::last_faddr));
 					m_ir->CreateBr(next);
@@ -6447,7 +6570,11 @@ public:
 #if defined(ARCH_X64) || defined(ARCH_ARM64)
 			if (utils::get_tsc_freq() && !(g_cfg.core.spu_loop_detection) && (g_cfg.core.clocks_scale == 100))
 			{
+#ifdef __APPLE__
+				const auto timebase_offs = m_ir->CreateLoad(get_type<u64>(), host_data_ptr("spu_host_g_timebase_offs", &g_timebase_offs));
+#else
 				const auto timebase_offs = m_ir->CreateLoad(get_type<u64>(), m_ir->CreateIntToPtr(m_ir->getInt64(reinterpret_cast<u64>(&g_timebase_offs)), get_type<u64*>()));
+#endif
 				// Upstream 61a260482 widened this path to ARM64 using llvm.readcyclecounter, but on
 				// AArch64 that lowers to MRS PMCCNTR_EL0 -- the performance counter, which userspace
 				// cannot read on Android and which runs at the DVFS-varying core clock. The maths
@@ -6798,8 +6925,12 @@ public:
 			spu_log.notice("Killzone 3: KD-tree traversal guard compiled in at LS 0x21238 (%s)", Emu.GetTitleID());
 
 			const auto ea = eval(extract(get_vr(op.rt), 3)).value;
+#ifdef __APPLE__
+			const auto pages = host_data_ptr("spu_host_vm_g_pages", vm::g_pages.data());
+#else
 			const auto pages = m_ir->CreateIntToPtr(
 				m_ir->getInt64(reinterpret_cast<u64>(vm::g_pages.data())), get_type<u8*>());
+#endif
 			const auto idx = m_ir->CreateLShr(m_ir->CreateZExt(ea, get_type<u64>()), 12);
 			const auto flags = m_ir->CreateLoad(get_type<u8>(), m_ir->CreateGEP(get_type<u8>(), pages, idx));
 			const auto backed = m_ir->CreateICmpNE(
@@ -11551,6 +11682,19 @@ public:
 		return func;
 	}
 
+#ifdef __APPLE__
+	// A host data address the cached object can carry: a relocatable global on Apple ARM64
+	llvm::Value* host_data_ptr(const char* name, const void* addr)
+	{
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+		m_engine->updateGlobalMapping(name, reinterpret_cast<u64>(addr));
+		return m_module->getOrInsertGlobal(name, get_type<u8>());
+#else
+		return m_ir->CreateIntToPtr(m_ir->getInt64(reinterpret_cast<u64>(addr)), get_type<u8*>());
+#endif
+	}
+
+#endif
 	static decltype(&spu_llvm_recompiler::UNK) decode(u32 op);
 };
 
@@ -11566,6 +11710,7 @@ decltype(&spu_llvm_recompiler::UNK) spu_llvm_recompiler::decode(u32 op)
 	return s_spu_llvm_decoder.decode(op);
 }
 
+#ifndef __APPLE__
 // Build stamp for the SPU object cache key, defined HERE because this is the file that generates
 // the code. The key already folded a stamp, but that one lived in SPUCommonRecompiler.cpp and so
 // only moved when THAT translation unit recompiled -- which an edit to the code generator does
@@ -11577,6 +11722,7 @@ const char* spu_llvm_codegen_build_stamp()
 	return __DATE__ " " __TIME__;
 }
 
+#endif
 #else
 
 std::unique_ptr<spu_recompiler_base> spu_recompiler_base::make_llvm_recompiler(u8 magn)

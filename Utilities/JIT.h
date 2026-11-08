@@ -45,6 +45,10 @@
 #include <unordered_map>
 #include <util/v128.hpp>
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+
 #if defined(ARCH_X64)
 using native_asm = asmjit::x86::Assembler;
 using native_args = std::array<asmjit::x86::Gp, 4>;
@@ -433,7 +437,8 @@ namespace asmjit
 #endif
 }
 
-#ifdef __APPLE__
+// Unavailable on iOS, and the write-alias JIT on Apple ARM64 has no MAP_JIT region to toggle.
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && !defined(ARCH_ARM64)
 struct jit_write_guard
 {
 	jit_write_guard() noexcept
@@ -514,6 +519,22 @@ inline FT build_function_asm(std::string_view name, F&& builder, ::jit_runtime* 
 	return reinterpret_cast<FT>(uptr(result));
 }
 
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+// One boot's SPU object cache events, owned by spu_runtime.
+struct jit_obj_cache_stats
+{
+	atomic_t<u64> hits{0};
+	atomic_t<u64> misses{0};
+	atomic_t<u64> rejected{0};
+	atomic_t<u64> not_persisted{0};
+	atomic_t<u64> written{0};
+	atomic_t<u64> write_failed{0};
+	atomic_t<u64> evicted{0};
+	atomic_t<u64> validate_ns{0};
+	atomic_t<u64> walk_ns{0};
+};
+#endif
+
 #if defined(__INTELLISENSE__) && !defined(LLVM_AVAILABLE)
 #define LLVM_AVAILABLE
 #endif
@@ -547,6 +568,10 @@ class jit_compiler final
 	atomic_t<usz> m_disk_space = umax;
 
 	bool m_poisoned = false;
+
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+	jit_obj_cache_stats* m_obj_cache_stats = nullptr;
+#endif
 
 public:
 	jit_compiler(const std::unordered_map<std::string, u64>& _link, std::string_view _cpu, u32 flags = 0, std::function<u64(const std::string&)> symbols_cement = {}) noexcept;
@@ -610,6 +635,19 @@ public:
 	static std::string triple2();
 
 	bool add_sub_disk_space(ssz space);
+
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+	// With stats set, cached objects are counted and checked, and a module that bakes a host address is not persisted.
+	void set_obj_cache_stats(jit_obj_cache_stats* stats)
+	{
+		m_obj_cache_stats = stats;
+	}
+
+	jit_obj_cache_stats* get_obj_cache_stats() const
+	{
+		return m_obj_cache_stats;
+	}
+#endif
 };
 
 const char *fallback_cpu_detection();

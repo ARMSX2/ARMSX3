@@ -40,7 +40,11 @@ namespace vk
 			auto& queue = found->second;
 			for (const auto& fbo : queue)
 			{
+#ifdef __APPLE__
+				if (!fbo->retired && fbo->matches(image_list, width, height))
+#else
 				if (fbo->matches(image_list, width, height))
+#endif
 				{
 					return fbo.get();
 				}
@@ -79,7 +83,11 @@ namespace vk
 			auto& queue = found->second;
 			for (const auto& e : queue)
 			{
+#ifdef __APPLE__
+				if (!e->retired && e->attachments[0]->info.image == attachment)
+#else
 				if (e->attachments[0]->info.image == attachment)
+#endif
 				{
 					return e.get();
 				}
@@ -109,7 +117,27 @@ namespace vk
 		for (auto It = g_framebuffers_cache.begin(); It != g_framebuffers_cache.end();)
 		{
 			It->second.erase(
+#ifdef __APPLE__
+				std::remove_if(It->second.begin(), It->second.end(), [&](const auto& fbo)
+				{
+					if (!criteria(fbo))
+					{
+						return false;
+					}
+
+					if (fbo->has_refs())
+					{
+						// Still referenced: keep it for its owner, which drops it.
+						fbo->retired = true;
+						rsx_log.warning("VK: retired a framebuffer that is still referenced");
+						return false;
+					}
+
+					return true;
+				}),
+#else
 				std::remove_if(It->second.begin(), It->second.end(), criteria),
+#endif
 				It->second.end()
 			);
 

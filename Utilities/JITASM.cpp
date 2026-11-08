@@ -16,6 +16,9 @@
 
 #if defined(__APPLE__)
 #include <mutex>
+#include <TargetConditionals.h>
+#include "ios_jit_dual_map.h"
+#include "ios_jit_pool_full.h"
 #endif
 
 LOG_CHANNEL(jit_log, "JIT");
@@ -122,7 +125,19 @@ static u8* get_jit_memory()
 	// Reserve 2G memory (magic static)
 	static void* const s_memory2 = []() -> void*
 	{
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+		// Pool 2 is carved from the JIT dual-map block, so it shares the AsmJIT arena's write alias.
+		// With no block the reservation runs to jit_data_off + 1 GiB, because the data half sits at
+		// jit_data_off (4 GiB here, a compile-time constant), past upstream's 2 GiB.
+		void* ptr = utils::jit_dual_map_carve(utils::jit_pool::jit_memory, 0x80000000);
+
+		if (!ptr)
+		{
+			ptr = utils::memory_reserve(utils::jit_data_off + 0x40000000, true);
+		}
+#else
 		void* ptr = utils::memory_reserve(0x80000000, true);
+#endif
 #ifdef CAN_OVERCOMMIT
 		utils::memory_commit(ptr, 0x80000000);
 		utils::memory_protect(ptr, 0x40000000, utils::protection::wx);
@@ -139,7 +154,12 @@ static atomic_t<u64> s_code_pos{0}, s_data_pos{0};
 // Snapshot of code generated before main()
 static std::vector<u8> s_code_init, s_data_init;
 
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+// usz because jit_data_off is 4 GiB here; a uint would truncate it to 0.
+template <atomic_t<u64>& Ctr, usz Off, utils::protection Prot>
+#else
 template <atomic_t<u64>& Ctr, uint Off, utils::protection Prot>
+#endif
 static u8* add_jit_memory(usz size, usz align)
 {
 	// Select subrange
@@ -165,7 +185,12 @@ static u8* add_jit_memory(usz size, usz align)
 		const u64 _pos = utils::align(ctr & 0xffff'ffff, align);
 		const u64 _new = utils::align(_pos + size, align);
 
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+		// The code half ends where the JIT prepare ended: an unprepared page cannot execute.
+		if (_new > (Off == 0 ? utils::g_pool2_code_limit : 0x40000000)) [[unlikely]]
+#else
 		if (_new > 0x40000000) [[unlikely]]
+#endif
 		{
 			// Sorry, we failed, and further attempts should fail too.
 			ctr |= 0x40000000;
@@ -189,6 +214,10 @@ static u8* add_jit_memory(usz size, usz align)
 	if (pos == umax) [[unlikely]]
 	{
 		jit_log.error("Out of memory (size=0x%x, align=0x%x, off=0x%x)", size, align, Off);
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+		// Park the callers rather than return a null they cannot handle; the mask clears the sticky full bit.
+		utils::jit_pool_full(Off == 0 ? "pool 2 (code)" : "pool 2 (data)", Ctr.load() & 0xbfff'ffff, Off == 0 ? utils::g_pool2_code_limit : 0x40000000, size);
+#endif
 		return nullptr;
 	}
 
@@ -246,7 +275,18 @@ void* jit_runtime_base::_add(asmjit::CodeHolder* code, usz align) noexcept
 				fmt::throw_exception("CodeHolder section exceeds range: Section->offset: 0x%x, Section->bufferSize: 0x%x, alloted-memory=0x%x", section->offset(), section->bufferSize(), utils::align<usz>(codeSize, align));
 			}
 
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+			// TXM gives the block separate write and execute addresses: copy through the write alias,
+			// and keep returning and flushing the execute address, or the CPU runs stale code.
+			// Only the execute half has an alias; inline_runtime passes buffers from outside the block.
+			u8* const dst = utils::jit_view_of(p) == utils::jit_view::execute
+				? utils::jit_rw(p)
+				: p;
+
+			std::memcpy(dst + section->offset(), section->data(), section->bufferSize());
+#else
 			std::memcpy(p + section->offset(), section->data(), section->bufferSize());
+#endif
 		}
 	}
 
@@ -277,6 +317,8 @@ u8* jit_runtime::alloc(usz size, usz align, bool exec) noexcept
 {
 #if defined(__APPLE__)
 	static std::mutex s_alloc_lock;
+	// Declared before the lock so it runs after the unlock: a full pool parks with no lock held.
+	utils::jit_pool_full_parker park_after_unlock;
 	std::lock_guard lock(s_alloc_lock);
 #endif
 
@@ -286,7 +328,11 @@ u8* jit_runtime::alloc(usz size, usz align, bool exec) noexcept
 	}
 	else
 	{
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+		return add_jit_memory<s_data_pos, utils::jit_data_off, utils::protection::rw>(size, align);
+#else
 		return add_jit_memory<s_data_pos, 0x40000000, utils::protection::rw>(size, align);
+#endif
 	}
 }
 
@@ -298,7 +344,11 @@ u8* jit_runtime::peek(bool exec) noexcept
 	}
 	else
 	{
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+		return add_jit_memory<s_data_pos, utils::jit_data_off, utils::protection::rw>(0, 1);
+#else
 		return add_jit_memory<s_data_pos, 0x40000000, utils::protection::rw>(0, 1);
+#endif
 	}
 }
 
@@ -318,7 +368,7 @@ void jit_runtime::initialize()
 
 void jit_runtime::finalize() noexcept
 {
-#ifdef __APPLE__
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && !defined(ARCH_ARM64)
 	pthread_jit_write_protect_np(false);
 #endif
 	// Reset JIT memory
@@ -326,7 +376,13 @@ void jit_runtime::finalize() noexcept
 	utils::memory_reset(get_jit_memory(), 0x80000000, true);
 	utils::memory_protect(get_jit_memory(), 0x40000000, utils::protection::wx);
 #else
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+	// Only pool 2's two halves: the rest of the execute half holds the AsmJIT arena and pool 3.
+	utils::memory_decommit(get_jit_memory(), 0x40000000, true);
+	utils::memory_decommit(get_jit_memory() + utils::jit_data_off, 0x40000000, true);
+#else
 	utils::memory_decommit(get_jit_memory(), 0x80000000, true);
+#endif
 #endif
 
 	s_code_pos = 0;
@@ -334,10 +390,18 @@ void jit_runtime::finalize() noexcept
 
 	// Restore code/data snapshot
 	u8* const code_ptr = alloc(s_code_init.size(), 1, true);
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+	// Written through the alias like _add; the flush below keeps the execute address.
+	std::memcpy(utils::jit_view_of(code_ptr) == utils::jit_view::execute
+			? utils::jit_rw(code_ptr)
+			: code_ptr,
+		s_code_init.data(), s_code_init.size());
+#else
 	std::memcpy(code_ptr, s_code_init.data(), s_code_init.size());
+#endif
 	std::memcpy(alloc(s_data_init.size(), 1, false), s_data_init.data(), s_data_init.size());
 
-#ifdef __APPLE__
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && !defined(ARCH_ARM64)
 	pthread_jit_write_protect_np(true);
 #endif
 #ifdef ARCH_ARM64
@@ -359,7 +423,19 @@ jit_runtime_base& asmjit::get_global_runtime()
 	{
 		custom_runtime() noexcept
 		{
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+			// Pool 1 is carved from the block; this runs before main(), from the gateways' static init.
+			void* arena = utils::jit_dual_map_carve(utils::jit_pool::asmjit_arena, size);
+
+			if (!arena)
+			{
+				arena = utils::memory_reserve(size, true);
+			}
+
+			ensure(m_pos.raw() = static_cast<uchar*>(arena));
+#else
 			ensure(m_pos.raw() = static_cast<uchar*>(utils::memory_reserve(size, true)));
+#endif
 
 			// Initialize "end" pointer
 			m_max = m_pos + size;

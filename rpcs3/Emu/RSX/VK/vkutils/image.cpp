@@ -526,7 +526,22 @@ namespace vk
 		}
 
 		const VkImageSubresourceRange range = { aspect() & mask, 0, info.mipLevels, 0, info.arrayLayers };
+#ifdef __APPLE__
+		if (!range.aspectMask) [[unlikely]]
+		{
+			// Name the image, the request and the caller (symbolicate the address with the build's dSYM)
+#if defined(__GNUC__) || defined(__clang__)
+			const void* caller = __builtin_return_address(0);
+#else
+			const void* caller = nullptr;
+#endif
+			fmt::throw_exception("get_view: image aspect 0x%x has nothing in common with mask 0x%x (format=%d, %ux%ux%u, mips=%u, layers=%u, remap=0x%x, caller=%p)",
+				aspect(), mask, static_cast<int>(info.format), info.extent.width, info.extent.height, info.extent.depth,
+				info.mipLevels, info.arrayLayers, remap_encoding, caller);
+		}
+#else
 		ensure(range.aspectMask);
+#endif
 
 		auto view = std::make_unique<vk::image_view>(*g_render_device, this, format(), VK_IMAGE_VIEW_TYPE_MAX_ENUM, real_mapping, range);
 		auto result = view.get();

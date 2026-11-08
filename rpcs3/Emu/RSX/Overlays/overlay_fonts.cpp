@@ -12,6 +12,9 @@
 #include <sys/sysctl.h>
 #endif
 #endif
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 
 namespace rsx
 {
@@ -121,11 +124,19 @@ namespace rsx
 				result.font_names.emplace_back("Arial.ttf");
 				result.font_names.emplace_back("arial.ttf");
 #ifdef __APPLE__
+#if TARGET_OS_IPHONE
+				// iOS ships none of the macOS names below; its system fonts live under /System/Library/Fonts
+				result.font_names.emplace_back("/System/Library/Fonts/Core/HelveticaNeue.ttc");
+				result.font_names.emplace_back("/System/Library/Fonts/Core/Helvetica.ttc");
+				result.font_names.emplace_back("HelveticaNeue.ttc");
+				result.font_names.emplace_back("Helvetica.ttc");
+#else
 				result.font_names.emplace_back("DejaVuSans.ttf");
 				result.font_names.emplace_back("NotoSans-Regular.ttf");
 				result.font_names.emplace_back("Roboto-Regular.ttf");
 				result.font_names.emplace_back("OpenSans-Regular.ttf");
 				result.font_names.emplace_back("FreeSans.ttf");
+#endif
 #elif defined(_WIN32)
 				// Covers symbol blocks (e.g. Roman numerals) that plain Arial may be missing glyphs for.
 				result.font_names.emplace_back("tahoma.ttf");

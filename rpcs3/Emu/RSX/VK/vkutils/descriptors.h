@@ -116,7 +116,7 @@ namespace vk
 		// 1024 costs one extra vkUpdateDescriptorSets per 1024 writes and takes the
 		// reservation to ~57KB. The two constants have to move together: the flush
 		// threshold is what guarantees the queue never outruns the reservation.
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__APPLE__)
 		static constexpr size_t max_cache_size = 1024;
 #else
 		static constexpr size_t max_cache_size = 16384;

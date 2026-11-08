@@ -61,6 +61,13 @@ namespace vk
 		{
 			rsx_log.error("vkQueueSubmit returned %s. This is the first site to observe it.",
 				submit_result == VK_ERROR_DEVICE_LOST ? "VK_ERROR_DEVICE_LOST" : "an error");
+#ifdef __APPLE__
+			// Latch a lost device so a swapchain rebuild does not run on it
+			if (submit_result == VK_ERROR_DEVICE_LOST)
+			{
+				rsx::request_device_lost_shutdown("submitting a command buffer");
+			}
+#endif
 		}
 
 		// Signal fence

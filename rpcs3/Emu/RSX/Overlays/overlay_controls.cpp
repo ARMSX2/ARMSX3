@@ -18,6 +18,7 @@
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
+#include <TargetConditionals.h>
 #endif
 
 #if defined(__DragonFly__) || defined(__FreeBSD__) || defined(__NetBSD__)
@@ -235,7 +236,12 @@ namespace rsx
 					{
 						std::string executablePath = dirname(result);
 #ifdef __APPLE__
+#if TARGET_OS_IPHONE
+						// An iOS .app bundle is flat, so resources sit beside the binary
+						src = executablePath + "/Icons/ui/" + res;
+#else
 						src = executablePath + "/../Resources/Icons/ui/" + res;
+#endif
 #else
 						src = executablePath + "/../share/rpcs3/Icons/ui/" + res;
 #endif

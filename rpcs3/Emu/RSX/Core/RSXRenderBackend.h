@@ -45,6 +45,9 @@ namespace rsx
 		bool supports_programmable_blending;     // Can handle programmable blending requests
 		bool supports_extended_depth_range;      // Depth values above 1 can be stored and tested. Float depth targets are emulated otherwise.
 		bool supports_framebufferless_rendering; // Can rasterize without any attachments bound (e.g for occlusion queries)
+#ifdef __APPLE__
+		bool requires_copy_for_feedback_reads;   // Sampling a bound render target in place is not coherent on tile-based hosts
+#endif
 	};
 
 	enum class device_status

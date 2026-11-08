@@ -604,8 +604,27 @@ lv2_fs_object::lv2_fs_object(std::string_view filename)
 {
 }
 
+#ifdef __APPLE__
+// The name is read back as a C string, so a saved name with no NUL would be read past its end
+static std::array<char, 0x420> pop_lv2_fs_name(utils::serial& ar)
+{
+	const auto name = ar.pop<std::array<char, 0x420>>();
+
+	if (std::find(name.begin(), name.end(), '\0') == name.end())
+	{
+		fmt::throw_exception("lv2_fs_object deserialization failed: the saved name has no NUL terminator (pos=0x%x)", ar.pos);
+	}
+
+	return name;
+}
+
+#endif
 lv2_fs_object::lv2_fs_object(utils::serial& ar, bool)
+#ifdef __APPLE__
+	: name(pop_lv2_fs_name(ar))
+#else
 	: name(ar.pop<decltype(name)>())
+#endif
 	, mp(g_fxo->get<lv2_fs_mount_info_map>().lookup(name.data()))
 {
 }
