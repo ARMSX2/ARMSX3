@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Adds the JITEnabler embed to ARMSX3's dependencies; project.yml includes this file only when ARMSX3_JIT_ENABLER_EMBED is set.
+targets:
+  ARMSX3:
+    dependencies:
+      - target: JITEnabler
+        embed: true

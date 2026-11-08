@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// Applied to the JITEnabler target only: the idevice archive from build-idevice.sh links into the helper, never the app.
+
+// Force-loading pulls in every FFI symbol of the archive.
+OTHER_LDFLAGS = $(inherited) -force_load "$(SRCROOT)/3rdparty/jit-enabler/out/lib/libidevice_ffi.a"
+HEADER_SEARCH_PATHS = $(inherited) "$(SRCROOT)/3rdparty/jit-enabler/out/include"
+SWIFT_INCLUDE_PATHS = $(inherited) "$(SRCROOT)/3rdparty/jit-enabler/out/include"
+IPHONEOS_DEPLOYMENT_TARGET = 17.4
