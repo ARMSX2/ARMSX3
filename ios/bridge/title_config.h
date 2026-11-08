@@ -700,6 +700,10 @@ namespace armsx3::bridge::title_config
 		{"BLES00713", "Core:\n  Pause Game During SPU Compilation: true\n  SPU Poll Park Sites: 3f47c:40801083\n"},
 		{"BLES00714", "Core:\n  Pause Game During SPU Compilation: true\n"},
 
+		// Exact ZCULL stats make the torches flicker on iPhone; approximate stats stop it.
+		{"BLES00158", "Video:\n  Accurate ZCULL stats: false\n  Relaxed ZCULL Sync: false\n"},
+		{"BLUS30089", "Video:\n  Accurate ZCULL stats: false\n  Relaxed ZCULL Sync: false\n"},
+
 		// At 0 a PPU trap stops the game; at 1 the trapping instruction is skipped.
 		{"BCES01176", "Core:\n  Stub PPU Traps: 1\n"},
 		{"BCJS37004", "Core:\n  Stub PPU Traps: 1\n"},

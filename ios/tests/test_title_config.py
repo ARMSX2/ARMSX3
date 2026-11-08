@@ -66,7 +66,7 @@ KILLZONE = "BCUS98234"
 IOS_ONLY_ROW = "Video:\\n  Emulate Extended Depth Range: true\\n"
 
 IOS_ONLY_REQUIRED = ("BLUS31011", "BLES01717", "NPUB30558", "BLUS30837", "BLES01613",
-                     "BLUS30405", "BLES00713", "BLES00714")
+                     "BLUS30405", "BLES00713", "BLES00714", "BLES00158", "BLUS30089")
 
 IOS_ONLY_NO_INTERPRETER = "Video:\\n  Shader Mode: Async Recompiler (multi-threaded)\\n"
 
@@ -76,6 +76,8 @@ IOS_ONLY_DANTE_EU_PARK = "Core:\\n  Pause Game During SPU Compilation: true\\n  
 
 IOS_ONLY_STUB_TRAPS = "Core:\\n  Stub PPU Traps: 1\\n"
 
+IOS_ONLY_APPROXIMATE_ZCULL = "Video:\\n  Accurate ZCULL stats: false\\n  Relaxed ZCULL Sync: false\\n"
+
 IOS_ONLY_OTHER_ROWS = {
     "NPUB30558": "Core:\\n  SPU loop detection: true\\n",
     "BLUS30837": IOS_ONLY_NO_INTERPRETER,
@@ -83,6 +85,8 @@ IOS_ONLY_OTHER_ROWS = {
     "BLUS30405": IOS_ONLY_SPU_COMPILE_PAUSE,
     "BLES00713": IOS_ONLY_DANTE_EU_PARK,
     "BLES00714": IOS_ONLY_SPU_COMPILE_PAUSE,
+    "BLES00158": IOS_ONLY_APPROXIMATE_ZCULL,
+    "BLUS30089": IOS_ONLY_APPROXIMATE_ZCULL,
     "BCES01176": IOS_ONLY_STUB_TRAPS,
     "BCJS37004": IOS_ONLY_STUB_TRAPS,
     "BCAS25009": IOS_ONLY_STUB_TRAPS,
@@ -307,7 +311,7 @@ def ios_only_problems(header_text, kotlin_text, results):
             problems.append("iosonly: {0} is also in the ported table or Android's".format(serial))
         text = config.replace("\\n", "\n")
         known, added, got = results.get("^" + serial, (1, 0, ""))
-        # One leaf per "\n  " line: BLES00713's row carries two, every other row one.
+        # One leaf per "\n  " line.
         if known or added != text.count("\n  ") or got != text:
             problems.append("iosonly: with no database {0} added={1} text={2!r}, not its own row".format(serial, added, got))
     return problems
@@ -539,6 +543,10 @@ class Mutations(unittest.TestCase):
 
     def test_dante_eu_park_dropped(self):
         h = self.edited(self.header, "  SPU Poll Park Sites: 3f47c:40801083\\n", "")
+        self.caught(behaviour_problems(h, self.product, self.kotlin), "iosonly")
+
+    def test_assassins_creed_row_keeps_accurate_zcull(self):
+        h = self.edited(self.header, '{"BLUS30089", "Video:\\n  Accurate ZCULL stats: false', '{"BLUS30089", "Video:\\n  Accurate ZCULL stats: true')
         self.caught(behaviour_problems(h, self.product, self.kotlin), "iosonly")
 
     def test_redirect_merge_turns_case_sensitive(self):
