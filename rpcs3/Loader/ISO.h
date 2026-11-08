@@ -184,6 +184,10 @@ private:
 	iso_fs_node m_root {};
 	std::shared_ptr<iso_file_decryption> m_dec;
 	std::shared_ptr<chd::image> m_chd; // Set when the image is a CHD, which every file reads through
+#ifdef __APPLE__
+	// Set for a plain image file, which every file on the disc reads through.
+	std::shared_ptr<fs::file> m_image;
+#endif
 
 	bool reads_decrypted();
 

@@ -431,6 +431,31 @@ void _sys_process_exit2(ppu_thread& ppu, s32 status, vm::ptr<sys_exit2_param> ar
 	lv2_exitspawn(ppu, argv, envp, data);
 }
 
+#ifdef __APPLE__
+// A rejected exitspawn boot must not leave its argv, disc, force boot or continuous mode armed for the next boot
+static void disarm_exitspawn_restart()
+{
+	Emu.SetForceBoot(false);
+	Emu.SetContinuousMode(false);
+
+	if (Emu.IsStopped(true))
+	{
+		Emu.Kill(false);
+		return;
+	}
+
+	Emu.after_kill_callback = [restore = std::move(Emu.after_kill_callback)]()
+	{
+		if (restore)
+		{
+			restore();
+		}
+
+		Emu.Kill(false);
+	};
+}
+
+#endif
 void lv2_exitspawn(ppu_thread& ppu, std::vector<std::string>& argv, std::vector<std::string>& envp, std::vector<u8>& data)
 {
 	ppu.state += cpu_flag::wait;
@@ -516,6 +541,9 @@ void lv2_exitspawn(ppu_thread& ppu, std::vector<std::string>& argv, std::vector<
 
 			if (res != game_boot_result::no_errors)
 			{
+#ifdef __APPLE__
+				disarm_exitspawn_restart();
+#endif
 				sys_process.fatal("Failed to boot from exitspawn! (path=\"%s\", error=%s)", path, res);
 			}
 		};

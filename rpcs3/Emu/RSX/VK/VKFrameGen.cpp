@@ -848,7 +848,12 @@ namespace vk::frame_gen
 	}
 
 #else
+#ifdef __APPLE__
+	// Same signature as the declaration in VKFrameGen.h, which takes the guest size too
+	bool capture_presented_frame(const vk::command_buffer&, const vk::render_device&, VkImage, VkImageLayout, u32, u32, u32, u32)
+#else
 	bool capture_presented_frame(const vk::command_buffer&, const vk::render_device&, VkImage, VkImageLayout, u32, u32)
+#endif
 	{
 		return false;
 	}

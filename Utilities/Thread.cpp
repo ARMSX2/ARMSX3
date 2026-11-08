@@ -13,6 +13,9 @@
 #include <cstring>
 #include <cerrno>
 #include "Utilities/JIT.h"
+#ifdef __APPLE__
+#include "ios_jit_dual_map.h"
+#endif
 #include <cfenv>
 #include <charconv>
 
@@ -50,6 +53,9 @@ DYNAMIC_IMPORT_RENAME("Kernel32.dll", SetThreadDescriptionImport, "SetThreadDesc
 #define __USE_GNU
 #include <mach/thread_act.h>
 #include <mach/thread_policy.h>
+// vm_region_64 is declared here; the iOS SDK refuses mach/mach_vm.h.
+#include <mach/mach.h>
+#include <TargetConditionals.h>
 #endif
 #if defined(__DragonFly__) || defined(__FreeBSD__) || defined(__OpenBSD__)
 #include <pthread_np.h>
@@ -141,12 +147,28 @@ enum cpu_threads_emulation_info_dump_t : u32 {};
 
 std::string dump_useful_thread_info()
 {
+#ifdef __APPLE__
+	// A fault inside the dump re-enters here from the signal handler and would fault forever.
+	thread_local bool s_tls_dumping = false;
+
+	if (s_tls_dumping)
+	{
+		return "Thread dump skipped: the dump itself faulted on this thread.";
+	}
+
+	s_tls_dumping = true;
+#endif
+
 	std::string result;
 
 	if (auto cpu = get_current_cpu_thread())
 	{
 		fmt::append(result, "%s", cpu_threads_emulation_info_dump_t{cpu->id});
 	}
+
+#ifdef __APPLE__
+	s_tls_dumping = false;
+#endif
 
 	return result;
 }
@@ -1320,7 +1342,12 @@ a64_mem_info_t decode_a64_mem_inst(u32 inst)
 	// V[26]
 	// opc[23:22]
 	// class bits[29:24] = 111001
+#ifdef __APPLE__
+	// Also register offset: bits[29:24] = 111000, bit 21 and option<1> set, bits[11:10] = 10.
+	if ((inst & 0x3B000000) == 0x39000000 || (inst & 0x3B204C00) == 0x38204800)
+#else
 	if ((inst & 0x3B000000) == 0x39000000)
+#endif
 	{
 		const u32 size = (inst >> 30) & 3;
 		const u32 opc  = (inst >> 22) & 3;
@@ -1395,7 +1422,12 @@ a64_mem_info_t decode_a64_mem_inst(u32 inst)
 	// size and opc mean the same in both, and the address comes from the fault, not the instruction.
 	// LLVM emits this form for a RawSPU register write: WET (BLUS30403) stores SPU_NPC with
 	// str w12, [x22, x11] right after creating its raw SPU, and died there undecoded.
+#ifdef __APPLE__
+	// The branch above already decodes the register-offset forms and checks option<1>.
+	if ((inst & 0x3B200C00u) == 0x38000000u)
+#else
 	if ((inst & 0x3B200C00u) == 0x38000000u || (inst & 0x3B200C00u) == 0x38200800u)
+#endif
 	{
 		const u32 size = (inst >> 30) & 3;
 		const u32 opc  = (inst >> 22) & 3;
@@ -1614,6 +1646,10 @@ static void dump_guest_code_at_fault(cpu_thread* cpu, u32 fault_addr, bool is_wr
 	// ARMSX3_DISASM_DEPTH=N disassembles the target of every bl found in a window, N levels
 	// deep, deduplicated and capped. Default 0 is the old behaviour.
 	u32 follow_depth = 0;
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+	// A phone gets no environment, so follow one level by default there.
+	follow_depth = 1;
+#endif
 
 	if (const char* depth_env = std::getenv("ARMSX3_DISASM_DEPTH"))
 	{
@@ -1622,6 +1658,28 @@ static void dump_guest_code_at_fault(cpu_thread* cpu, u32 fault_addr, bool is_wr
 
 	std::vector<u32> seen;
 	std::vector<std::pair<u32, u32>> pending;
+
+#ifdef __APPLE__
+	// The target of the relative bl at `at`, or 0 when the word there is not one.
+	const auto bl_target = [](u32 at) -> u32
+	{
+		const u32 op = vm::read32(at);
+
+		if ((op & 0xfc000003) != 0x48000001)
+		{
+			return 0;
+		}
+
+		s32 disp = static_cast<s32>(op & 0x03fffffc);
+
+		if (disp & 0x02000000)
+		{
+			disp -= 0x04000000;
+		}
+
+		return at + static_cast<u32>(disp);
+	};
+#endif
 
 	const auto window = [&](const char* what, u32 pc, u32 back, u32 span, u32 depth = 0)
 	{
@@ -1716,6 +1774,12 @@ static void dump_guest_code_at_fault(cpu_thread* cpu, u32 fault_addr, bool is_wr
 				continue;
 			}
 
+#ifdef __APPLE__
+			if (const u32 target = bl_target(at))
+			{
+				pending.emplace_back(target, depth + 1);
+			}
+#else
 			// bl: primary opcode 18, AA clear, LK set. Relative, so the target is computed
 			// from the instruction's own address.
 			const u32 op = vm::read32(at);
@@ -1733,10 +1797,34 @@ static void dump_guest_code_at_fault(cpu_thread* cpu, u32 fault_addr, bool is_wr
 			}
 
 			pending.emplace_back(at + static_cast<u32>(disp), depth + 1);
+#endif
 		}
 	};
 
 	window("Code at the faulting pc", static_cast<ppu_thread*>(cpu)->cia, 0x100, 0x40);
+
+#ifdef __APPLE__
+	// Under PPU LLVM a direct bl leaves cia behind, so the fault can sit in the callee of the bl at LR - 4.
+	const u64 lr = static_cast<ppu_thread*>(cpu)->lr;
+
+	if (lr >= 4 && lr <= u32{umax} && lr % 4 == 0 && vm::check_addr(static_cast<u32>(lr - 4), vm::page_executable))
+	{
+		const u32 call = static_cast<u32>(lr - 4);
+		const u32 cia = static_cast<ppu_thread*>(cpu)->cia;
+
+		// The faulting-pc window covers [cia - 0x100, cia + 0x40]; inside it, the call is already shown.
+		if (u64{call} + 0x100 < cia || u64{call} > u64{cia} + 0x40)
+		{
+			window("Code at the link register's call", call, 0x60, 0x10);
+		}
+
+		if (const u32 target = bl_target(call); target && vm::check_addr(target, vm::page_executable))
+		{
+			seen.push_back(target);
+			window("Code at the link register's call target", target, 0, 0x100, 1);
+		}
+	}
+#endif
 
 	u32 shown = 0;
 
@@ -2475,6 +2563,13 @@ bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t
 
 	if (vm::check_addr(addr, required_page_perms))
 	{
+#if defined(__APPLE__)
+		// The RSX locked this host page; while stopping its handler may be gone, so unlock it here.
+		if (Emu.IsStopped())
+		{
+			utils::memory_protect(vm::base(utils::page_start(addr)), utils::get_page_size(), utils::protection::rw);
+		}
+#endif
 		return true;
 	}
 
@@ -2512,7 +2607,12 @@ bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t
 		if (vm::writer_lock mlock; area->flags & vm::preallocated || vm::check_addr(addr, 0))
 		{
 			// For allocated memory with protection lower than required (such as protection::no or read-only while writing to it)
+#ifdef __APPLE__
+			// Host pages can be 16 KiB, so protect the whole host page rather than a 4 KiB slice of it.
+			utils::memory_protect(vm::base(utils::page_start(addr)), utils::get_page_size(), utils::protection::rw);
+#else
 			utils::memory_protect(vm::base(addr & -0x1000), 0x1000, utils::protection::rw);
+#endif
 			reprotected = true;
 		}
 
@@ -3253,6 +3353,135 @@ static const char* bus_error_kind(int code) noexcept
 	}
 }
 
+#ifdef __APPLE__
+// Darwin raises SIGBUS for a protection fault, so recovery is decided from the emulator's page table, not the signal.
+enum class fault_class
+{
+	emulator_protection,
+	no_mapping,
+	not_produced,
+	unallocated_guest_page,
+	undetermined,
+};
+
+static fault_class classify_fault(int sig, const siginfo_t* info, bool is_writing) noexcept
+{
+	const std::pair<vm::addr_t, bool> located = vm::try_get_addr(info->si_addr);
+
+	if (located.second)
+	{
+		const std::pair<bool, u8> state = vm::get_addr_flags(located.first);
+		const u8 required = is_writing ? vm::page_writable : vm::page_readable;
+
+		if (state.first && (~state.second & required) != 0)
+		{
+			return fault_class::emulator_protection;
+		}
+
+		if (state.first && sig == SIGBUS)
+		{
+			return fault_class::not_produced;
+		}
+
+		if (!state.first)
+		{
+			return fault_class::unallocated_guest_page;
+		}
+	}
+
+	if (sig != SIGBUS)
+	{
+		return fault_class::no_mapping;
+	}
+
+	return fault_class::undetermined;
+}
+
+// The RSX can lock host pages without marking vm::g_pages, so ask the kernel what it allows.
+static constexpr u32 k_host_retry_bound = 16;
+static constexpr u64 k_host_retry_window_ns = 1'000'000;
+
+static thread_local struct
+{
+	vm_address_t addr;
+	u32 races;
+	u64 t_ns;
+	kern_return_t kr;
+	vm_prot_t prot;
+	vm_prot_t max;
+} s_host_query{};
+
+static bool host_denies_write(const siginfo_t* info, bool is_writing) noexcept
+{
+	const vm_prot_t needed = is_writing ? VM_PROT_WRITE : VM_PROT_READ;
+
+	const vm_address_t fault_addr = reinterpret_cast<vm_address_t>(info->si_addr);
+
+	timespec now{};
+	clock_gettime(CLOCK_UPTIME_RAW, &now);
+	const u64 now_ns = static_cast<u64>(now.tv_sec) * 1'000'000'000ull + static_cast<u64>(now.tv_nsec);
+	const bool same_burst = s_host_query.addr == fault_addr && now_ns - s_host_query.t_ns <= k_host_retry_window_ns;
+	const u32 races = same_burst ? s_host_query.races : 0;
+	s_host_query = {fault_addr, 0, now_ns, KERN_FAILURE, VM_PROT_NONE, VM_PROT_NONE};
+
+	vm_address_t region_base = fault_addr;
+	vm_size_t region_size = 0;
+	vm_region_basic_info_data_64_t basic_info{};
+	mach_msg_type_number_t info_count = VM_REGION_BASIC_INFO_COUNT_64;
+	mach_port_t object_name = MACH_PORT_NULL;
+
+	const kern_return_t kr = vm_region_64(mach_task_self(), &region_base, &region_size,
+		VM_REGION_BASIC_INFO_64, reinterpret_cast<vm_region_info_t>(&basic_info), &info_count,
+		&object_name);
+
+	s_host_query.kr = kr;
+	s_host_query.prot = basic_info.protection;
+	s_host_query.max = basic_info.max_protection;
+
+	if (object_name != MACH_PORT_NULL)
+	{
+		mach_port_deallocate(mach_task_self(), object_name);
+	}
+
+	if (kr != KERN_SUCCESS)
+	{
+		return false;
+	}
+
+	// vm_region_64 returns the next region up when the address itself is unmapped.
+	if (fault_addr < region_base || (fault_addr - region_base) >= region_size)
+	{
+		return false;
+	}
+
+	// The host already allows the access, so another thread unprotected it after the fault.
+	if ((basic_info.protection & needed) != 0)
+	{
+		s_host_query.races = races + 1;
+		return s_host_query.races <= k_host_retry_bound;
+	}
+
+	s_host_query.races = races + 1;
+	return (basic_info.protection & needed) == 0
+		&& (basic_info.max_protection & needed) != 0
+		&& s_host_query.races <= k_host_retry_bound;
+}
+
+static bool fault_is_recoverable(fault_class fault) noexcept
+{
+	switch (fault)
+	{
+	case fault_class::emulator_protection: return true;
+	case fault_class::no_mapping: return true;
+	case fault_class::not_produced: return false;
+	case fault_class::unallocated_guest_page: return true;
+	case fault_class::undetermined: return false;
+	}
+
+	return false;
+}
+#endif
+
 static void signal_handler(int sig, siginfo_t* info, void* uct) noexcept
 {
 	ucontext_t* context = static_cast<ucontext_t*>(uct);
@@ -3541,6 +3770,7 @@ static void signal_handler(int sig, siginfo_t* info, void* uct) noexcept
 	}
 #endif
 
+#ifndef __APPLE__
 
 	// SIGBUS arrives here too now (see the sigaction block below), and never takes a recovery
 	// path. The recovery below is for pages this process protected itself, and a write to an
@@ -3550,6 +3780,7 @@ static void signal_handler(int sig, siginfo_t* info, void* uct) noexcept
 	// those, so handling one and returning would re-execute the same instruction and fault again
 	// immediately: a livelock in place of a crash report.
 	const bool is_bus_error = sig == SIGBUS;
+#endif
 
 #if defined(ARCH_X64)
 #ifdef __APPLE__
@@ -3633,8 +3864,16 @@ static void signal_handler(int sig, siginfo_t* info, void* uct) noexcept
 	const u64 seg_off = (reinterpret_cast<u64>(info->si_addr) - reinterpret_cast<u64>(vm::g_exec_addr)) - vm::g_exec_addr_seg_offset;
 	const auto cause = is_executing ? "executing" : is_writing ? "writing" : "reading";
 
+#ifdef __APPLE__
+	const fault_class fault = classify_fault(sig, info, is_writing);
+
+	// A not_produced fault the host denies is an RSX lock that its own handler can lift.
+	const bool try_recovery = !is_executing && (fault_is_recoverable(fault)
+		|| (fault == fault_class::not_produced && host_denies_write(info, is_writing)));
+#else
 	// Gated on more than "not an instruction fetch" now: see is_bus_error above.
 	const bool try_recovery = !is_executing && !is_bus_error;
+#endif
 
 	if (auto [addr, ok] = vm::try_get_addr(info->si_addr); ok && try_recovery)
 	{
@@ -3754,7 +3993,9 @@ static void signal_handler(int sig, siginfo_t* info, void* uct) noexcept
 
 	append_thread_name(msg);
 
-#ifdef __APPLE__
+// The dual JIT mapping never makes a page writable and executable at once, so Apple ARM64 has
+// no W^X toggle fault to recover, and iOS has no pthread_jit_write_protect_np.
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && !defined(ARCH_ARM64)
 	thread_local bool s_tls_is_attempting_recovery = false;
 	thread_local bool s_tls_last_cause_is_executing = false;
 
@@ -3782,6 +4023,23 @@ static void signal_handler(int sig, siginfo_t* info, void* uct) noexcept
 			logs::listener::sync_all();
 			return;
 		}
+	}
+#endif
+
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+	// A store to the r-x execute view or a call through the rw alias faults at an address that
+	// names neither view, so say which view the faulting address and the pc are in.
+	fmt::append(msg, "JIT dual map: si_addr view %s, pc view %s, code_rw_offset 0x%llx.\n",
+		utils::jit_view_name(utils::jit_view_of(info->si_addr)),
+		utils::jit_view_name(utils::jit_view_of(
+			reinterpret_cast<const void*>(static_cast<uptr>(RIP(context))))),
+		static_cast<unsigned long long>(utils::g_code_rw_offset));
+
+	// What host_denies_write() last saw here; races above the bound means the retry gave up.
+	if (s_host_query.addr == reinterpret_cast<vm_address_t>(info->si_addr))
+	{
+		fmt::append(msg, "Host at query: kr=%d prot=%d max=%d races=%u.\n",
+			s_host_query.kr, s_host_query.prot, s_host_query.max, s_host_query.races);
 	}
 #endif
 
@@ -3952,9 +4210,14 @@ void thread_base::start()
 	pthread_attr_init(&attrs);
 	pthread_attr_setstacksize(&attrs, 0x800000);
 	
+#if TARGET_OS_IPHONE
+	// A real-time policy puts every emulator thread above the main thread and iOS kills the app.
+	pthread_attr_set_qos_class_np(&attrs, QOS_CLASS_USER_INITIATED, 0);
+#else
 	pthread_attr_set_qos_class_np(&attrs, QOS_CLASS_USER_INTERACTIVE, 0);
 	pthread_attr_setschedpolicy(&attrs, SCHED_RR);
 	pthread_attr_setschedparam(&attrs, &sp);
+#endif
 	ensure(pthread_create(&thread_id, &attrs, entry_point, this) == 0);
 #else
 	pthread_t thread_id{};
@@ -4682,11 +4945,13 @@ void thread_ctrl::set_name(std::string name)
 	}
 #endif
 
+#ifndef __APPLE__
 	if (const std::string info = dump_useful_thread_info(); !info.empty())
 	{
 		sys_log.notice("\n%s", info);
 	}
 
+#endif
 	std::string reason_buf;
 
 	if (auto ppu = cpu_thread::get_current<ppu_thread>())
@@ -4715,6 +4980,15 @@ void thread_ctrl::set_name(std::string name)
 	sig_log.fatal("Thread terminated due to fatal error: %s", reason);
 
 	logs::listener::sync_all();
+
+#ifdef __APPLE__
+	// Log the reason first: a fault inside the dump never returns here.
+	if (const std::string info = dump_useful_thread_info(); !info.empty())
+	{
+		sys_log.notice("\n%s", info);
+		logs::listener::sync_all();
+	}
+#endif
 
 	if (IsDebuggerPresent())
 	{
@@ -4940,6 +5214,10 @@ u64 thread_ctrl::get_affinity_mask(thread_class group)
 		}
 		case native_core_arrangement::arm_big_little:
 		{
+#ifdef __APPLE__
+			// get_arm_core_capacities() exists only on Linux, and Apple never detects this arrangement.
+			return all_cores_mask;
+#else
 			// Put the threads that gate the frame -- SPU and RSX -- on the cores
 			// that can actually keep up, and leave the little cluster for PPU and
 			// helpers. Without this the OS spreads six SPU threads across a mix of
@@ -5043,6 +5321,7 @@ u64 thread_ctrl::get_affinity_mask(thread_class group)
 				return helper_mask ? helper_mask : fast_mask;
 			}
 			}
+#endif
 		}
 		case native_core_arrangement::amd_ccx:
 		{
@@ -5278,6 +5557,31 @@ void thread_ctrl::set_native_priority(int priority)
 		sig_log.warning("setpriority(%d) failed: %s", nice_value, strerror(errno));
 	}
 #else
+#if defined(__APPLE__)
+	// pthread_setschedparam takes a thread out of QoS for good, so a thread with a class moves bands instead.
+	qos_class_t own_class = QOS_CLASS_UNSPECIFIED;
+	pthread_get_qos_class_np(pthread_self(), &own_class, nullptr);
+
+	if (own_class != QOS_CLASS_UNSPECIFIED)
+	{
+		const qos_class_t wanted = priority > 0 ? QOS_CLASS_USER_INTERACTIVE : (priority < 0 ? QOS_CLASS_UTILITY : QOS_CLASS_USER_INITIATED);
+
+		const int err = pthread_set_qos_class_self_np(wanted, 0);
+
+		if (err == 0)
+		{
+			return;
+		}
+
+		// Not expected: report once, then fall back to the policy below.
+		static atomic_t<bool> s_qos_refused{false};
+
+		if (!s_qos_refused.exchange(true))
+		{
+			sig_log.warning("pthread_set_qos_class_self_np() failed: %d (priority %d)", err, priority);
+		}
+	}
+#endif
 	int policy;
 	struct sched_param param;
 

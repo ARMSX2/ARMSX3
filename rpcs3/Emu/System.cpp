@@ -2,6 +2,9 @@
 #include "VFS.h"
 #include "Emu/android_app_state.h"
 #include "Utilities/bin_patch.h"
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 #include "Emu/Memory/vm.h"
 #include "Emu/emu_callbacks.h"
 #include "Emu/System.h"
@@ -123,6 +126,9 @@ extern f64 get_cpu_program_usage_percent(u64 hash);
 [[noreturn]] void report_fatal_error(std::string_view text, bool is_html = false, bool include_help_text = true);
 
 void initialize_timebased_time(u64 timebased_init, bool reset = false);
+#ifdef __APPLE__
+void amend_guest_time_for_pause(u64 paused_us);
+#endif
 
 namespace atomic_wait
 {
@@ -198,8 +204,14 @@ void Emulator::CallFromMainThread(std::function<void()>&& func, atomic_t<u32>* w
 {
 	ensure(func);
 
+#ifdef __APPLE__
+	// libc++ leaves a moved-from std::function holding its target, so exchange it to make the main thread its last owner.
+	std::function<void()> final_func = [this, before = IsStopped(true), track_emu_state, thread_name = thread_ctrl::get_name(), src = src_loc
+		, count = (stop_ctr == umax ? +m_stop_ctr : stop_ctr), func = std::exchange(func, nullptr)]
+#else
 	std::function<void()> final_func = [this, before = IsStopped(true), track_emu_state, thread_name = thread_ctrl::get_name(), src = src_loc
 		, count = (stop_ctr == umax ? +m_stop_ctr : stop_ctr), func = std::move(func)]
+#endif
 	{
 		const bool call_it = (!track_emu_state || (count == m_stop_ctr && before == IsStopped(true)));
 
@@ -1706,6 +1718,13 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 		{
 			m_ar = make_savestate_reader(m_path);
 
+#ifdef __APPLE__
+			// A refused state ends the load here; otherwise Load goes on to boot the state file as a game.
+			if (!m_ar && m_path.ends_with(".zst"))
+			{
+				return game_boot_result::savestate_corrupted;
+			}
+#endif
 			m_boot_source_type = CELL_GAME_GAMETYPE_SYS;
 		}
 	}
@@ -1944,6 +1963,10 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 				sys_log.notice("Savestate: Loading iso archive");
 
 				load_iso(disc_info);
+#ifdef __APPLE__
+				// Restart() boots m_path_real when m_path is on the ISO device
+				m_path_real = disc_info;
+#endif
 				m_path = iso_device::virtual_device_name + "/" + argv[0];
 
 				resolve_path_as_vfs_path = false;
@@ -2525,7 +2548,7 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 
 			g_fxo->init<named_thread>("SPRX Loader"sv, [this, dir_queue, is_fast = m_precompilation_option.is_fast]() mutable
 			{
-#ifdef __APPLE__
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && !defined(ARCH_ARM64)
 				// Apple Silicon W^X: this thread invokes ppu_initialize()
 				// and ppu_precompile(), which write into MAP_JIT pages.
 				// Without enabling write mode here, these writes segfault
@@ -3757,7 +3780,15 @@ void Emulator::Resume()
 	// Try to increment summary pause time
 	if (time)
 	{
+#ifdef __APPLE__
+		const u64 paused_us = get_system_time() - time;
+		m_pause_amend_time += paused_us;
+
+		// Guest clocks stand still while paused; games with a hang watchdog otherwise kill themselves on resume
+		amend_guest_time_for_pause(paused_us);
+#else
 		m_pause_amend_time += get_system_time() - time;
+#endif
 	}
 	else
 	{

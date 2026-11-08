@@ -2566,7 +2566,27 @@ namespace rsx
 
 			auto fast_fbo_check = [&]() -> sampled_image_descriptor
 			{
+#ifdef __APPLE__
+				// One draw can write overlapping color and depth surfaces with the same tag, so prefer the requested aspect
+				const auto* chosen = &overlapping_fbos.back();
+				if (const bool want_depth = helpers::is_gcm_depth_format(attr.gcm_format);
+					!chosen->is_clipped && chosen->is_depth != want_depth)
+				{
+					const u64 newest_tag = chosen->surface->last_use_tag;
+					for (usz i = overlapping_fbos.size(); i-- > 0 && overlapping_fbos[i].surface->last_use_tag == newest_tag;)
+					{
+						if (!overlapping_fbos[i].is_clipped && overlapping_fbos[i].is_depth == want_depth)
+						{
+							chosen = &overlapping_fbos[i];
+							break;
+						}
+					}
+				}
+
+				const auto& last = *chosen;
+#else
 				const auto& last = overlapping_fbos.back();
+#endif
 
 				if (!last.is_clipped) //<- A non-clipped hit fully contains the requested box. We're good to go with the framebuffer processing.
 				{
@@ -3172,6 +3192,11 @@ namespace rsx
 				return {};
 			}
 
+#ifdef __APPLE__
+			// Vulkan allows at most floor(log2(max(w, h))) + 1 levels, and a narrowed extent can hold fewer
+			attributes.mipmaps = std::min<u32>(attributes.mipmaps, floor_log2(std::max<u32>(attributes.width, attributes.height)) + 1);
+
+#endif
 			if (options.is_compressed_format)
 			{
 				// Compressed textures cannot be 1D in some APIs
@@ -3280,6 +3305,17 @@ namespace rsx
 					}
 				}
 
+#ifdef __APPLE__
+				// Drop the levels the final extent cannot hold before the list becomes an image
+				const u32 final_w = use_upscaling ? sections.front().dst_w : attributes.width;
+				const u32 final_h = use_upscaling ? sections.front().dst_h : attributes.height;
+				const u32 max_levels = floor_log2(std::max(final_w, final_h)) + 1;
+				if (sections.size() > max_levels)
+				{
+					sections.resize(max_levels);
+				}
+
+#endif
 				if (sections.size() == 1) [[unlikely]]
 				{
 					return result;
@@ -3332,8 +3368,14 @@ namespace rsx
 			invalidate_range_impl_base(cmd, tex_range, invalidation_cause::read, {}, std::forward<Args>(extras)...);
 
 			// Upload from CPU. Note that sRGB conversion is handled in the FS
+#ifdef __APPLE__
+			// The level count is the one capped after validation
+			auto uploaded = upload_image_from_cpu(cmd, tex_range, attributes.width, attributes.height, attributes.depth, attributes.mipmaps, attributes.pitch, attributes.gcm_format,
+				texture_upload_context::shader_read, subresources_layout, extended_dimension, attributes.swizzled);
+#else
 			auto uploaded = upload_image_from_cpu(cmd, tex_range, attributes.width, attributes.height, attributes.depth, tex.get_exact_mipmap_count(), attributes.pitch, attributes.gcm_format,
 				texture_upload_context::shader_read, subresources_layout, extended_dimension, attributes.swizzled);
+#endif
 
 			return
 			{

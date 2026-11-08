@@ -1,6 +1,9 @@
 #pragma once
 
 #include "util/types.hpp"
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 
 enum class pad_handler
 {
@@ -21,7 +24,7 @@ enum class pad_handler
 #ifdef HAVE_LIBEVDEV
 	evdev,
 #endif
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__APPLE__)
 	virtual_pad,
 #endif
 };

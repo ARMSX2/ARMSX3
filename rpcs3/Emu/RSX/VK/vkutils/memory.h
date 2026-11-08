@@ -221,7 +221,12 @@ namespace vk
 	u64  vmm_get_application_memory_usage(const memory_type_info& memory_type);
 	u64  vmm_get_application_pool_usage(vmm_allocation_pool pool);
 	bool vmm_handle_memory_pressure(rsx::problem_severity severity);
+#ifdef __APPLE__
+	// False leaves out the iOS jetsam-headroom term and returns the VMA figure alone.
+	rsx::problem_severity vmm_determine_memory_load_severity(bool include_headroom = true);
+#else
 	rsx::problem_severity vmm_determine_memory_load_severity();
+#endif
 
 	// Diagnostics: the allocator's heap totals, what each pool holds, and how far the GPU is
 	// behind on retiring work. One line, for the log; changes nothing.

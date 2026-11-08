@@ -14,6 +14,9 @@
 #include "util/asm.hpp"
 
 #include <thread>
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 
 using spu_rdata_t = std::byte[128];
 
@@ -623,11 +626,18 @@ namespace rsx
 				return;
 			}
 
+#ifdef __APPLE__
+			// Set for every count, because read_unsafe also resumes a one-argument packet
+			m_command_inc = ((m_cmd & RSX_METHOD_NON_INCREMENT_CMD_MASK) == RSX_METHOD_NON_INCREMENT_CMD) ? 0 : 4;
+
+#endif
 			if (count > 1)
 			{
 				// Set up readback parameters
 				m_command_reg = m_cmd & 0xfffc;
+#ifndef __APPLE__
 				m_command_inc = ((m_cmd & RSX_METHOD_NON_INCREMENT_CMD_MASK) == RSX_METHOD_NON_INCREMENT_CMD) ? 0 : 4;
+#endif
 				m_remaining_commands = count - 1;
 			}
 
@@ -646,6 +656,19 @@ namespace rsx
 					}
 					else
 					{
+#ifdef __APPLE__
+						// read_unsafe steps position and register before it reads, so park both one step before argument 1
+						static atomic_t<u32> s_first_arg_waits = 0;
+						if (const u32 n = ++s_first_arg_waits; (n & (n - 1)) == 0)
+						{
+							rsx_log.warning("FIFO: first argument not yet written (count %u, method 0x%x)", n, m_cmd & 0xfffc);
+						}
+
+						data.reg = FIFO_EMPTY;
+						m_fifo_pos -= 4;
+						m_command_reg = (m_cmd & 0xfffc) - m_command_inc;
+						m_remaining_commands = count;
+#else
 						// Rewind to the header so read_unsafe() resumes from the first argument
 						// (it pre-increments both the FIFO position and the method register)
 						data.reg = FIFO_EMPTY;
@@ -653,6 +676,7 @@ namespace rsx
 						m_command_inc = ((m_cmd & RSX_METHOD_NON_INCREMENT_CMD_MASK) == RSX_METHOD_NON_INCREMENT_CMD) ? 0 : 4;
 						m_command_reg = (m_cmd & 0xfffc) - m_command_inc;
 						m_remaining_commands++;
+#endif
 					}
 
 					return;
@@ -947,6 +971,18 @@ namespace rsx
 					RSX_PROF_SCOPE(idle_fifo);
 
 #if defined(ARCH_ARM64)
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+					// A WFE park counts as running, so iOS keeps this thread on a fast core, and a sleep gives the core back
+					constexpr u64 default_wfe_window_us = 30;
+					constexpr std::chrono::microseconds block_sleep{50};
+
+					if (s_fifo_idle_spins >= 8 && get_system_time() - performance_counters.FIFO_idle_timestamp >= default_wfe_window_us)
+					{
+						std::this_thread::sleep_for(block_sleep);
+						return;
+					}
+
+#endif
 					if (s_fifo_idle_spins < 8)
 					{
 						s_fifo_idle_spins++;

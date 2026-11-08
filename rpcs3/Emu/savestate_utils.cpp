@@ -11,6 +11,10 @@
 #include "System.h"
 
 #include <set>
+#ifdef __APPLE__
+#include <chrono>
+#include <zstd.h>
+#endif
 #include <span>
 
 LOG_CHANNEL(sys_log, "SYS");
@@ -175,6 +179,87 @@ std::vector<version_entry> get_savestate_versioning_data(fs::file&& file, std::s
 	return ver_data;
 }
 
+#ifdef __APPLE__
+// Walks the zstd frame and block headers without decompressing, so a truncated state is refused before load.
+static bool zstd_stream_is_intact(const fs::file& file)
+{
+	const auto start = std::chrono::steady_clock::now();
+	const u64 end = file.size();
+	u64 pos = 0;
+	u64 frames = 0;
+
+	const bool intact = [&]()
+	{
+		// Field sizes by flag value: dictionary ID, then frame content size (flag 0 is 1 byte when single-segment).
+		static constexpr u8 did_sizes[4]{0, 1, 2, 4};
+		static constexpr u8 fcs_sizes[4]{0, 2, 4, 8};
+
+		while (pos < end)
+		{
+			u8 head[5]{};
+
+			if (file.read_at(pos, head, 5) != 5 || (head[0] | head[1] << 8 | head[2] << 16 | u32{head[3]} << 24) != ZSTD_MAGICNUMBER)
+			{
+				// The writer never emits skippable frames, so an unknown magic is damage.
+				return false;
+			}
+
+			const u8 desc = head[4];
+			const bool single_segment = desc & 0x20;
+
+			if (desc & 0x08)
+			{
+				// Reserved bit
+				return false;
+			}
+
+			pos += 5 + (single_segment ? 0 : 1) + did_sizes[desc & 3] + ((desc >> 6) ? fcs_sizes[desc >> 6] : (single_segment ? 1 : 0));
+
+			for (bool last = false; !last;)
+			{
+				u8 block[3]{};
+
+				if (file.read_at(pos, block, 3) != 3)
+				{
+					return false;
+				}
+
+				const u32 header = block[0] | block[1] << 8 | block[2] << 16;
+				const u32 type = (header >> 1) & 3;
+				const u32 size = header >> 3;
+				last = header & 1;
+
+				if (type == 3 || size > ZSTD_BLOCKSIZE_MAX)
+				{
+					return false;
+				}
+
+				// An RLE block carries one byte whatever its size says.
+				pos += 3 + (type == 1 ? 1 : size);
+
+				if (pos > end)
+				{
+					return false;
+				}
+			}
+
+			if (desc & 0x04)
+			{
+				// Content checksum
+				pos += 4;
+			}
+
+			frames++;
+		}
+
+		return frames != 0 && pos == end;
+	}();
+
+	sys_log.notice("zstd stream checked in %u ms", static_cast<u32>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count()));
+	return intact;
+}
+
+#endif
 std::shared_ptr<utils::serial> make_savestate_reader(const std::string& path)
 {
 	std::shared_ptr<utils::serial> ar;
@@ -195,6 +280,13 @@ std::shared_ptr<utils::serial> make_savestate_reader(const std::string& path)
 	}
 	else if (path.ends_with(".zst"))
 	{
+#ifdef __APPLE__
+		if (!zstd_stream_is_intact(save))
+		{
+			sys_log.error("Savestate '%s': the zstd stream is damaged or truncated, refusing to load it.", path);
+			return ar;
+		}
+#endif
 		ar = std::make_shared<utils::serial>();
 		ar->set_reading_state();
 
@@ -760,6 +852,10 @@ bool hle_locks_t::try_finalize(std::function<bool()> test)
 	{
 		// Failed
 		ensure(lock_val.compare_and_swap_test(waiting_for_evaluation, 0));
+#ifdef __APPLE__
+		// try_lock callers parked on waiting_for_evaluation wait with no timeout
+		lock_val.notify_all();
+#endif
 		return false;
 	}
 

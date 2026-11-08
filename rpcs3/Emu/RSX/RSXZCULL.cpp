@@ -1058,7 +1058,9 @@ namespace rsx
 						{
 							// R/W to active block
 							need_disable_optimizations = true;    // Defer actual operation
+#ifndef __APPLE__
 							m_pages_accessed[location] = true;
+#endif
 						}
 						else
 						{
@@ -1078,7 +1080,23 @@ namespace rsx
 				auto thr = rsx::get_current_renderer();
 				rsx::eng_lock rlock(thr);
 				std::scoped_lock lock(m_pages_mutex);
+#ifdef __APPLE__
+				// A fault that waited for the engine lock can find the pages already unlocked
+				if (!m_pages_accessed[location])
+				{
+					disable_optimizations(thr, location);
+				}
+				else
+				{
+					static atomic_t<bool> s_logged = false;
+					if (!s_logged.exchange(true))
+					{
+						rsx_log.notice("ZCULL: report page fault after optimisations were disabled; pages already unlocked");
+					}
+				}
+#else
 				disable_optimizations(thr, location);
+#endif
 
 				thr->eng_interrupt_mask |= rsx::pipe_flush_interrupt;
 				return true;

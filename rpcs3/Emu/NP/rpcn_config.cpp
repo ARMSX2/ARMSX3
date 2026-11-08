@@ -1,11 +1,69 @@
 #include "stdafx.h"
 #include "rpcn_config.h"
 #include "Utilities/File.h"
+#ifdef __APPLE__
+#include <mutex>
+#endif
 
 cfg_rpcn g_cfg_rpcn;
 
 LOG_CHANNEL(rpcn_log, "rpcn");
 
+#ifdef __APPLE__
+// Once the iOS bridge arms it, the RPCN password and token live in this slot and never reach rpcn.yml.
+namespace
+{
+	std::mutex s_secret_mutex;
+	atomic_t<bool> s_secrets_armed = false;
+	std::string s_password;
+	std::string s_token;
+}
+
+void rpcn_arm_memory_secrets()
+{
+	s_secrets_armed.store(true);
+	g_cfg_rpcn.password.from_string("");
+	g_cfg_rpcn.token.from_string("");
+}
+
+void rpcn_set_memory_secrets(std::string_view password, std::string_view token)
+{
+	std::lock_guard lock(s_secret_mutex);
+	s_password = password;
+	s_token = token;
+}
+
+void cfg_rpcn::load()
+{
+	const std::string path = cfg_rpcn::get_path();
+
+	if (fs::file cfg_file(path, fs::read); cfg_file)
+	{
+		rpcn_log.notice("Loading RPCN config. Path: %s", path);
+		from_string(cfg_file.to_string());
+	}
+	else
+	{
+		rpcn_log.notice("RPCN config missing. Using default settings. Path: %s", path);
+		from_default();
+	}
+
+	// Drop a secret a copied-in file holds before the migration below saves.
+	if (s_secrets_armed.load())
+	{
+		password.from_string("");
+		token.from_string("");
+	}
+
+	// Update config from old version(s)
+	if (version == 1)
+	{
+		password.from_string("");
+		version.set(2);
+		save();
+	}
+}
+#else
 void cfg_rpcn::load()
 {
 	const std::string path = cfg_rpcn::get_path();
@@ -29,6 +87,7 @@ void cfg_rpcn::load()
 		save();
 	}
 }
+#endif
 
 void cfg_rpcn::save() const
 {
@@ -114,6 +173,29 @@ std::string cfg_rpcn::get_npid()
 	return final_npid;
 }
 
+#ifdef __APPLE__
+std::string cfg_rpcn::get_password() const
+{
+	if (s_secrets_armed.load())
+	{
+		std::lock_guard lock(s_secret_mutex);
+		return s_password;
+	}
+
+	return password.to_string();
+}
+
+std::string cfg_rpcn::get_token() const
+{
+	if (s_secrets_armed.load())
+	{
+		std::lock_guard lock(s_secret_mutex);
+		return s_token;
+	}
+
+	return token.to_string();
+}
+#else
 std::string cfg_rpcn::get_password() const
 {
 	return password.to_string();
@@ -123,6 +205,7 @@ std::string cfg_rpcn::get_token() const
 {
 	return token.to_string();
 }
+#endif
 
 bool cfg_rpcn::get_ipv6_support() const
 {
@@ -139,6 +222,31 @@ void cfg_rpcn::set_npid(std::string_view npid)
 	this->npid.from_string(npid);
 }
 
+#ifdef __APPLE__
+void cfg_rpcn::set_password(std::string_view password)
+{
+	if (s_secrets_armed.load())
+	{
+		std::lock_guard lock(s_secret_mutex);
+		s_password = password;
+		return;
+	}
+
+	this->password.from_string(password);
+}
+
+void cfg_rpcn::set_token(std::string_view token)
+{
+	if (s_secrets_armed.load())
+	{
+		std::lock_guard lock(s_secret_mutex);
+		s_token = token;
+		return;
+	}
+
+	this->token.from_string(token);
+}
+#else
 void cfg_rpcn::set_password(std::string_view password)
 {
 	this->password.from_string(password);
@@ -148,6 +256,7 @@ void cfg_rpcn::set_token(std::string_view token)
 {
 	this->token.from_string(token);
 }
+#endif
 
 void cfg_rpcn::set_ipv6_support(bool ipv6_support)
 {

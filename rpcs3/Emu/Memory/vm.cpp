@@ -17,6 +17,9 @@
 #include "util/asm.hpp"
 #include "util/simd.hpp"
 #include "util/serialization.hpp"
+#ifdef __APPLE__
+#include "ios_vm_layout.h"
+#endif
 
 #include <thread>
 
@@ -54,6 +57,15 @@ namespace vm
 		fmt::throw_exception("Failed to reserve vm memory");
 	}
 
+#ifdef __APPLE__
+	// The layout can omit the hook reservation, which leaves g_hook_addr null.
+	const vm_layout& s_vm_layout = vm_layout_for_this_platform();
+	u8* const g_base_addr = memory_reserve_4GiB(reinterpret_cast<void*>(0x2'0000'0000), s_vm_layout.base_size, true);
+	u8* const g_sudo_addr = g_base_addr + 0x1'0000'0000;
+	u8* const g_exec_addr = memory_reserve_4GiB(g_sudo_addr, s_vm_layout.exec_size);
+	u8* const g_hook_addr = s_vm_layout.hook_size ? memory_reserve_4GiB(g_exec_addr, s_vm_layout.hook_size) : nullptr;
+	u8* const g_stat_addr = memory_reserve_4GiB(g_hook_addr ? g_hook_addr : g_exec_addr, s_vm_layout.stat_size);
+#else
 	// Emulated virtual memory
 	u8* const g_base_addr = memory_reserve_4GiB(reinterpret_cast<void*>(0x2'0000'0000), 0x2'0000'0000, true);
 
@@ -68,12 +80,18 @@ namespace vm
 
 	// Stats for debugging
 	u8* const g_stat_addr = memory_reserve_4GiB(g_hook_addr);
+#endif
 
 	// For SPU
 	u8* const g_free_addr = g_stat_addr + 0x1'0000'0000;
 
 	// Reservation stats
+#ifdef __APPLE__
+	alignas(4096) u8 g_reservations[rsrv_table_size]{0};
+	static_assert(sizeof(g_reservations) == rsrv_table_size);
+#else
 	alignas(4096) u8 g_reservations[65536 / 128 * 64]{0};
+#endif
 
 	// Pointers to shared memory mirror or zeros for "normal" memory
 	alignas(4096) atomic_t<u64> g_shmem[65536]{0};
@@ -858,7 +876,12 @@ namespace vm
 
 		if (range_lock)
 		{
+#ifdef __APPLE__
+			// Built with nullptr so it reads the counter only when the performance report is on.
+			perf_meter<"SUSPEND"_u64> perf0(nullptr);
+#else
 			perf_meter<"SUSPEND"_u64> perf0;
+#endif
 
 #ifdef ANDROID
 			// Counted in batches of 64 per thread: a SPURS title takes this path over a million times
@@ -998,7 +1021,12 @@ namespace vm
 						// main_thread pinned in cellSpursRemoveWorkload carrying cpu_flag::memory
 						// but never cpu_flag::wait. The acquire loop above was instrumented first
 						// and reported nothing, which is what pointed here.
+#ifdef __APPLE__
+						// Past 1024 spins each one yields, about 1 us, so 300k waits about as long as 40M plain spins.
+						if (spins == 300'000)
+#else
 						if (spins == 40'000'000)
+#endif
 						{
 							vm_log.error("vm::writer_lock waiting for a PPU thread to reach cpu_flag::wait: id=0x%x '%s' state=0x%x, lock addr=0x%x size=0x%x",
 								ptr->id, ptr->get_name(), +ptr->state, addr, size);
@@ -1018,6 +1046,13 @@ namespace vm
 								std::this_thread::yield();
 							}
 
+							continue;
+						}
+#elif defined(__APPLE__)
+						// Give up the core so a PPU queued behind the spinning SPU threads can run and park.
+						if (spins >= 1024) [[unlikely]]
+						{
+							std::this_thread::yield();
 							continue;
 						}
 #endif
@@ -1434,7 +1469,16 @@ namespace vm
 					if ((old_val ^ start_value) & (page_readable | page_writable))
 					{
 						const auto protection = start_value & page_writable ? utils::protection::rw : (start_value & page_readable ? utils::protection::ro : utils::protection::no);
+#ifdef __APPLE__
+						// Guest pages are 4 KiB but iOS host pages are 16 KiB, so protect the whole host pages
+						// that hold the range. memory_protect rounds the same way inside on POSIX; doing it here
+						// keeps the length the kernel acts on visible at the call.
+						const u64 host_start = utils::page_start(start * 4096ull);
+						const u64 host_end = utils::page_end(start * 4096ull + page_size - 1);
+						utils::memory_protect(g_base_addr + host_start, host_end - host_start + 1, protection);
+#else
 						utils::memory_protect(g_base_addr + start * 4096, page_size, protection);
+#endif
 					}
 
 					range_lock->release(0);
@@ -2800,10 +2844,52 @@ namespace vm
 
 	inline namespace ps3_
 	{
+#ifdef __APPLE__
+		// Built on first use, and only when the layout has a hook reservation to map.
+		static utils::shm& hook_shm()
+		{
+			static utils::shm s_hook{s_vm_layout.hook_size, ""};
+			return s_hook;
+		}
+#else
 		static utils::shm s_hook{0x800000000, ""};
+#endif
 
 		void init()
 		{
+#ifdef __APPLE__
+			// The hook line and its argument go together, or the format string and arguments disagree.
+			if (g_hook_addr)
+			{
+				vm_log.notice("Guest memory bases address ranges:\n"
+				"vm::g_base_addr = %p - %p\n"
+				"vm::g_sudo_addr = %p - %p\n"
+				"vm::g_exec_addr = %p - %p\n"
+				"vm::g_hook_addr = %p - %p\n"
+				"vm::g_stat_addr = %p - %p\n"
+				"vm::g_reservations = %p - %p\n",
+				g_base_addr, g_base_addr + 0xffff'ffff,
+				g_sudo_addr, g_sudo_addr + 0xffff'ffff,
+				g_exec_addr, g_exec_addr + 0x200000000 - 1,
+				g_hook_addr, g_hook_addr + s_vm_layout.hook_size - 1,
+				g_stat_addr, g_stat_addr + 0xffff'ffff,
+				g_reservations, g_reservations + sizeof(g_reservations) - 1);
+			}
+			else
+			{
+				vm_log.notice("Guest memory bases address ranges:\n"
+				"vm::g_base_addr = %p - %p\n"
+				"vm::g_sudo_addr = %p - %p\n"
+				"vm::g_exec_addr = %p - %p\n"
+				"vm::g_stat_addr = %p - %p\n"
+				"vm::g_reservations = %p - %p\n",
+				g_base_addr, g_base_addr + 0xffff'ffff,
+				g_sudo_addr, g_sudo_addr + 0xffff'ffff,
+				g_exec_addr, g_exec_addr + 0x200000000 - 1,
+				g_stat_addr, g_stat_addr + 0xffff'ffff,
+				g_reservations, g_reservations + sizeof(g_reservations) - 1);
+			}
+#else
 			vm_log.notice("Guest memory bases address ranges:\n"
 			"vm::g_base_addr = %p - %p\n"
 			"vm::g_sudo_addr = %p - %p\n"
@@ -2817,6 +2903,7 @@ namespace vm
 			g_hook_addr, g_hook_addr + 0x800000000 - 1,
 			g_stat_addr, g_stat_addr + 0xffff'ffff,
 			g_reservations, g_reservations + sizeof(g_reservations) - 1);
+#endif
 
 			std::memset(&g_pages, 0, sizeof(g_pages));
 
@@ -2836,10 +2923,17 @@ namespace vm
 			std::memset(g_range_lock_set, 0, sizeof(g_range_lock_set));
 			std::memset(g_range_lock_bits, 0, sizeof(g_range_lock_bits));
 
+#ifdef __APPLE__
+			if (g_hook_addr)
+			{
+				ensure(hook_shm().map(g_hook_addr, utils::protection::rw, true));
+			}
+#else
 #ifdef _WIN32
 			utils::memory_release(g_hook_addr, 0x800000000);
 #endif
 			ensure(s_hook.map(g_hook_addr, utils::protection::rw, true));
+#endif
 		}
 	}
 
@@ -2863,11 +2957,18 @@ namespace vm
 		utils::memory_decommit(g_exec_addr, 0x200000000);
 		utils::memory_decommit(g_stat_addr, 0x100000000);
 
+#ifdef __APPLE__
+		if (g_hook_addr)
+		{
+			utils::memory_decommit(g_hook_addr, s_vm_layout.hook_size);
+		}
+#else
 #ifdef _WIN32
 		s_hook.unmap(g_hook_addr);
 		ensure(utils::memory_reserve(0x800000000, g_hook_addr));
 #else
 		utils::memory_decommit(g_hook_addr, 0x800000000);
+#endif
 #endif
 
 		std::memset(g_range_lock_set, 0, sizeof(g_range_lock_set));

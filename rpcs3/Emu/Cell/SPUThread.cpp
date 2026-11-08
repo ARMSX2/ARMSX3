@@ -3,6 +3,9 @@
 #include <cstring>
 #include "Utilities/JIT.h"
 #include "Utilities/date_time.h"
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 #include "Emu/Memory/vm.h"
 #include "Emu/Memory/vm_ptr.h"
 #include "Emu/Memory/vm_reservation.h"
@@ -563,6 +566,38 @@ extern void mov_rdata(spu_rdata_t& _dst, const spu_rdata_t& _src)
 #endif
 }
 
+#ifdef __APPLE__
+// ARM can show a 128-byte line's later stores first; barriers between the pairs give x86's order
+extern void mov_rdata_ordered(spu_rdata_t& _dst, const spu_rdata_t& _src)
+{
+#if defined(ARCH_ARM64)
+	const u8* const src_b = reinterpret_cast<const u8*>(_src);
+	u8* const dst_b = reinterpret_cast<u8*>(_dst);
+
+	const uint8x16_t v0 = vld1q_u8(src_b + 0x00);
+	const uint8x16_t v1 = vld1q_u8(src_b + 0x10);
+	const uint8x16_t v2 = vld1q_u8(src_b + 0x20);
+	const uint8x16_t v3 = vld1q_u8(src_b + 0x30);
+	const uint8x16_t v4 = vld1q_u8(src_b + 0x40);
+	const uint8x16_t v5 = vld1q_u8(src_b + 0x50);
+	const uint8x16_t v6 = vld1q_u8(src_b + 0x60);
+	const uint8x16_t v7 = vld1q_u8(src_b + 0x70);
+	vst1q_u8(dst_b + 0x00, v0);
+	vst1q_u8(dst_b + 0x10, v1);
+	__asm__ volatile("dmb ishst" ::: "memory");
+	vst1q_u8(dst_b + 0x20, v2);
+	vst1q_u8(dst_b + 0x30, v3);
+	__asm__ volatile("dmb ishst" ::: "memory");
+	vst1q_u8(dst_b + 0x40, v4);
+	vst1q_u8(dst_b + 0x50, v5);
+	__asm__ volatile("dmb ishst" ::: "memory");
+	vst1q_u8(dst_b + 0x60, v6);
+	vst1q_u8(dst_b + 0x70, v7);
+#else
+	mov_rdata(_dst, _src);
+#endif
+}
+#endif
 #ifdef _MSC_VER
 __forceinline
 #endif
@@ -1828,7 +1863,7 @@ extern thread_local std::string(*g_tls_log_prefix)();
 
 void spu_thread::cpu_task()
 {
-#ifdef __APPLE__
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && !defined(ARCH_ARM64)
 	pthread_jit_write_protect_np(true);
 #endif
 	start_time = 0;
@@ -3314,6 +3349,14 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
 		// Leave those transfers to fault like any other access, as upstream does.
 		const auto game_handles_faults = [&]() -> bool
 		{
+#ifdef __APPLE__
+			// A raw SPU command issued by a PPU over MMIO has no spu_thread, and vm::get would throw
+			if (!_this)
+			{
+				return false;
+			}
+
+#endif
 			const auto area = vm::get(vm::any, eal);
 
 			if (!area)
@@ -3569,7 +3612,11 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
 				auto& res = vm::reservation_acquire(eal);
 
 				// Lock each bit corresponding to a byte being written, using some free space in reservation memory
+#ifdef __APPLE__
+				auto* bits = utils::bless<atomic_t<u128>>(vm::g_reservations + (vm::reservation_slot_offset(eal) + 16));
+#else
 				auto* bits = utils::bless<atomic_t<u128>>(vm::g_reservations + ((eal & 0xff80) / 2 + 16));
+#endif
 
 				// Get writing mask
 				const u128 wmask = (~u128{} << (eal & 127)) & (~u128{} >> (127 - ((eal + size0 - 1) & 127)));
@@ -4013,6 +4060,14 @@ plain_access:
 	}
 	}
 
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+	// ARM lets later loads pass this GET's plain loads, which x86 never allows
+	if (is_get)
+	{
+		atomic_fence_acquire();
+	}
+
+#endif
 	if (g_cfg.core.mfc_debug && _this)
 	{
 		auto& dump = _this->mfc_history[_this->mfc_dump_idx++ % spu_thread::max_mfc_dump_idx];
@@ -4831,7 +4886,11 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 		{
 			if (addr - spurs_addr <= 0x80)
 			{
+#ifdef __APPLE__
+				mov_rdata_ordered(*vm::_ptr<spu_rdata_t>(addr), to_write);
+#else
 				mov_rdata(*vm::_ptr<spu_rdata_t>(addr), to_write);
+#endif
 				res += 64;
 				return true;
 			}
@@ -4964,7 +5023,11 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 				}
 				else
 				{
+#ifdef __APPLE__
+					mov_rdata_ordered(super_data, to_write);
+#else
 					mov_rdata(super_data, to_write);
+#endif
 					return true;
 				}
 			}
@@ -5069,7 +5132,11 @@ void do_cell_atomic_128_store(u32 addr, const void* to_write, bool lock_rsx)
 
 	{
 		auto& sdata = *vm::get_super_ptr<spu_rdata_t>(addr);
+#ifdef __APPLE__
+		auto& res = *utils::bless<atomic_t<u128>>(vm::g_reservations + vm::reservation_slot_offset(addr));
+#else
 		auto& res = *utils::bless<atomic_t<u128>>(vm::g_reservations + (addr & 0xff80) / 2);
+#endif
 
 		if (std::memcmp(static_cast<const u8*>(to_write), &sdata, 16) == 0 && std::memcmp(static_cast<const u8*>(to_write) + 64, &sdata[64], 16) == 0)
 		{
@@ -5158,7 +5225,11 @@ void do_cell_atomic_128_store(u32 addr, const void* to_write, bool lock_rsx)
 
 		if (!g_cfg.core.spu_accurate_reservations)
 		{
+#ifdef __APPLE__
+			mov_rdata_ordered(sdata, *static_cast<const spu_rdata_t*>(to_write));
+#else
 			mov_rdata(sdata, *static_cast<const spu_rdata_t*>(to_write));
+#endif
 			vm::reservation_acquire(addr) += 32;
 		}
 		else if (cpu->state & cpu_flag::pause)
@@ -5180,7 +5251,11 @@ void do_cell_atomic_128_store(u32 addr, const void* to_write, bool lock_rsx)
 			}
 
 			vm::writer_lock lock(addr, spu ? spu->range_lock : nullptr);
+#ifdef __APPLE__
+			mov_rdata_ordered(sdata, *static_cast<const spu_rdata_t*>(to_write));
+#else
 			mov_rdata(sdata, *static_cast<const spu_rdata_t*>(to_write));
+#endif
 			vm::reservation_acquire(addr) += 32;
 		}
 
@@ -5188,7 +5263,11 @@ void do_cell_atomic_128_store(u32 addr, const void* to_write, bool lock_rsx)
 		{
 			cpu_thread::suspend_all<+2>(cpu, {}, [&]
 			{
+#ifdef __APPLE__
+				mov_rdata_ordered(sdata, *static_cast<const spu_rdata_t*>(to_write));
+#else
 				mov_rdata(sdata, *static_cast<const spu_rdata_t*>(to_write));
+#endif
 			});
 
 			vm::reservation_acquire(addr) += 32;
@@ -5208,7 +5287,11 @@ void spu_thread::do_putlluc(const spu_mfc_cmd& args)
 {
 	const ppu_watch_putll_report watch_report_{*this, args.eal, "PUTLLUC"};
 
+#ifdef __APPLE__
+	perf_meter<"PUTLLUC"_u64> perf0(nullptr);
+#else
 	perf_meter<"PUTLLUC"_u64> perf0;
+#endif
 
 	const u32 addr = args.eal & -128;
 
@@ -7910,7 +7993,12 @@ s64 spu_thread::get_ch_value(u32 ch)
 						{
 							set_lr = true;
 						}
+#ifdef __APPLE__
+						// Weakly ordered host: fence like the other reservation-lost checks
+						else if (!cmp_rdata(_this->rdata, *_this->resrv_mem) && rdata_fence())
+#else
 						else if (!cmp_rdata(_this->rdata, *_this->resrv_mem))
+#endif
 						{
 							auto& wait_addrs = _this->raddr_busy_wait_addr;
 

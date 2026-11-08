@@ -34,6 +34,15 @@
 #include "util/v128.hpp"
 #include "util/simd.hpp"
 #include "util/sysinfo.hpp"
+#ifdef __APPLE__
+#include "spu_codegen_identity.h"
+#ifdef LLVM_AVAILABLE
+#include "llvm/Config/llvm-config.h"
+#endif
+#include <TargetConditionals.h>
+#include "ios_jit_dual_map.h"
+#include "ios_jit_pool_full.h"
+#endif
 
 const extern spu_decoder<spu_itype> g_spu_itype;
 const extern spu_decoder<spu_iname> g_spu_iname;
@@ -99,12 +108,16 @@ public:
 		context = {};
 		context.use_tbl2 = use_tbl2;
 		context.use_fma = use_fma;
+#if !defined(__APPLE__) || defined(LLVM_AVAILABLE)
 		spu_llvm_set_compile_context(&context);
+#endif
 	}
 
 	~spu_llvm_compile_scope() noexcept
 	{
+#if !defined(__APPLE__) || defined(LLVM_AVAILABLE)
 		spu_llvm_set_compile_context(nullptr);
+#endif
 	}
 };
 
@@ -140,6 +153,20 @@ static void spu_reset_failed_blocks()
 	s_spu_failed_blocks.clear();
 }
 
+#ifdef __APPLE__
+// Ranges still compiling in the background, and every program ever queued so each is queued once
+static shared_mutex s_spu_async_mutex;
+static std::vector<std::pair<u32, u32>> s_spu_async_pending;
+static std::unordered_set<u64> s_spu_async_queued;
+
+static void spu_reset_async_compiles()
+{
+	std::lock_guard lock(s_spu_async_mutex);
+	s_spu_async_pending.clear();
+	s_spu_async_queued.clear();
+}
+
+#endif
 // The fallback is spu_recompiler_base::old_interpreter, which reads the opcode table, the thread
 // and the local store and nothing else -- see spu_thread::cpu_task. It is always linked, so on the
 // backends that can reach a failed block there is always something to fall back to.
@@ -244,7 +271,11 @@ static bool spu_block_compile_failed(u32 addr)
 	return s_spu_failed_blocks.contains(addr);
 }
 
+#ifdef __APPLE__
+static void spu_mark_block_compile_failed(u32 entry_point, u32 lower_bound = 0, u32 size_bytes = 0, bool quiet = false)
+#else
 static void spu_mark_block_compile_failed(u32 entry_point, u32 lower_bound = 0, u32 size_bytes = 0)
+#endif
 {
 	std::lock_guard lock(s_spu_failed_blocks_mutex);
 
@@ -252,7 +283,11 @@ static void spu_mark_block_compile_failed(u32 entry_point, u32 lower_bound = 0, 
 	const u32 begin = size_bytes ? lower_bound : entry_point;
 	const u32 end = size_bytes ? lower_bound + size_bytes : entry_point + 4;
 
+#ifdef __APPLE__
+	if (s_spu_failed_blocks.mark(begin, end) && !quiet)
+#else
 	if (s_spu_failed_blocks.mark(begin, end))
+#endif
 	{
 		spu_log.error("SPU block 0x%05x cannot be compiled on this backend, its thread switches to the interpreter", entry_point);
 	}
@@ -360,6 +395,17 @@ static spu_function_t compile_spu_llvm_with_retry(std::unique_ptr<spu_recompiler
 		return nullptr;
 	}
 
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+	// With pool 2 nearly full, the block is interpreted rather than spending the last of the pool.
+	// The mark is quiet because the pool helper counts and logs each refusal. It comes after the
+	// already-failed check, so a marked block costs one shared-lock read.
+	if (utils::jit_pool2_refuse_spu_block())
+	{
+		spu_mark_block_compile_failed(program.entry_point, program.lower_bound, ::size32(program.data) * 4, true);
+		return nullptr;
+	}
+
+#endif
 	spu_llvm_compile_context context;
 
 	{
@@ -1426,7 +1472,11 @@ void spu_cache::initialize(bool build_existing_cache)
 			}
 
 			// Clear fake LS
+#ifdef __APPLE__
+			std::memset(ls.data() + start / 4, 0, 4 * size0);
+#else
 			std::memset(ls.data() + start / 4, 0, 4 * (size0 - 1));
+#endif
 
 			result++;
 
@@ -1644,6 +1694,16 @@ void spu_cache::initialize(bool build_existing_cache)
 	}
 
 	spu_log.notice("SPU Runtime: Workers built %u programs.", built_total);
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+	// Whether this boot's precompile hit the object cache
+	if (const auto spurt = g_fxo->try_get<spu_runtime>(); spurt && !spurt->get_obj_cache_path().empty())
+	{
+		const jit_obj_cache_stats& st = spurt->obj_cache_stats;
+		spu_log.notice("SPU object cache: hits=%u misses=%u rejected=%u not_persisted=%u written=%u write_failed=%u evicted=%u validate_ms=%.1f walk_ms=%.1f",
+			st.hits.load(), st.misses.load(), st.rejected.load(), st.not_persisted.load(), st.written.load(), st.write_failed.load(), st.evicted.load(),
+			st.validate_ns.load() / 1e6, st.walk_ns.load() / 1e6);
+	}
+#endif
 
 	if (Emu.IsStopped())
 	{
@@ -1734,6 +1794,9 @@ spu_runtime::spu_runtime()
 	// fail to compile a block, so no other target has anything to reset.
 #ifdef ARCH_ARM64
 	spu_reset_failed_blocks();
+#ifdef __APPLE__
+	spu_reset_async_compiles();
+#endif
 #endif
 
 	// Clear LLVM output
@@ -1755,7 +1818,7 @@ spu_runtime::spu_runtime()
 		fs::write_file(m_cache_path + "spu-ir.log", fs::rewrite);
 	}
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__APPLE__) && defined(ARCH_ARM64) && defined(LLVM_AVAILABLE))
 	// Persistent SPU object cache. ARM64 has no spu_fast first tier, so without this every
 	// launch re-JITs thousands of blocks -- the long boot recompile and the synchronous-compile
 	// hitching. The plumbing already exists (jit_compiler::add(module, path) installs an
@@ -1775,7 +1838,13 @@ spu_runtime::spu_runtime()
 		// so they fault as soon as a later process maps things elsewhere. Disabling the write is
 		// not enough on its own -- what is already on disk would still be read back.
 		constexpr u32 SPU_OBJ_CACHE_VERSION = 3;
+#ifdef __APPLE__
+		// One big executable builds over 20000 objects; over the cap only the oldest go
+		constexpr usz SPU_OBJ_CACHE_MAX_FILES = 40000;
+		constexpr usz SPU_OBJ_CACHE_KEEP_FILES = 30000;
+#else
 		constexpr usz SPU_OBJ_CACHE_MAX_FILES = 12000;
+#endif
 
 		sha1_context ctx;
 		u8 key[20];
@@ -1789,6 +1858,19 @@ spu_runtime::spu_runtime()
 		const u32 version = SPU_OBJ_CACHE_VERSION;
 		fold(version);
 
+#ifdef __APPLE__
+		// A hash of the codegen sources instead of the build time, so an app update keeps the cache
+		static constexpr std::string_view s_codegen_identity = ARMSX3_SPU_CODEGEN_IDENTITY;
+		sha1_update(&ctx, reinterpret_cast<const u8*>(s_codegen_identity.data()), s_codegen_identity.size());
+
+		const u64 spu_thread_size = sizeof(spu_thread);
+		fold(spu_thread_size);
+
+#ifdef LLVM_AVAILABLE
+		static constexpr std::string_view s_llvm_version = LLVM_VERSION_STRING;
+		sha1_update(&ctx, reinterpret_cast<const u8*>(s_llvm_version.data()), s_llvm_version.size());
+#endif
+#else
 		// Build stamp, so a remembered version bump is not the only thing between a new binary and
 		// the objects an old one emitted.
 		//
@@ -1816,6 +1898,7 @@ spu_runtime::spu_runtime()
 		const std::string_view codegen_stamp = spu_llvm_codegen_build_stamp();
 		sha1_update(&ctx, reinterpret_cast<const u8*>(codegen_stamp.data()), codegen_stamp.size());
 #endif
+#endif
 
 		// Settings that change the emitted IR.
 		const u32 xfloat = static_cast<u32>(g_cfg.core.spu_xfloat_accuracy.get());
@@ -1840,6 +1923,12 @@ spu_runtime::spu_runtime()
 			(static_cast<u32>(g_cfg.savestate.compatible_mode.get())      << 9);
 		fold(flags);
 
+#ifdef __APPLE__
+		// Park sites put calls into emitted code
+		const std::string park_sites = g_cfg.core.spu_poll_park_sites.to_string();
+		sha1_update(&ctx, reinterpret_cast<const u8*>(park_sites.data()), park_sites.size());
+
+#endif
 		// Device-variable inputs. The HW bits reach the JIT through setMAttrs, and sha3 in
 		// particular auto-selects eor3/xar from plain XOR/rotate IR with no intrinsic gate, so
 		// it changes object bytes. tsc_freq is baked in as the decrementer divisor.
@@ -1854,6 +1943,14 @@ spu_runtime::spu_runtime()
 		const std::string cpu = jit_compiler::cpu(g_cfg.core.llvm_cpu.to_string());
 		sha1_update(&ctx, reinterpret_cast<const u8*>(cpu.data()), cpu.size());
 
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+		// The decoder changes spu_interpreter.obj; the literal matches PPUThread.cpp's cache key
+		const u32 spu_decoder = static_cast<u32>(g_cfg.core.spu_decoder.get());
+		fold(spu_decoder);
+		static constexpr std::string_view s_jit_codegen = "arm64_codegen_v14";
+		sha1_update(&ctx, reinterpret_cast<const u8*>(s_jit_codegen.data()), s_jit_codegen.size());
+
+#endif
 		sha1_finish(&ctx, key);
 
 		m_obj_cache_path = m_cache_path + fmt::format("spuobj-v%u-%s/", SPU_OBJ_CACHE_VERSION, fmt::base57(key, 16));
@@ -1864,6 +1961,39 @@ spu_runtime::spu_runtime()
 		// the superseded ones would stay forever, and an SPU object cache runs to hundreds of
 		// megabytes per title. Only siblings this code named are touched. Names are collected
 		// before anything is removed: fs::dir is a live handle on the directory being modified.
+#ifdef __APPLE__
+		// The two most recently used other directories stay, so toggling a setting back rebuilds nothing
+		constexpr usz SPU_OBJ_CACHE_KEEP_DIRS = 2;
+		std::vector<std::pair<s64, std::string>> other_caches;
+
+		for (auto&& entry : fs::dir(m_cache_path))
+		{
+			if (entry.is_directory && entry.name.starts_with("spuobj-") && m_cache_path + entry.name + "/" != m_obj_cache_path)
+			{
+				other_caches.emplace_back(entry.mtime, entry.name);
+			}
+		}
+
+		std::sort(other_caches.begin(), other_caches.end(), std::greater<>());
+
+		for (usz i = 0; i < other_caches.size(); i++)
+		{
+			const std::string& name = other_caches[i].second;
+
+			if (i < SPU_OBJ_CACHE_KEEP_DIRS)
+			{
+				spu_log.notice("Keeping SPU object cache from another build: %s", name);
+				continue;
+			}
+
+			spu_log.notice("Removing SPU object cache from another build: %s", name);
+			fs::remove_all(m_cache_path + name + "/");
+		}
+
+		// Picking a directory is a use of it; a new directory gets its mtime from create_path below.
+		const s64 now = std::time(nullptr);
+		fs::utime(m_obj_cache_path, now, now);
+#else
 		std::vector<std::string> stale_caches;
 
 		for (auto&& entry : fs::dir(m_cache_path))
@@ -1879,6 +2009,7 @@ spu_runtime::spu_runtime()
 			spu_log.notice("Removing SPU object cache from another build: %s", name);
 			fs::remove_all(m_cache_path + name + "/");
 		}
+#endif
 
 		if (!fs::create_path(m_obj_cache_path))
 		{
@@ -1891,19 +2022,40 @@ spu_runtime::spu_runtime()
 			// count would race. Over the cap the whole keyed dir is dropped and rebuilt rather
 			// than evicting piecemeal -- there is no recency information to evict on.
 			usz file_count = 0;
+#ifdef __APPLE__
+			// The write time of each object, so the oldest can go first.
+			std::vector<std::pair<s64, std::string>> objects;
+#endif
 
 			for (auto&& entry : fs::dir(m_obj_cache_path))
 			{
 				if (!entry.is_directory)
 				{
 					file_count++;
+#ifdef __APPLE__
+					objects.emplace_back(entry.mtime, entry.name);
+#endif
 				}
 			}
 
 			if (file_count > SPU_OBJ_CACHE_MAX_FILES)
 			{
+#ifdef __APPLE__
+				std::sort(objects.begin(), objects.end());
+				const usz drop = file_count - SPU_OBJ_CACHE_KEEP_FILES;
+
+				for (usz i = 0; i < drop; i++)
+				{
+					fs::remove_file(m_obj_cache_path + objects[i].second);
+				}
+
+				spu_log.notice("SPU object cache over %u files: removed the %u oldest.", SPU_OBJ_CACHE_MAX_FILES, drop);
+				obj_cache_stats.evicted.store(drop);
+				file_count = SPU_OBJ_CACHE_KEEP_FILES;
+#else
 				spu_log.notice("SPU object cache over %u files, rebuilding.", SPU_OBJ_CACHE_MAX_FILES);
 				fs::remove_all(m_obj_cache_path, false);
+#endif
 			}
 
 			spu_log.notice("SPU object cache: %s (%u files)", m_obj_cache_path, file_count);
@@ -2010,6 +2162,16 @@ spu_function_t spu_runtime::rebuild_ubertrampoline(u32 id_inst)
 		// Raw assembly pointer
 		u8* raw = wxptr;
 
+#ifdef __APPLE__
+		// The JIT block is mapped twice: stores go through the writable alias, while raw and every
+		// address computed from it stay execute addresses, so branches and the flush aim at code.
+		// Only an address inside the block has an alias; anything else is written directly.
+		auto rw = [](u8* p) -> u8*
+		{
+			return utils::jit_view_of(p) == utils::jit_view::execute ? utils::jit_rw(p) : p;
+		};
+
+#endif
 		auto make_jump = [&](asmjit::arm::CondCode op, auto target)
 		{
 			// 36 bytes
@@ -2017,6 +2179,67 @@ spu_function_t spu_runtime::rebuild_ubertrampoline(u32 id_inst)
 			const u64 taddr = target ? reinterpret_cast<u64>(target) : reinterpret_cast<u64>(tr_dispatch);
 
 			// ldr x9, #16 -> ldr x9, taddr
+#ifdef __APPLE__
+			*rw(raw++) = 0x89;
+			*rw(raw++) = 0x00;
+			*rw(raw++) = 0x00;
+			*rw(raw++) = 0x58;
+
+			if (op == asmjit::arm::CondCode::kAlways)
+			{
+				// br x9
+				*rw(raw++) = 0x20;
+				*rw(raw++) = 0x01;
+				*rw(raw++) = 0x1F;
+				*rw(raw++) = 0xD6;
+
+				// nop
+				*rw(raw++) = 0x1F;
+				*rw(raw++) = 0x20;
+				*rw(raw++) = 0x03;
+				*rw(raw++) = 0xD5;
+
+				// nop
+				*rw(raw++) = 0x1F;
+				*rw(raw++) = 0x20;
+				*rw(raw++) = 0x03;
+				*rw(raw++) = 0xD5;
+			}
+			else
+			{
+				// b.COND #8 -> b.COND do_branch
+				switch (op)
+				{
+				case asmjit::arm::CondCode::kUnsignedLT:
+					*rw(raw++) = 0x43;
+					break;
+				case asmjit::arm::CondCode::kUnsignedGT:
+					*rw(raw++) = 0x48;
+					break;
+				default:
+					asm("brk 0x42");
+				}
+
+				*rw(raw++) = 0x00;
+				*rw(raw++) = 0x00;
+				*rw(raw++) = 0x54;
+
+				// b #16 -> b cont
+				*rw(raw++) = 0x04;
+				*rw(raw++) = 0x00;
+				*rw(raw++) = 0x00;
+				*rw(raw++) = 0x14;
+
+				// do_branch: br x9
+				*rw(raw++) = 0x20;
+				*rw(raw++) = 0x01;
+				*rw(raw++) = 0x1f;
+				*rw(raw++) = 0xD6;
+			}
+
+			// taddr
+			std::memcpy(rw(raw), &taddr, 8);
+#else
 			*raw++ = 0x89;
 			*raw++ = 0x00;
 			*raw++ = 0x00;
@@ -2076,6 +2299,7 @@ spu_function_t spu_runtime::rebuild_ubertrampoline(u32 id_inst)
 
 			// taddr
 			std::memcpy(raw, &taddr, 8);
+#endif
 			raw += 8;
 
 			// cont: next instruction
@@ -2207,7 +2431,11 @@ spu_function_t spu_runtime::rebuild_ubertrampoline(u32 id_inst)
 				//	Rewrite jump address
 				{
 					u64 raw64 = reinterpret_cast<u64>(raw);
+#ifdef __APPLE__
+					memcpy(rw(w.rel32 - 8), &raw64, 8);
+#else
 					memcpy(w.rel32 - 8, &raw64, 8);
+#endif
 				}
 #else
 #error "Unimplemented"
@@ -2302,6 +2530,28 @@ spu_function_t spu_runtime::rebuild_ubertrampoline(u32 id_inst)
 				}
 #elif defined(ARCH_ARM64)
 				// ldr w9, #8
+#ifdef __APPLE__
+				*rw(raw++) = 0x49;
+				*rw(raw++) = 0x00;
+				*rw(raw++) = 0x00;
+				*rw(raw++) = 0x18;
+
+				// b #8
+				*rw(raw++) = 0x02;
+				*rw(raw++) = 0x00;
+				*rw(raw++) = 0x00;
+				*rw(raw++) = 0x14;
+
+				// cmp_lsa
+				std::memcpy(rw(raw), &cmp_lsa, 4);
+				raw += 4;
+
+				// ldr w1, [x7, x9]
+				*rw(raw++) = 0xE1;
+				*rw(raw++) = 0x68;
+				*rw(raw++) = 0x69;
+				*rw(raw++) = 0xB8;
+#else
 				*raw++ = 0x49;
 				*raw++ = 0x00;
 				*raw++ = 0x00;
@@ -2322,6 +2572,7 @@ spu_function_t spu_runtime::rebuild_ubertrampoline(u32 id_inst)
 				*raw++ = 0x68;
 				*raw++ = 0x69;
 				*raw++ = 0xB8;
+#endif
 #else
 #error "Unimplemented"
 #endif
@@ -2334,6 +2585,28 @@ spu_function_t spu_runtime::rebuild_ubertrampoline(u32 id_inst)
 			raw += 4;
 #elif defined(ARCH_ARM64)
 			// ldr w9, #8
+#ifdef __APPLE__
+			*rw(raw++) = 0x49;
+			*rw(raw++) = 0x00;
+			*rw(raw++) = 0x00;
+			*rw(raw++) = 0x18;
+
+			// b #8
+			*rw(raw++) = 0x02;
+			*rw(raw++) = 0x00;
+			*rw(raw++) = 0x00;
+			*rw(raw++) = 0x14;
+
+			// x
+			std::memcpy(rw(raw), &x, 4);
+			raw += 4;
+
+			// cmp w1, w9
+			*rw(raw++) = 0x3f;
+			*rw(raw++) = 0x00;
+			*rw(raw++) = 0x09;
+			*rw(raw++) = 0x6B;
+#else
 			*raw++ = 0x49;
 			*raw++ = 0x00;
 			*raw++ = 0x00;
@@ -2354,6 +2627,7 @@ spu_function_t spu_runtime::rebuild_ubertrampoline(u32 id_inst)
 			*raw++ = 0x00;
 			*raw++ = 0x09;
 			*raw++ = 0x6B;
+#endif
 #else
 #error "Unimplemented"
 #endif
@@ -2595,13 +2869,54 @@ spu_function_t spu_runtime::make_branch_patchpoint(u16 data) const
 
 	return reinterpret_cast<spu_function_t>(raw);
 #elif defined(ARCH_ARM64)
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && !defined(ARCH_ARM64)
 	pthread_jit_write_protect_np(false);
 #endif
 
 	u8* const patch_fn = ensure(jit_runtime::alloc(36, 16));
 	u8* raw = patch_fn;
 
+#ifdef __APPLE__
+	// Stores go through the writable alias; patch_fn and raw stay execute addresses, as above
+	auto rw = [](u8* p) -> u8*
+	{
+		return utils::jit_view_of(p) == utils::jit_view::execute ? utils::jit_rw(p) : p;
+	};
+
+	// adr x21, #16
+	*rw(raw++) = 0x95;
+	*rw(raw++) = 0x00;
+	*rw(raw++) = 0x00;
+	*rw(raw++) = 0x10;
+
+	// nop x3
+	for (int i = 0; i < 3; i++)
+	{
+		*rw(raw++) = 0x1F;
+		*rw(raw++) = 0x20;
+		*rw(raw++) = 0x03;
+		*rw(raw++) = 0xD5;
+	}
+
+	// ldr x9, #8
+	*rw(raw++) = 0x49;
+	*rw(raw++) = 0x00;
+	*rw(raw++) = 0x00;
+	*rw(raw++) = 0x58;
+
+	// br x9
+	*rw(raw++) = 0x20;
+	*rw(raw++) = 0x01;
+	*rw(raw++) = 0x1F;
+	*rw(raw++) = 0xD6;
+
+	u64 branch_target = reinterpret_cast<u64>(tr_branch);
+	std::memcpy(rw(raw), &branch_target, 8);
+	raw += 8;
+
+	*rw(raw++) = static_cast<u8>(data >> 8);
+	*rw(raw++) = static_cast<u8>(data & 0xff);
+#else
 	// adr x21, #16
 	*raw++ = 0x95;
 	*raw++ = 0x00;
@@ -2635,8 +2950,9 @@ spu_function_t spu_runtime::make_branch_patchpoint(u16 data) const
 
 	*raw++ = static_cast<u8>(data >> 8);
 	*raw++ = static_cast<u8>(data & 0xff);
+#endif
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && !defined(ARCH_ARM64)
 	pthread_jit_write_protect_np(true);
 #endif
 
@@ -2699,6 +3015,152 @@ static spu_function_t compile_spu_llvm_paused(spu_thread& spu, const spu_program
 }
 #endif
 
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+// No fast tier on ARM64, so new code compiles in the background and its range is interpreted meanwhile
+static bool spu_async_compile_enabled()
+{
+	return g_cfg.core.spu_decoder == spu_decoder_type::llvm && !g_cfg.core.spu_compile_pause;
+}
+
+static u64 spu_async_key(const spu_program& p)
+{
+	u64 h = 0xcbf29ce484222325ull ^ (u64{p.entry_point} << 32 | p.lower_bound);
+	for (const u32 w : p.data)
+	{
+		h = (h ^ w) * 0x100000001b3ull;
+	}
+	return h;
+}
+
+static std::pair<u32, u32> spu_async_pending_range(u32 pc)
+{
+	reader_lock lock(s_spu_async_mutex);
+	for (const auto& r : s_spu_async_pending)
+	{
+		if (pc >= r.first && pc < r.second)
+		{
+			return r;
+		}
+	}
+	return {};
+}
+
+struct spu_async_worker
+{
+	lf_queue<spu_program> queue;
+
+	void operator()()
+	{
+		std::unique_ptr<spu_recompiler_base> compiler;
+
+		while (thread_ctrl::state() != thread_state::aborting)
+		{
+			for (auto&& prog : queue.pop_all())
+			{
+				if (thread_ctrl::state() == thread_state::aborting)
+				{
+					break;
+				}
+
+				if (!compiler)
+				{
+					compiler = spu_recompiler_base::make_llvm_recompiler();
+					compiler->init();
+				}
+
+				// compile() reads the analyser state, so analyse on this compiler first; a failure marks the block
+				if (const spu_program again = analyse_spu_llvm_program(*compiler, prog); again == prog)
+				{
+					compile_spu_llvm_with_retry(compiler, again);
+				}
+
+				const std::pair<u32, u32> range{prog.lower_bound, prog.lower_bound + ::size32(prog.data) * 4};
+				std::lock_guard lock(s_spu_async_mutex);
+				if (const auto it = std::find(s_spu_async_pending.begin(), s_spu_async_pending.end(), range); it != s_spu_async_pending.end())
+				{
+					s_spu_async_pending.erase(it);
+				}
+			}
+
+			thread_ctrl::wait_on(queue.get_wait_atomic(), 0);
+		}
+	}
+};
+
+struct spu_async_compilers
+{
+	std::unique_ptr<named_thread_group<spu_async_worker>> workers;
+	atomic_t<u32> next = 0;
+
+	spu_async_compilers()
+	{
+		// Constructed first, destroyed last: the workers install into the runtime until they stop
+		g_fxo->init<spu_cache>();
+		g_fxo->init<spu_runtime>();
+
+		if (g_cfg.core.spu_decoder == spu_decoder_type::llvm)
+		{
+			workers = std::make_unique<named_thread_group<spu_async_worker>>("SPU Async Compiler ", 2);
+		}
+	}
+};
+
+// True when the thread was sent to the interpreter (the caller returns), false to compile in line
+static bool spu_async_dispatch(spu_thread& spu, std::unique_ptr<spu_recompiler_base>& jit)
+{
+	if (!spu_async_compile_enabled())
+	{
+		return false;
+	}
+
+	auto range = spu_async_pending_range(spu.pc);
+
+	if (!range.second)
+	{
+		auto program = jit->analyse(spu._ptr<u32>(0), spu.pc);
+
+		if (program.data.empty())
+		{
+			return false;
+		}
+
+		auto& async = g_fxo->get<spu_async_compilers>();
+
+		if (!async.workers)
+		{
+			return false;
+		}
+
+		range = {program.lower_bound, program.lower_bound + ::size32(program.data) * 4};
+
+		{
+			std::lock_guard lock(s_spu_async_mutex);
+
+			// Queued before and finished: compiled already, or it failed and is marked; the in-line path handles both
+			if (!s_spu_async_queued.emplace(spu_async_key(program)).second)
+			{
+				return false;
+			}
+
+			s_spu_async_pending.push_back(range);
+		}
+
+		const u32 i = async.next++ % 2;
+		(async.workers->begin() + i)->queue.push(std::move(program));
+	}
+
+	spu.interp_fallback_begin = range.first;
+	spu.interp_fallback_end = range.second;
+	ensure(spu.interp_fallback_end > spu.interp_fallback_begin);
+	spu.interp_fallback = true;
+	// As spu_run_interp_fallback: cpu_task clears it, and an escape skips anything after the interpreter
+	spu.allow_interrupts_in_cpu_work = true;
+	spu_recompiler_base::old_interpreter(spu, spu._ptr<u8>(0), nullptr);
+	spu_runtime::g_escape(&spu);
+	return true;
+}
+
+#endif
 void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
 {
 	// If code verification failed from a patched patchpoint, clear it with a dispatcher jump
@@ -2741,11 +3203,20 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
 
 		const u64 target = reinterpret_cast<u64>(spu_runtime::tr_all);
 		std::memcpy(bytes + 8, &target, 8);
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && !defined(ARCH_ARM64)
 		pthread_jit_write_protect_np(false);
 #endif
+#ifdef __APPLE__
+		// The site is rewritten in place through the writable alias; rip stays the execute address
+		auto rw = [](u8* p) -> u8*
+		{
+			return utils::jit_view_of(p) == utils::jit_view::execute ? utils::jit_rw(p) : p;
+		};
+		atomic_storage<u128>::release(*reinterpret_cast<u128*>(rw(rip)), result);
+#else
 		atomic_storage<u128>::release(*reinterpret_cast<u128*>(rip), result);
-#if defined(__APPLE__)
+#endif
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && !defined(ARCH_ARM64)
 		pthread_jit_write_protect_np(true);
 #endif
 
@@ -2797,9 +3268,16 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
 		spu_run_interp_fallback(spu);
 		return;
 	}
+#ifdef __APPLE__
+
+	if (spu_async_dispatch(spu, spu.jit))
+	{
+		return;
+	}
+#endif
 #endif
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && !defined(ARCH_ARM64)
 	pthread_jit_write_protect_np(false);
 #endif
 	auto program = spu.jit->analyse(spu._ptr<u32>(0), spu.pc);
@@ -2814,7 +3292,7 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
 #ifdef ARCH_ARM64
 		if (spu_interpreter_fallback_available())
 		{
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && !defined(ARCH_ARM64)
 			pthread_jit_write_protect_np(true);
 #endif
 			// The analysed extent is in scope here, so a block that reached the fallback without
@@ -2838,7 +3316,7 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
 			spu_log.trace("Called from 0x%x", _info._u32[2] - 4);
 		}
 	}
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && !defined(ARCH_ARM64)
 	pthread_jit_write_protect_np(true);
 #endif
 
@@ -2928,11 +3406,20 @@ void spu_recompiler_base::branch(spu_thread& spu, void*, u8* rip)
 
 	const u64 target = reinterpret_cast<u64>(func);
 	std::memcpy(bytes + 8, &target, 8);
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && !defined(ARCH_ARM64)
 	pthread_jit_write_protect_np(false);
 #endif
+#ifdef __APPLE__
+	// The site is rewritten in place through the writable alias; rip stays the execute address
+	auto rw = [](u8* p) -> u8*
+	{
+		return utils::jit_view_of(p) == utils::jit_view::execute ? utils::jit_rw(p) : p;
+	};
+	atomic_storage<u128>::release(*reinterpret_cast<u128*>(rw(rip)), result);
+#else
 	atomic_storage<u128>::release(*reinterpret_cast<u128*>(rip), result);
-#if defined(__APPLE__)
+#endif
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && !defined(ARCH_ARM64)
 	pthread_jit_write_protect_np(true);
 #endif
 
@@ -3821,6 +4308,12 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 				if (type == spu_itype::BI && target == pos + 4 && op.d)
 				{
 					// Disable interrupts idiom
+#ifdef __APPLE__
+					// Both recompilers take this path only when m_targets holds pos+4, and pos+4 must be a block for the target prune to keep it
+					m_targets[pos].push_back(target);
+					add_block(target);
+					next_block();
+#endif
 					break;
 				}
 
@@ -7256,7 +7749,15 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 			{
 				const reg_state_t& rt = vregs[op.rt];
 
+#ifdef __APPLE__
+				// The CEQI result carries the read's origin with is_instruction false, so only the full state tells it from the count
+				const bool tests_count = rt == rchcnt_loop->ch_state;
+				const bool tests_product = !(rchcnt_loop->ch_product & vf::is_null) && rt == rchcnt_loop->ch_product;
+
+				if (tests_count || tests_product)
+#else
 				if (rt.is_instruction && (rchcnt_loop->ch_state.origin == rt.origin || rchcnt_loop->ch_product.origin == rt.origin))
+#endif
 				{
 					if (rchcnt_loop->conditioned)
 					{
@@ -7267,7 +7768,13 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 
 					rchcnt_loop->conditioned = true;
 					rchcnt_loop->branch_pc = pos;
+#ifdef __APPLE__
+
+					const bool negate = tests_product && rchcnt_loop->product_test_negate;
+					rchcnt_loop->branch_target = negate != (type == spu_itype::BRZ) ? target : next_pc;
+#else
 					rchcnt_loop->branch_target = rchcnt_loop->product_test_negate != (type == spu_itype::BRZ) ? target : next_pc;
+#endif
 				}
 
 				break;
@@ -9171,7 +9678,11 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 
 			if (rchcnt_loop->active)
 			{
+#ifdef __APPLE__
+				if (ra == rchcnt_loop->ch_state)
+#else
 				if (ra.is_instruction && ra.origin == rchcnt_loop->ch_state.origin)
+#endif
 				{
 					if (op.si10 != 0 && op.si10 != 1)
 					{
@@ -9180,7 +9691,13 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 					}
 
 					rchcnt_loop->ch_product = vregs[op.rt];
+#ifdef __APPLE__
+
+					// CEQI count,0 is all ones on an empty channel, so a branch on it is taken the other way round
+					rchcnt_loop->product_test_negate = op.si10 == 0;
+#else
 					rchcnt_loop->product_test_negate = op.si10 == 1;
+#endif
 				}
 			}
 
@@ -9665,6 +10182,83 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 			, pattern.mem_count, pattern.put_pc, value.type == v_relative, value.off18, value.type == v_const, value.type == v_reg2, value.reg, value.runtime16_select, entry_point, func_hash, pattern_hash, +stats.nowrite, ++stats.single, +stats.all);
 	}
 
+#ifdef __APPLE__
+	// A blocking wait skips only empty iterations, so the empty path must do nothing a later iteration does not redo
+	const auto is_simple_channel_loop = [&](u32 read_pc, u32 branch_pc, u32 branch_target)
+	{
+		if (!(branch_target == read_pc && read_pc >= result.lower_bound && branch_pc > read_pc && branch_pc - read_pc <= 32))
+		{
+			return false;
+		}
+
+		if ((branch_pc - result.lower_bound) / 4 >= result.data.size())
+		{
+			return false;
+		}
+
+		const auto decode_at = [&](u32 pc)
+		{
+			return spu_opcode_t{std::bit_cast<be_t<u32>>(result.data[(pc - result.lower_bound) / 4])};
+		};
+
+		const spu_opcode_t read_op = decode_at(read_pc);
+
+		if (g_spu_itype.decode(read_op.opcode) != spu_itype::RCHCNT)
+		{
+			return false;
+		}
+
+		// 0: unrelated, 1: the count or a copy of it, 2: the CEQI comparison
+		std::array<u8, 128> holds{};
+		holds[read_op.rt] = 1;
+		bool seen_ceqi = false;
+
+		for (u32 pc = read_pc + 4; pc < branch_pc; pc += 4)
+		{
+			const spu_opcode_t mid = decode_at(pc);
+
+			switch (g_spu_itype.decode(mid.opcode))
+			{
+			case spu_itype::NOP:
+			case spu_itype::LNOP:
+			{
+				break;
+			}
+			case spu_itype::ORI:
+			{
+				if (mid.si10 != 0 || holds[mid.ra] != 1)
+				{
+					return false;
+				}
+
+				holds[mid.rt] = 1;
+				break;
+			}
+			case spu_itype::CEQI:
+			{
+				if (seen_ceqi || (mid.si10 != 0 && mid.si10 != 1) || holds[mid.ra] != 1)
+				{
+					return false;
+				}
+
+				seen_ceqi = true;
+				holds[mid.rt] = 2;
+				break;
+			}
+			default:
+			{
+				return false;
+			}
+			}
+		}
+
+		const spu_opcode_t branch_op = decode_at(branch_pc);
+		const auto branch_type = g_spu_itype.decode(branch_op.opcode);
+
+		return (branch_type == spu_itype::BRZ || branch_type == spu_itype::BRNZ) && holds[branch_op.rt] != 0 && spu_branch_target(branch_pc, branch_op.i16) == read_pc;
+	};
+
+#endif
 	for (const auto& [read_pc, pattern] : rchcnt_loop_all)
 	{
 		if (pattern.failed || pattern.read_pc == SPU_LS_SIZE)
@@ -9678,6 +10272,13 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 			continue;
 		}
 
+#ifdef __APPLE__
+		if (!is_simple_channel_loop(read_pc, pattern.branch_pc, pattern.branch_target))
+		{
+			continue;
+		}
+
+#endif
 		if (inst_attr attr = m_inst_attrs[(read_pc - entry_point) / 4]; attr == inst_attr::none)
 		{
 			add_pattern(inst_attr::rchcnt_loop, read_pc - result.entry_point, 0);
@@ -10033,7 +10634,11 @@ struct spu_llvm_worker
 			}
 
 			// Clear fake LS
+#ifdef __APPLE__
+			std::memset(ls.data() + start / 4, 0, 4 * size0);
+#else
 			std::memset(ls.data() + start / 4, 0, 4 * (size0 - 1));
+#endif
 		}
 
 		if (set_relax_flag)

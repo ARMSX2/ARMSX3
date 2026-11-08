@@ -10,6 +10,18 @@ include(CheckFunctionExists)
 
 set(CMAKE_CXX_STANDARD 23)
 
+# Off where there is no Qt desktop frontend.
+option(BUILD_DESKTOP_FRONTEND "Build Qt, rpcs3qt, rpcs3_lib and the rpcs3 executable" ON)
+if(ANDROID OR IOS)
+    set(BUILD_DESKTOP_FRONTEND OFF CACHE BOOL
+        "Build Qt, rpcs3qt, rpcs3_lib and the rpcs3 executable" FORCE)
+endif()
+
+# Tells sources built into rpcs3_emu whether Qt is available.
+if(BUILD_DESKTOP_FRONTEND)
+    add_compile_definitions(RPCS3_DESKTOP_FRONTEND)
+endif()
+
 if(UNIX AND NOT APPLE AND NOT ANDROID)
     add_compile_definitions(DATADIR="${CMAKE_INSTALL_FULL_DATADIR}/rpcs3")
     # Optionally enable X11 for window management
@@ -23,7 +35,7 @@ if(UNIX AND NOT APPLE AND NOT ANDROID)
     endif()
 endif()
 
-if (NOT ANDROID)
+if (BUILD_DESKTOP_FRONTEND)
     # Qt
     # finds Qt libraries and setups custom commands for MOC and UIC
     # Must be done here because generated MOC and UIC targets cant
@@ -34,13 +46,13 @@ endif()
 # subdirectories
 add_subdirectory(Emu)
 
-if (NOT ANDROID)
+if (BUILD_DESKTOP_FRONTEND)
     add_subdirectory(rpcs3qt)
 endif()
 
 gen_git_version(${CMAKE_CURRENT_SOURCE_DIR})
 
-if (NOT ANDROID)
+if (BUILD_DESKTOP_FRONTEND)
     # Build rpcs3_lib
     add_library(rpcs3_lib STATIC)
 

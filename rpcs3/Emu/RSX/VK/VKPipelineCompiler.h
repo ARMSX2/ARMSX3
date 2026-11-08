@@ -124,6 +124,11 @@ namespace vk
 
 		void operator()();
 
+#ifdef __APPLE__
+		// This worker's async jobs, queued or compiling; get_pipe_compiler() picks the fewest.
+		u32 pending_jobs() const { return m_pending_jobs.observe(); }
+
+#endif
 	private:
 		class compute_pipeline_props : public VkComputePipelineCreateInfo
 		{
@@ -216,6 +221,9 @@ namespace vk
 
 		const vk::render_device* m_device = nullptr;
 		lf_queue<pipe_compiler_job> m_work_queue;
+#ifdef __APPLE__
+		atomic_t<u32> m_pending_jobs{0};
+#endif
 		VkPipelineCache m_pipeline_cache = VK_NULL_HANDLE;
 
 		std::unique_ptr<glsl::program> int_compile_compute_pipe(

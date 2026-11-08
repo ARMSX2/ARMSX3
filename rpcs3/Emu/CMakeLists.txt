@@ -111,6 +111,14 @@ set_source_files_properties("../util/yaml.cpp" PROPERTIES
     SKIP_PRECOMPILE_HEADERS ON
 )
 
+# Frontend main-thread callbacks may throw through the wrapper System.cpp builds.
+if(APPLE)
+    set_source_files_properties("System.cpp" PROPERTIES
+        COMPILE_FLAGS "$<IF:$<CXX_COMPILER_ID:MSVC>,/EHsc,-fexceptions>"
+        SKIP_PRECOMPILE_HEADERS ON
+    )
+endif()
+
 # Crypto
 target_sources(rpcs3_emu PRIVATE
     ../Crypto/aes.cpp
@@ -152,10 +160,16 @@ target_sources(rpcs3_emu PRIVATE
     Audio/AudioDumper.cpp
     Audio/AudioBackend.cpp
     Audio/Cubeb/CubebBackend.cpp
-    Audio/Oboe/OboeBackend.cpp
-    Audio/Oboe/OboeCapture.cpp
     Audio/Cubeb/cubeb_enumerator.cpp
 )
+
+# Oboe headers exist only in Android builds.
+if(ANDROID)
+    target_sources(rpcs3_emu PRIVATE
+        Audio/Oboe/OboeBackend.cpp
+        Audio/Oboe/OboeCapture.cpp
+    )
+endif()
 
 if(USE_FAUDIO)
     find_package(SDL3)
@@ -408,13 +422,20 @@ target_sources(rpcs3_emu PRIVATE
     CPU/CPUTranslator.cpp
 )
 
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|arm64|aarch64")
+# CMAKE_SYSTEM_PROCESSOR is empty on an iOS cross-compile.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|arm64|aarch64" OR (IOS AND CMAKE_OSX_ARCHITECTURES MATCHES "arm64|ARM64|aarch64"))
     target_sources(rpcs3_emu PRIVATE
-        CPU/Backends/AArch64/AArch64ASM.cpp
         CPU/Backends/AArch64/AArch64Common.cpp
-        CPU/Backends/AArch64/AArch64JIT.cpp
         CPU/Backends/AArch64/AArch64Signal.cpp
     )
+
+    # These two use llvm types without an LLVM_AVAILABLE guard.
+    if(WITH_LLVM)
+        target_sources(rpcs3_emu PRIVATE
+            CPU/Backends/AArch64/AArch64ASM.cpp
+            CPU/Backends/AArch64/AArch64JIT.cpp
+        )
+    endif()
 endif()
 
 

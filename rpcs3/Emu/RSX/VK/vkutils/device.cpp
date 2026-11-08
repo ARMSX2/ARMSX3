@@ -4,6 +4,10 @@
 #include <string_view>
 #include "Utilities/File.h"
 #include "util/sysinfo.hpp"
+#ifdef __APPLE__
+#include "util/vm.hpp"
+#include "util/asm.hpp"
+#endif
 #include "instance.h"
 #include "util/logs.hpp"
 #include "Emu/system_config.h"
@@ -13,6 +17,13 @@
 #endif
 #ifdef __APPLE__
 #include <vulkan/vulkan_beta.h>
+#endif
+#ifdef __APPLE__
+// Included directly: an undefined TARGET_OS_IPHONE would silently read as 0 below.
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+#include <mach/mach.h>
+#endif
 #endif
 
 namespace vk
@@ -794,6 +805,25 @@ namespace vk
 		}();
 
 		return std::min(device_local, android_budget);
+#elif defined(__APPLE__) && TARGET_OS_IPHONE
+		// MoltenVK reports the one shared pool as device-local, so budget half the process's jetsam limit instead.
+		static const u64 ios_budget = []() -> u64
+		{
+			constexpr u64 mb = 0x100000;
+			constexpr u64 floor_bytes = 1024 * mb;
+			constexpr u64 ceiling_bytes = 2560 * mb;
+
+			task_vm_info_data_t info{};
+			mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+			if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&info), &count) != KERN_SUCCESS)
+			{
+				return floor_bytes;
+			}
+
+			return std::clamp<u64>((info.phys_footprint + info.limit_bytes_remaining) / 2, floor_bytes, ceiling_bytes);
+		}();
+
+		return std::min(device_local, ios_budget);
 #else
 		return device_local;
 #endif
@@ -1371,6 +1401,48 @@ namespace vk
 		// costs one cold run and is self-healing; letting it stop updating silently is
 		// the worse failure.
 		constexpr u64 k_pipeline_cache_size_limit = 128ull << 20;
+#ifdef __APPLE__
+		// The blobs get pages of their own, since libmalloc keeps a freed large block in phys_footprint.
+		struct page_buffer
+		{
+			u8* data = nullptr;
+			usz size = 0;
+
+			page_buffer() = default;
+			page_buffer(const page_buffer&) = delete;
+			page_buffer& operator=(const page_buffer&) = delete;
+
+			~page_buffer()
+			{
+				if (data)
+				{
+					utils::memory_release(data, size);
+				}
+			}
+
+			bool allocate(usz bytes)
+			{
+				size = utils::align(bytes, static_cast<usz>(utils::get_page_size()));
+				data = static_cast<u8*>(utils::memory_reserve(size));
+
+				if (!data)
+				{
+					size = 0;
+					return false;
+				}
+
+				if (!utils::try_memory_commit(data, size))
+				{
+					utils::memory_release(data, size);
+					data = nullptr;
+					size = 0;
+					return false;
+				}
+
+				return true;
+			}
+		};
+#endif
 	}
 
 	std::string render_device::get_pipeline_cache_path() const
@@ -1399,7 +1471,17 @@ namespace vk
 			return;
 		}
 
+#ifdef __APPLE__
+		// MoltenVK compiles every Metal library in the seed inside vkCreatePipelineCache, which held boot for minutes.
+		rsx_log.notice("vk: driver pipeline cache off on Apple.");
+		return;
+
+		page_buffer blob;
+		const u8* seed = nullptr;
+		usz seed_size = 0;
+#else
 		std::vector<u8> initial_data;
+#endif
 		const std::string path = get_pipeline_cache_path();
 
 		if (!path.empty())
@@ -1410,12 +1492,20 @@ namespace vk
 
 				if (file_size > sizeof(pipeline_cache_disk_header) && file_size <= k_pipeline_cache_size_limit)
 				{
+#ifdef __APPLE__
+					if (blob.allocate(file_size) && f.read(blob.data, file_size) == file_size)
+#else
 					std::vector<u8> blob(file_size);
 
 					if (f.read(blob.data(), file_size) == file_size)
+#endif
 					{
 						pipeline_cache_disk_header hdr{};
+#ifdef __APPLE__
+						std::memcpy(&hdr, blob.data, sizeof(hdr));
+#else
 						std::memcpy(&hdr, blob.data(), sizeof(hdr));
+#endif
 
 						const auto& props = pgpu->props;
 
@@ -1431,7 +1521,12 @@ namespace vk
 
 						if (header_ok)
 						{
+#ifdef __APPLE__
+							seed = blob.data + sizeof(pipeline_cache_disk_header);
+							seed_size = file_size - sizeof(pipeline_cache_disk_header);
+#else
 							initial_data.assign(blob.begin() + sizeof(pipeline_cache_disk_header), blob.end());
+#endif
 						}
 						else
 						{
@@ -1448,8 +1543,13 @@ namespace vk
 
 		VkPipelineCacheCreateInfo create_info{};
 		create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+#ifdef __APPLE__
+		create_info.initialDataSize = seed_size;
+		create_info.pInitialData = seed;
+#else
 		create_info.initialDataSize = initial_data.size();
 		create_info.pInitialData = initial_data.empty() ? nullptr : initial_data.data();
+#endif
 
 		VkPipelineCache cache = VK_NULL_HANDLE;
 		const VkResult res = vkCreatePipelineCache(dev, &create_info, nullptr, &cache);
@@ -1457,8 +1557,13 @@ namespace vk
 		if (res == VK_SUCCESS && cache != VK_NULL_HANDLE)
 		{
 			m_pipeline_cache = cache;
+#ifdef __APPLE__
+			m_pipeline_cache_saved_size = seed_size;
+			rsx_log.notice("vk: driver pipeline cache active (seeded with %zu bytes).", seed_size);
+#else
 			m_pipeline_cache_saved_size = initial_data.size();
 			rsx_log.notice("vk: driver pipeline cache active (seeded with %zu bytes).", initial_data.size());
+#endif
 		}
 		else
 		{
@@ -1467,13 +1572,31 @@ namespace vk
 		}
 	}
 
+#ifdef __APPLE__
+	void render_device::save_pipeline_cache(std::chrono::steady_clock::duration min_interval) const
+#else
 	void render_device::save_pipeline_cache() const
+#endif
 	{
 		if (m_pipeline_cache == VK_NULL_HANDLE)
 		{
 			return;
 		}
 
+#ifdef __APPLE__
+		// The RSX thread saves during play and teardown once more; the lock keeps two saves apart.
+		std::lock_guard lock(m_pipeline_cache_save_lock);
+
+		const auto now = std::chrono::steady_clock::now();
+
+		if (now - m_pipeline_cache_save_time < min_interval)
+		{
+			return;
+		}
+
+		m_pipeline_cache_save_time = now;
+
+#endif
 		const std::string path = get_pipeline_cache_path();
 
 		if (path.empty())
@@ -1499,24 +1622,70 @@ namespace vk
 
 		if (data_size > k_pipeline_cache_size_limit)
 		{
+#ifdef __APPLE__
+			// Keep the file on disk: deleting it made the next boot compile every pipeline cold again.
+			static bool s_reported = false;
+
+			if (!s_reported)
+			{
+				s_reported = true;
+				rsx_log.notice("vk: pipeline cache grew past %llu bytes; keeping the one on disk and not saving more.", k_pipeline_cache_size_limit);
+			}
+#else
 			rsx_log.notice("vk: pipeline cache grew past %llu bytes; dropping it rather than letting it grow unbounded.", k_pipeline_cache_size_limit);
 			fs::remove_file(path);
+#endif
 			return;
 		}
 
+#ifdef __APPLE__
+		// A routine save writes only after a quarter more growth, at least 4 MiB, or 30 minutes.
+		if (min_interval >= std::chrono::seconds(60))
+		{
+			static std::chrono::steady_clock::time_point s_routine_write{};
+
+			if (s_routine_write == std::chrono::steady_clock::time_point{})
+			{
+				s_routine_write = now;
+			}
+
+			const usz step = std::max<usz>(4ull << 20, m_pipeline_cache_saved_size / 4);
+
+			if (data_size < m_pipeline_cache_saved_size + step && now - s_routine_write < std::chrono::minutes(30))
+			{
+				return;
+			}
+
+			s_routine_write = now;
+		}
+
+		page_buffer blob;
+
+		if (!blob.allocate(data_size))
+		{
+			return;
+		}
+#else
 		std::vector<u8> blob(data_size);
+#endif
 
 		// The cache can grow between the two calls while compiler threads add pipelines. The driver
 		// then returns VK_INCOMPLETE with as many whole entries as fit, which is still valid initial
 		// data; the size check above makes the next save write the rest.
+#ifdef __APPLE__
+		if (const VkResult res = vkGetPipelineCacheData(dev, m_pipeline_cache, &data_size, blob.data);
+#else
 		if (const VkResult res = vkGetPipelineCacheData(dev, m_pipeline_cache, &data_size, blob.data());
+#endif
 			(res != VK_SUCCESS && res != VK_INCOMPLETE) || !data_size)
 		{
 			return;
 		}
 
+#ifndef __APPLE__
 		blob.resize(data_size);
 
+#endif
 		pipeline_cache_disk_header hdr{};
 		hdr.length = sizeof(pipeline_cache_disk_header);
 		hdr.version = k_pipeline_cache_disk_version;
@@ -1526,6 +1695,19 @@ namespace vk
 
 		fs::create_path(fs::get_cache_dir());
 
+#ifdef __APPLE__
+		// A kill mid-write keeps the old file, since the temp is renamed over it only when complete.
+		fs::pending_file out(path);
+
+		if (out.file &&
+			out.file.write(&hdr, sizeof(hdr)) == sizeof(hdr) &&
+			(data_size == 0 || out.file.write(blob.data, data_size) == data_size) &&
+			out.commit())
+		{
+			m_pipeline_cache_saved_size = data_size;
+			rsx_log.notice("vk: wrote %zu bytes of driver pipeline cache.", data_size);
+		}
+#else
 		// Write a temporary file and rename it over the old one, so a process killed in the
 		// middle of the write leaves the previous cache intact instead of a truncated one. Synced
 		// before the rename, as fs::pending_file does, so the rename cannot reach the disk ahead
@@ -1554,6 +1736,7 @@ namespace vk
 			rsx_log.warning("vk: could not write the driver pipeline cache to '%s' (%s).", path, fs::g_tls_error);
 			fs::remove_file(tmp_path);
 		}
+#endif
 	}
 
 	void render_device::save_and_destroy_pipeline_cache()
@@ -1889,6 +2072,20 @@ namespace vk
 		result.d24_unorm_s8 = test_format_features(VK_FORMAT_D24_UNORM_S8_UINT, required_zbuffer_features, VK_FALSE);
 		result.d32_sfloat_s8 = test_format_features(VK_FORMAT_D32_SFLOAT_S8_UINT, required_zbuffer_features, VK_FALSE);
 
+#ifdef __APPLE__
+		// Logs whether the driver filters depth formats linearly, as the driver reports it.
+		{
+			VkFormatProperties d16, d24s8, d32, d32s8;
+			vkGetPhysicalDeviceFormatProperties(dev, VK_FORMAT_D16_UNORM, &d16);
+			vkGetPhysicalDeviceFormatProperties(dev, VK_FORMAT_D24_UNORM_S8_UINT, &d24s8);
+			vkGetPhysicalDeviceFormatProperties(dev, VK_FORMAT_D32_SFLOAT, &d32);
+			vkGetPhysicalDeviceFormatProperties(dev, VK_FORMAT_D32_SFLOAT_S8_UINT, &d32s8);
+			const auto lin = [](const VkFormatProperties& p) { return (p.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) ? 1 : 0; };
+			rsx_log.notice("vk: depth format linear filtering: D16_UNORM=%d D24_UNORM_S8_UINT=%d D32_SFLOAT=%d D32_SFLOAT_S8_UINT=%d (optimalTilingFeatures 0x%x 0x%x 0x%x 0x%x)",
+				lin(d16), lin(d24s8), lin(d32), lin(d32s8), d16.optimalTilingFeatures, d24s8.optimalTilingFeatures, d32.optimalTilingFeatures, d32s8.optimalTilingFeatures);
+		}
+
+#endif
 		// Hide d24_s8 if force high precision z buffer is enabled
 		if (g_cfg.video.force_high_precision_z_buffer && result.d32_sfloat_s8)
 		{

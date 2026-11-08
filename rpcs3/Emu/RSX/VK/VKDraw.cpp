@@ -759,7 +759,14 @@ bool VKGSRender::bind_texture_env()
 			{
 				// Stencil mirror required
 				auto root_image = static_cast<vk::viewable_image*>(view->image());
+#ifdef __APPLE__
+				// A rebuilt feedback copy of a depth surface can be a colour image with no stencil; bind nothing, as for a disabled TIU
+				auto stencil_view = (root_image->aspect() & VK_IMAGE_ASPECT_STENCIL_BIT)
+					? root_image->get_view(rsx::default_remap_vector, VK_IMAGE_ASPECT_STENCIL_BIT)
+					: vk::null_image_view(*m_current_command_buffer, vk::get_view_type(m_ctx->program.fragment_program.get_texture_dimension(i)));
+#else
 				auto stencil_view = root_image->get_view(rsx::default_remap_vector, VK_IMAGE_ASPECT_STENCIL_BIT);
+#endif
 
 				if (!m_stencil_mirror_sampler)
 				{
@@ -1448,6 +1455,29 @@ bool VKGSRender::end_draw()
 	if (!load_program())
 	{
 		// Program is not ready, skip drawing this
+#ifdef __APPLE__
+		m_async_skipped_draws++;
+		if (m_ctx->program.fragment_program.ucode_length <= sync_compile_max_fp_ucode_bytes)
+		{
+			m_async_skipped_tiny++;
+		}
+
+		// dirty() stays true until the first write after creation or re-format.
+		bool first_write = false;
+		if (auto ds = std::get<1>(res()->surface_cache.m_bound_depth_stencil); ds && ds->dirty())
+		{
+			first_write = true;
+		}
+		for (auto& rtt : res()->surface_cache.m_bound_render_targets)
+		{
+			if (auto surface = std::get<1>(rtt); surface && surface->dirty())
+			{
+				first_write = true;
+			}
+		}
+		m_async_skipped_first_write += first_write;
+
+#endif
 		std::this_thread::yield();
 		// res()->surface_cache.on_write(); - breaks games for obvious reasons
 		return false;

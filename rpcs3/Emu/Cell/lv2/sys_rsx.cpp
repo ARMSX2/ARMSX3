@@ -884,7 +884,12 @@ error_code sys_rsx_context_attribute(u32 context_id, u32 package_id, u64 a3, u64
 	}
 
 	// Flip/queue/reset flip/flip event/user command/vblank as trace to help with log spam
+#ifdef __APPLE__
+	// Some games set display sync (0x101) every frame
+	const bool trace_log = (package_id == 0x101 || package_id == 0x102 || package_id == 0x103 || package_id == 0x10a || package_id == 0xFEC || package_id == 0xFED || package_id == 0xFEF);
+#else
 	const bool trace_log = (package_id == 0x102 || package_id == 0x103 || package_id == 0x10a || package_id == 0xFEC || package_id == 0xFED || package_id == 0xFEF);
+#endif
 	(trace_log ? sys_rsx.trace : sys_rsx.warning)("sys_rsx_context_attribute(context_id=0x%x, package_id=0x%x, a3=0x%llx, a4=0x%llx, a5=0x%llx, a6=0x%llx)", context_id, package_id, a3, a4, a5, a6);
 
 	// todo: these event ports probly 'shouldnt' be here as i think its supposed to be interrupts that are sent from rsx somewhere in lv1
@@ -1396,7 +1401,12 @@ error_code sys_rsx_attribute(cpu_thread& cpu, u32 packageId, u32 a2, u32 a3, u32
 {
 	cpu.state += cpu_flag::wait;
 
+#ifdef __APPLE__
+	// Games call this every frame
+	sys_rsx.trace("sys_rsx_attribute(packageId=0x%x, a2=0x%x, a3=0x%x, a4=0x%x, a5=0x%x)", packageId, a2, a3, a4, a5);
+#else
 	sys_rsx.warning("sys_rsx_attribute(packageId=0x%x, a2=0x%x, a3=0x%x, a4=0x%x, a5=0x%x)", packageId, a2, a3, a4, a5);
+#endif
 
 	return CELL_OK;
 }

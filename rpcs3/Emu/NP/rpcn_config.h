@@ -36,6 +36,10 @@ private:
 	void set_hosts(const std::vector<std::pair<std::string, std::string>>& vec_hosts);
 };
 
+#ifdef __APPLE__
+void rpcn_arm_memory_secrets();
+void rpcn_set_memory_secrets(std::string_view password, std::string_view token);
+#endif
 std::optional<std::pair<std::string, u16>> parse_rpcn_host(std::string_view host);
 
 extern cfg_rpcn g_cfg_rpcn;

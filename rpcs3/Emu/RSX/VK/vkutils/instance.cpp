@@ -1,4 +1,8 @@
 #include "stdafx.h"
+#ifdef __APPLE__
+// Included directly: an undefined TARGET_OS_IPHONE would silently read as 0 below.
+#include <TargetConditionals.h>
+#endif
 #include "instance.h"
 
 #include "Emu/system_config.h"
@@ -68,7 +72,12 @@ namespace vk
 
 	void instance::enable_debugging()
 	{
+#ifdef __APPLE__
+		// Registered with Debug output off too, since MoltenVK's messages now only reach this callback.
+		if (!vkGetInstanceProcAddr(m_instance, "vkCreateDebugReportCallbackEXT")) return;
+#else
 		if (!g_cfg.video.debug_output) return;
+#endif
 
 		PFN_vkDebugReportCallbackEXT callback = vk::dbgFunc;
 
@@ -150,6 +159,8 @@ namespace vk
 		// Declare MVK variables here to ensure the lifetime within the entire scope
 		const VkBool32 setting_true = VK_TRUE;
 		const int32_t setting_fast_math = g_cfg.video.disable_msl_fast_math.get() ? MVK_CONFIG_FAST_MATH_NEVER : MVK_CONFIG_FAST_MATH_ON_DEMAND;
+		// MoltenVK logs through stderr, and a blocked pipe there parks a Metal compile's completion handler.
+		const int32_t setting_log_level = MVK_CONFIG_LOG_LEVEL_NONE;
 
 		std::vector<VkLayerSettingEXT> mvk_settings;
 		VkLayerSettingsCreateInfoEXT mvk_layer_settings_create_info{};
@@ -167,7 +178,10 @@ namespace vk
 			}
 
 #ifdef __APPLE__
+			// iOS links MoltenVK statically with no loader, and MoltenVK rejects the portability extension.
+#if !TARGET_OS_IPHONE
 			extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+#endif
 			extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
 			if (support.is_supported(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME))
 			{
@@ -175,6 +189,7 @@ namespace vk
 
 				mvk_settings.push_back(VkLayerSettingEXT{ kMVKMoltenVKDriverLayerName, "MVK_CONFIG_RESUME_LOST_DEVICE", VK_LAYER_SETTING_TYPE_BOOL32_EXT, 1, &setting_true });
 				mvk_settings.push_back(VkLayerSettingEXT{ kMVKMoltenVKDriverLayerName, "MVK_CONFIG_FAST_MATH_ENABLED", VK_LAYER_SETTING_TYPE_INT32_EXT, 1, &setting_fast_math });
+				mvk_settings.push_back(VkLayerSettingEXT{ kMVKMoltenVKDriverLayerName, "MVK_CONFIG_LOG_LEVEL", VK_LAYER_SETTING_TYPE_INT32_EXT, 1, &setting_log_level });
 
 				mvk_layer_settings_create_info.sType = VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT;
 				mvk_layer_settings_create_info.pNext = next_info;
@@ -278,7 +293,9 @@ namespace vk
 		else
 		{
 			extensions_loaded = true;
+#if !TARGET_OS_IPHONE
 			extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+#endif
 			extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
 		}
 #endif
@@ -297,7 +314,9 @@ namespace vk
 #endif
 		instance_info.pNext = next_info;
 #ifdef __APPLE__
+#if !TARGET_OS_IPHONE
 		instance_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+#endif
 #endif
 
 		if (VkResult result = vkCreateInstance(&instance_info, nullptr, &m_instance); result != VK_SUCCESS)

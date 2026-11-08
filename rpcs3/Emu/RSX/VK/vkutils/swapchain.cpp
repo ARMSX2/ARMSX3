@@ -1,5 +1,9 @@
 #include "stdafx.h"
 #include "swapchain.h"
+#ifdef __APPLE__
+// Forward-declared rather than including Emu/RSX/RSXThread.h, as vkutils/shared.cpp does.
+namespace rsx { void request_device_lost_shutdown(const char* reason); }
+#endif
 #include "Emu/system_config.h"
 
 namespace vk
@@ -581,6 +585,45 @@ namespace vk
 		rsx_log.notice("Swapchain: requesting full screen exclusive mode %d.", static_cast<int>(full_screen_exclusive_info.fullScreenExclusive));
 #endif
 
+#ifdef __APPLE__
+		const VkResult create_result = _vkCreateSwapchainKHR(dev, &swap_info, nullptr, &m_vk_swapchain);
+
+		// MoltenVK can fail without writing the handle, so clear it before the old swapchain is destroyed.
+		if (create_result != VK_SUCCESS)
+		{
+			m_vk_swapchain = VK_NULL_HANDLE;
+		}
+
+		if (old_swapchain)
+		{
+			if (!swapchain_images.empty())
+			{
+				swapchain_images.clear();
+			}
+
+			// Retired by the create call whether it succeeded or not, and ours to destroy either way.
+			_vkDestroySwapchainKHR(dev, old_swapchain, nullptr);
+		}
+
+		if (create_result != VK_SUCCESS)
+		{
+			rsx_log.error("Swapchain: vkCreateSwapchainKHR failed with VkResult %d. The retired swapchain was destroyed and no new one exists.", static_cast<s32>(create_result));
+
+			// The caller rebuilds the surface from the next live window when this is set.
+			if (create_result == VK_ERROR_SURFACE_LOST_KHR)
+			{
+				m_surface_is_lost = true;
+			}
+
+			if (create_result == VK_ERROR_DEVICE_LOST)
+			{
+				rsx::request_device_lost_shutdown("creating a swapchain");
+			}
+
+			return false;
+		}
+
+#else
 		// Into a local, and checked. The result used to be ignored and the handle written straight
 		// into m_vk_swapchain, which a failed create leaves as it was: the OLD swapchain, destroyed
 		// a few lines down. On Android the window can go while this runs. Leaving the app with a game
@@ -619,6 +662,7 @@ namespace vk
 		}
 
 		m_vk_swapchain = new_swapchain;
+#endif
 		init_swapchain_images(dev);
 		return true;
 	}

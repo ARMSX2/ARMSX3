@@ -4263,3 +4263,29 @@ DECLARE(ppu_module_manager::cellGem)("libgem", []()
 	REG_FUNC(libgem, cellGemUpdateStart);
 	REG_FUNC(libgem, cellGemWriteExternalPort);
 });
+#ifdef __APPLE__
+
+// Same reader lock as cellGemGetRGB; nothing is written
+bool gem_get_sphere_rgb(u32 gem_num, f32& r, f32& g, f32& b)
+{
+	auto* gem = g_fxo->try_get<gem_config>();
+
+	if (!gem || !check_gem_num(gem_num))
+	{
+		return false;
+	}
+
+	reader_lock lock(gem->mtx);
+
+	if (!gem->state)
+	{
+		return false;
+	}
+
+	const gem_config_data::gem_color& color = gem->controllers[gem_num].sphere_rgb;
+	r = color.r;
+	g = color.g;
+	b = color.b;
+	return true;
+}
+#endif

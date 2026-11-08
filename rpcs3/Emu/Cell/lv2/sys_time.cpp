@@ -256,6 +256,16 @@ u64 get_guest_system_time(u64 time)
 	return result - systemtime_offset;
 }
 
+#ifdef __APPLE__
+// Moves both guest clocks back by a pause's length on resume, so watchdogs see no time pass
+void amend_guest_time_for_pause(u64 paused_us)
+{
+	const u64 scaled = paused_us * g_cfg.core.clocks_scale / 100;
+	g_timebase_offs += scaled * (g_timebase_freq / 1000000);
+	systemtime_offset += scaled;
+}
+
+#endif
 // Functions
 error_code sys_time_set_timezone(s32 timezone, s32 summertime)
 {

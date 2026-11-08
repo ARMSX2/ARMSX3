@@ -5,6 +5,10 @@
 #include "pipeline_binding_table.h"
 #include "memory.h"
 
+#ifdef __APPLE__
+#include <chrono>
+#include <mutex>
+#endif
 #include <util/atomic.hpp>
 
 #include <string>
@@ -201,10 +205,16 @@ namespace vk
 		// WHICH pipelines a title needs, this one makes each one cheap to create.
 		VkPipelineCache m_pipeline_cache = VK_NULL_HANDLE;
 		mutable usz m_pipeline_cache_saved_size = 0;
+#ifdef __APPLE__
+		mutable std::mutex m_pipeline_cache_save_lock;
+		mutable std::chrono::steady_clock::time_point m_pipeline_cache_save_time{};
+#endif
 
 		std::string get_pipeline_cache_path() const;
 		void load_pipeline_cache();
+#ifndef __APPLE__
 		void save_pipeline_cache() const;
+#endif
 		void save_and_destroy_pipeline_cache();
 
 		VkQueue m_graphics_queue = VK_NULL_HANDLE;
@@ -244,6 +254,10 @@ namespace vk
 		// the spec only requires external synchronisation on a cache created with
 		// VK_PIPELINE_CACHE_CREATE_EXTERNALLY_SYNCHRONIZED_BIT_EXT, which this is not.
 		VkPipelineCache get_pipeline_cache() const { return m_pipeline_cache; }
+#ifdef __APPLE__
+		// The RSX thread saves during play, at most once per min_interval; teardown saves with none.
+		void save_pipeline_cache(std::chrono::steady_clock::duration min_interval = {}) const;
+#endif
 
 		// Writes the driver pipeline cache to disk now if it grew since the last write. The
 		// cache is otherwise only written when the device is destroyed, which an Android

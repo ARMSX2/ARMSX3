@@ -1,4 +1,7 @@
 #include "stdafx.h"
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 #include "VKCommandStream.h"
 #include "VKGSRender.h"
 #include "VKFrameGen.h"
@@ -16,7 +19,7 @@
 #include "upscalers/sgsr_pass.h"
 #endif
 #include "upscalers/nearest_pass.hpp"
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
 #include "upscalers/librashader_pass.h"
 #endif
 #include "util/asm.hpp"
@@ -853,7 +856,12 @@ void VKGSRender::advance_queued_frames()
 	// VK_ERROR_OUT_OF_DEVICE_MEMORY, which on this GPU means system memory, shared with
 	// everything else on a handheld. Under pressure, fall back to the single frame this used
 	// to run with: slower, and slower is recoverable.
+#ifdef __APPLE__
+	// VMA pressure only: iOS headroom pressure already evicts caches every flip
+	const u32 depth_limit = (vk::vmm_determine_memory_load_severity(false) > rsx::problem_severity::low)
+#else
 	const u32 depth_limit = (vk::vmm_determine_memory_load_severity() > rsx::problem_severity::low)
+#endif
 		? 2u
 		: std::max(m_max_async_frames, 2u);
 
@@ -1489,6 +1497,17 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[8]++; flush_command_queue(true);
 	}
 
+#ifdef __APPLE__
+	if (m_async_skipped_draws)
+	{
+		rsx_log.notice("vk: %u of %u draws skipped waiting for an async pipeline (tiny fragment program %u, first write to a target %u)",
+			m_async_skipped_draws, info.stats.draw_calls, m_async_skipped_tiny, m_async_skipped_first_write);
+		m_async_skipped_draws = 0;
+		m_async_skipped_tiny = 0;
+		m_async_skipped_first_write = 0;
+	}
+
+#endif
 	// Frame dumps (VKFrameDump.cpp) start, wait and finish on flips.
 	frame_dump_on_flip(info);
 
@@ -2153,6 +2172,10 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 		auto& driver_manager = g_fxo->get<vk::driver_manager_thread>();
 		driver_manager.set_enabled(false);
 
+#ifdef __APPLE__
+		// Keep the disposed present source alive past this hard sync, as VKGSRender does before its async flush
+		vk::get_resource_manager()->push_down_current_scope();
+#endif
 		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[18]++; flush_command_queue(true);
 		const auto src = sshot_vkbuf.map(0, sshot_size);
 		std::vector<u8> sshot_frame(sshot_size);
@@ -2252,11 +2275,13 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 		{
 			m_upscaler = std::make_unique<vk::fsr_upscale_pass>();
 		}
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
 		else if (m_output_scaling == output_scaling_mode::shader)
 		{
 			m_upscaler = std::make_unique<vk::librashader_upscale_pass>();
 		}
+#endif
+#ifdef __ANDROID__
 		else if (m_output_scaling == output_scaling_mode::sgsr)
 		{
 			m_upscaler = std::make_unique<vk::sgsr_upscale_pass>(false);
@@ -2721,6 +2746,10 @@ void VKGSRender::post_present()
 			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[20]++; flush_command_queue(true);
 		}
 	}
+#ifdef __APPLE__
+	// Write the driver pipeline cache back during play, at most once a minute
+	m_device->save_pipeline_cache(std::chrono::seconds(60));
+#endif
 }
 
 namespace vk

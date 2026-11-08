@@ -3,7 +3,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #elif defined(__APPLE__)
-// nothing
+#include <TargetConditionals.h>
 #elif defined(HAVE_X11)
 // Cannot include Xlib.h before Qt
 // and we don't need all of Xlib anyway
@@ -18,7 +18,13 @@ using Window  = unsigned long;
 #ifdef _WIN32
 using display_handle_t = HWND;
 #elif defined(__APPLE__)
-using display_handle_t = void*; // NSView
+// iOS and macOS views differ, so the class the handle points at is named here
+#if TARGET_OS_IPHONE
+#define RSX_APPLE_VIEW_CLASS UIView
+#else
+#define RSX_APPLE_VIEW_CLASS NSView
+#endif
+using display_handle_t = void*; // RSX_APPLE_VIEW_CLASS*
 #else
 #include <variant>
 using display_handle_t = std::variant<

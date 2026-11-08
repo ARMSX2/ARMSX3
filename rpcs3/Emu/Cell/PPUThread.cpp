@@ -74,6 +74,8 @@
 
 #ifdef __APPLE__
 #include <libkern/OSCacheControl.h>
+#include <TargetConditionals.h>
+#include "ios_jit_dual_map.h"
 #endif
 
 extern atomic_t<u64> g_watchdog_hold_ctr;
@@ -3179,7 +3181,7 @@ void ppu_thread::cpu_wait(bs_t<cpu_flag> old)
 
 void ppu_thread::exec_task()
 {
-#ifdef __APPLE__
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && !defined(ARCH_ARM64)
 	// Ensure correct state before executing JIT code
 	pthread_jit_write_protect_np(true);
 #endif
@@ -4343,6 +4345,10 @@ static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, u64 reg_value)
 	{
 		if (ppu.use_full_rdata) [[unlikely]]
 		{
+#ifdef __APPLE__
+			// Fault before rsrv_unique_lock, as the fault can wait on RSX; fetch_op and cmp_rdata re-check after.
+			data += 0;
+#endif
 			auto [_oldd, _ok] = res.fetch_op([&](u64& r)
 			{
 				if ((r & -128) != rtime || (r & 127))
@@ -4366,7 +4372,9 @@ static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, u64 reg_value)
 			// Cache line data
 			//auto& cline_data = vm::_ref<spu_rdata_t>(addr);
 
+#ifndef __APPLE__
 			data += 0;
+#endif
 			auto range_lock = vm::alloc_range_lock();
 			bool success = false;
 			{
@@ -4598,7 +4606,7 @@ struct jit_core_allocator
 	// Initialize global semaphore with the max number of threads
 	::semaphore<0x7fff> sem{std::max<s16>(thread_count, 1)};
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__APPLE__)
 	// Held around a single module's compilation when memory is short, so that workers fall
 	// back to one at a time instead of all of them holding an LLVM context at once.
 	//
@@ -4675,6 +4683,51 @@ struct jit_core_allocator
 	}
 #endif
 
+#ifdef __APPLE__
+	// As many modules compile at once as fit in what jetsam allows, keeping 1 GiB spare.
+	static constexpr u64 compile_reserve = 1024ull << 20;
+	static constexpr u64 compile_size = 450ull << 20;
+
+	atomic_t<u32> logged_allowed{0};
+
+	u32 allowed_compiles(u64 avail) const
+	{
+		const u32 most = std::max<s16>(thread_count, 1);
+
+		if (!avail)
+		{
+			return most; // No reading (macOS): no brake
+		}
+
+		const u64 room = avail > compile_reserve ? avail - compile_reserve : 0;
+		return static_cast<u32>(std::clamp<u64>(room / compile_size, 1, most));
+	}
+
+	// Gives up (false) after ~10 minutes; with 60 s every waiting worker gave up and started at once.
+	bool take_compile_slot()
+	{
+		for (u32 i = 0; i < 6000 && !Emu.IsStopped(); i++)
+		{
+			const u64 avail = utils::get_avail_memory();
+			const u32 allowed = allowed_compiles(avail);
+
+			if (logged_allowed.exchange(allowed) != allowed)
+			{
+				ppu_log.notice("LLVM: %u MB available, compiling up to %u modules at once", avail >> 20, allowed);
+			}
+
+			if (compiling.fetch_op([&](u32& c) { return c < allowed ? (c++, true) : false; }).second)
+			{
+				return true;
+			}
+
+			std::this_thread::sleep_for(std::chrono::milliseconds(100));
+		}
+
+		return false;
+	}
+
+#endif
 	static s16 limit()
 	{
 		const s32 by_cores = std::min<s32>(0x7fff, utils::get_thread_count());
@@ -6288,6 +6341,11 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 
 		return static_cast<u32>(std::clamp<u64>(by_memory, 8, 100));
 	}();
+#elif defined(__APPLE__) && defined(ARCH_ARM64)
+	// Each jit_compiler's code lives in one pool-3 unit of MemoryManager1::c_max_size (JITLLVM.cpp).
+	// At 100 modules a large title overflowed the unit and allocate() aborted; at 50 the largest
+	// unit seen is about 38 MiB. Change this and c_max_size together.
+	constexpr u32 c_modules_per_jit = 50;
 #else
 	constexpr u32 c_modules_per_jit = 100;
 #endif
@@ -6509,7 +6567,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 #endif
 		}, runtime.get(), true);
 
-#ifdef __APPLE__
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && !defined(ARCH_ARM64)
 		// Restore write-protection state (modified by build_function_asm)
 		pthread_jit_write_protect_np(false);
 #endif
@@ -6795,6 +6853,11 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 				arm64_codegen_v10,
 				arm64_codegen_v11,
 				arm64_codegen_v12,
+#ifdef __APPLE__
+				arm64_codegen_v13,
+				arm64_codegen_v14,
+				arm64_llvm_early_cse,
+#endif
 
 				__bitset_enum_max
 			};
@@ -6815,7 +6878,16 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 			// Add a new value (arm64_codegen_v3, ...) and set that instead whenever ARM64 PPU
 			// codegen changes. Never re-toggle an old one -- that would collide with hashes already
 			// on disk from an earlier build.
+#ifdef __APPLE__
+			// The Large code model and dso_local symbols (JITLLVM.cpp) change every object.
+			settings += ppu_settings::arm64_codegen_v14;
+
+			// Its own bit, so objects built with and without EarlyCSE never share a file.
+			if (g_cfg.core.ppu_llvm_early_cse)
+				settings += ppu_settings::arm64_llvm_early_cse;
+#else
 			settings += ppu_settings::arm64_codegen_v12;
+#endif
 #endif
 			if (g_cfg.core.use_accurate_dfma)
 				settings += ppu_settings::accurate_dfma;
@@ -6886,6 +6958,10 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 				{
 					if (is_being_used_in_emulation)
 					{
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+						// A low-memory device lets the object go and the link reads it from disk again.
+						if (!utils::low_memory_device())
+#endif
 						entry.object = std::move(object);
 					}
 					else
@@ -7027,7 +7103,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 				// Set low priority
 				thread_ctrl::scoped_priority low_prio(-1);
 
-#ifdef __APPLE__
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && !defined(ARCH_ARM64)
 				pthread_jit_write_protect_np(false);
 #endif
 				// One attempt at a module, on a fresh JIT so a failed attempt cannot poison the next.
@@ -7091,7 +7167,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 					bool out_of_memory = false;
 
 					{
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__APPLE__)
 						// Compile alone while memory is short. Checked per module rather
 						// than once at startup, because that is exactly the reading that
 						// goes stale: workers are sized before the game has loaded.
@@ -7140,8 +7216,17 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 							}
 						};
 
+#ifdef __APPLE__
+						// iOS uses the graduated slots below instead of going alone below 2 GiB.
+						const bool alone = allocator.out_of_memory_seen;
+
+						if (alone)
+						{
+							ppu_log.notice("LLVM: Low memory (%u MB available), compiling %s alone", utils::get_avail_memory() >> 20, obj_name);
+#else
 						if (jit_core_allocator::memory_is_tight() || allocator.out_of_memory_seen)
 						{
+#endif
 							// ~60s normally. After running out of memory the holder may be
 							// compiling a module that takes minutes on its own, so ~10 minutes.
 							take_claim(allocator.out_of_memory_seen ? 6000 : 600);
@@ -7151,6 +7236,16 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 							// the wait watches memory it is not allowed to influence.
 							jit_core_allocator::wait_for_memory();
 						}
+#ifdef __APPLE__
+
+						const bool slot_taken = !alone && allocator.take_compile_slot();
+
+						// Below 1 GiB only one slot is allowed, so this waits with nothing else running.
+						if (!alone)
+						{
+							jit_core_allocator::wait_for_memory();
+						}
+#endif
 
 						// Counted from here, not while waiting above, so a worker queued for the
 						// claim is never mistaken for one holding compiler memory.
@@ -7158,17 +7253,32 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 						{
 							atomic_t<u32>& count;
 
+#ifdef __APPLE__
+							compiling_guard_t(atomic_t<u32>& c, bool counted_already)
+								: count(c)
+							{
+								if (!counted_already)
+								{
+									count++;
+								}
+							}
+#else
 							explicit compiling_guard_t(atomic_t<u32>& c)
 								: count(c)
 							{
 								count++;
 							}
+#endif
 
 							~compiling_guard_t()
 							{
 								count--;
 							}
+#ifdef __APPLE__
+						} counted(allocator.compiling, slot_taken);
+#else
 						} counted(allocator.compiling);
+#endif
 #endif
 
 						compiled_this_module = compile_module(part, obj_name, out_of_memory);
@@ -7218,7 +7328,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 						}
 #endif
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__APPLE__)
 						// Out of memory: one more attempt, alone.
 						//
 						// The module is rarely too big on its own; what failed was the sum of the
@@ -7523,7 +7633,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 	}
 
 	// Jit can be null if the loop doesn't ever enter.
-#ifdef __APPLE__
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && !defined(ARCH_ARM64)
 	pthread_jit_write_protect_np(false);
 #endif
 	// Try to patch all single and unregistered BLRs with the same function (TODO: Maybe generalize it into PIC code detection and patching)
@@ -7553,7 +7663,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 	{
 		usz index = umax;
 
-#ifdef __APPLE__
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && !defined(ARCH_ARM64)
 		named_thread sym_worker("PPU Symbol Resolver", [&]()
 		{
 			// jit_compiler::get() may write to executable memory (relocations)
@@ -7594,7 +7704,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 
 			ppu_log.notice("Executing %u symbol resolvers", jit_mod.symbol_resolvers.size());
 
-#ifdef __APPLE__
+#if defined(__APPLE__) && !TARGET_OS_IPHONE && !defined(ARCH_ARM64)
 			// Virtual memory mapped by MAP_JIT cannot be executed until pthread_jit_write_protect_np(true)
 			pthread_jit_write_protect_np(true);
 #endif
@@ -7618,7 +7728,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 				ppu_log.notice("Executed symbol resolver #%u", index);
 			}
 
-#ifndef __APPLE__
+#if !defined(__APPLE__) || TARGET_OS_IPHONE || defined(ARCH_ARM64)
 		}
 #else
 		});
@@ -7786,6 +7896,9 @@ static bool ppu_initialize2(jit_compiler& jit, const ppu_module<lv2_obj>& module
 #ifdef ARCH_X64 // TODO
 					// Run optimization passes
 					fpm.run(*func, fam);
+#elif defined(__APPLE__)
+					if (g_cfg.core.ppu_llvm_early_cse)
+						fpm.run(*func, fam);
 #endif // ARCH_X64
 				}
 				else
@@ -7804,6 +7917,9 @@ static bool ppu_initialize2(jit_compiler& jit, const ppu_module<lv2_obj>& module
 #ifdef ARCH_X64 // TODO
 				// Run optimization passes
 				fpm.run(*func, fam);
+#elif defined(__APPLE__)
+				if (g_cfg.core.ppu_llvm_early_cse)
+					fpm.run(*func, fam);
 #endif // ARCH_X64
 			}
 			else

@@ -25,6 +25,10 @@ using namespace std::literals::chrono_literals;
 #include <sys/stat.h>
 #endif
 
+#ifdef __APPLE__
+// Included directly: an undefined TARGET_OS_IPHONE in an #if is silently 0.
+#include <TargetConditionals.h>
+#endif
 #include <zlib.h>
 
 static std::string default_string()
@@ -556,6 +560,11 @@ logs::file_writer::file_writer(const std::string& name, u64 max_size)
 					break;
 				}
 
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+				// iOS kills the app without warning, so poll every 10 ms to keep the log's tail on disk; after the exit check so join returns.
+				std::this_thread::sleep_for(10ms);
+				continue;
+#endif
 				// ARMSX3: polling every 10 ms is a hundred wakeups a second for the life of the
 				// process, in the library and in the background with the screen off (#196). After a
 				// second with nothing to write, wait up to 250 ms instead. sync() and the destructor

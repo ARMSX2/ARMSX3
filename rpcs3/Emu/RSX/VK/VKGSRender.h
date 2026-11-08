@@ -157,6 +157,14 @@ private:
 	u64 m_last_heap_sync_time = 0;
 	u32 m_texbuffer_view_size = 0;
 
+#ifdef __APPLE__
+	// Draws skipped while an async pipeline was not ready, logged in flip(); 32 bytes is one instruction and its literal
+	u32 m_async_skipped_draws = 0;
+	u32 m_async_skipped_tiny = 0;
+	u32 m_async_skipped_first_write = 0;
+	static constexpr u32 sync_compile_max_fp_ucode_bytes = 32;
+
+#endif
 	vk::data_heap m_attrib_ring_info;                         // Vertex data
 	vk::data_heap m_fragment_constants_ring_info;             // Fragment program constants
 	vk::data_heap m_transform_constants_ring_info;            // Transform program constants

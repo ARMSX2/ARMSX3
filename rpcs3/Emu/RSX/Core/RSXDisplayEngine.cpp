@@ -341,7 +341,9 @@ namespace rsx
 			renderer->post_present();
 		}
 
-#ifndef __ANDROID__
+#if !defined(__ANDROID__) && !defined(__APPLE__)
+		// Not on Apple, which sets the adapter to "Default" as Android does, so this would ask for a new renderer every flip
+
 		// Check for display config change
 		if (m_pump->renderer_info() != renderer->configured_logical_id())
 		{

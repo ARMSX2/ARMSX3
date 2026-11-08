@@ -23,6 +23,9 @@ namespace rsx
 		// no timeout length would ever have helped.
 		static atomic_t<u32> g_stuck_sema_addr{0};
 		static atomic_t<u32> g_stuck_sema_count{0};
+#ifdef __APPLE__
+		static atomic_t<u32> g_stuck_sema_logged{0};
+#endif
 
 		void set_reference(context* ctx, u32 /*reg*/, u32 arg)
 		{
@@ -193,6 +196,11 @@ namespace rsx
 
 				RSX_PROF_SCOPE(idle_sema);
 
+#ifdef __APPLE__
+				// A WFE park counts as running, so sleep and let the loop top re-read the semaphore
+				std::this_thread::sleep_for(std::chrono::microseconds(50));
+				continue;
+#endif
 #if defined(ARCH_ARM64)
 				// The armed one-shot wait below does not park on every core: on Oryon
 				// (Snapdragon 8 Elite class) WFE returns immediately while the exclusive
@@ -282,6 +290,10 @@ namespace rsx
 			}
 
 			if (const u32 stuck = g_stuck_sema_addr; stuck && addr == stuck)
+#ifdef __APPLE__
+			// Once per timeout: the guest writes this label every frame, about 10 lines a second.
+			if (const u32 n = g_stuck_sema_count; g_stuck_sema_logged.exchange(n) != n)
+#endif
 			{
 				// The RSX is writing, from its own FIFO, the very label an acquire gave up waiting for.
 				// That makes the handshake self-referential: the command that would satisfy the wait

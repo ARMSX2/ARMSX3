@@ -631,6 +631,20 @@ fragment_program_utils::fragment_program_metadata fragment_program_utils::analys
 			return result;
 		}
 
+#ifdef __APPLE__
+		// A NOP with a literal operand owns the next slot as data, as the decoder treats it; it is not the program start.
+		if (is_any_src_constant(inst))
+		{
+			static atomic_t<bool> s_logged = false;
+			if (!s_logged.exchange(true))
+			{
+				rsx_log.notice("Fragment program: leading NOP carries a literal; skipping its data slot");
+			}
+
+			index++;
+		}
+
+#endif
 		index++;
 	}
 

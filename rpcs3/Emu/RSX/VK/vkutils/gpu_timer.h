@@ -47,7 +47,12 @@ namespace vk
 
 		// Deep enough that a slot is comfortably retired before it is reused, so collection
 		// never has to wait on the GPU to make progress.
+#ifdef __APPLE__
+		// Metal caps a counter sample buffer at 4096 timestamps; four slots ask for 3840.
+		static constexpr u32 ring_depth = 4;
+#else
 		static constexpr u32 ring_depth = 8;
+#endif
 
 		void init(const render_device& dev);
 		void destroy();
@@ -117,6 +122,9 @@ namespace vk
 		static constexpr u32 max_events = 96;
 
 		static constexpr u32 queries_per_slot = region_count * max_events * 2;
+#ifdef __APPLE__
+		static_assert(ring_depth * queries_per_slot <= 4096, "MTLCounterSampleBuffer holds at most 4096 timestamps");
+#endif
 
 		u32 index_of(u32 slot_id, region r, u32 event, bool end) const
 		{

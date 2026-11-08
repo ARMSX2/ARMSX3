@@ -209,7 +209,12 @@ void compressed_serialization_file_handler::initialize(utils::serial& ar)
 		}
 
 		m_zs = {};
+#ifdef __APPLE__
+		// Only the JIT object cache sets expect_little_data; level 6 takes about a ninth of level 9's CPU for files 0.3 % larger.
+		ensure(deflateInit2(&m_zs, ar.expect_little_data() ? 6 : 8, Z_DEFLATED, 16 + 15, 9, Z_DEFAULT_STRATEGY) == Z_OK);
+#else
 		ensure(deflateInit2(&m_zs, ar.expect_little_data() ? 9 : 8, Z_DEFLATED, 16 + 15, 9, Z_DEFAULT_STRATEGY) == Z_OK);
+#endif
 #ifndef _MSC_VER
 #pragma GCC diagnostic pop
 #endif
@@ -782,9 +787,18 @@ usz compressed_serialization_file_handler::get_size(const utils::serial& ar, usz
 struct compressed_zstd_stream_data
 {
 	ZSTD_DCtx* m_zd{};
+#ifndef __APPLE__
 	ZSTD_DStream* m_zs{};
+#endif
 	lf_queue<std::vector<u8>> m_queued_data_to_process;
 	lf_queue<std::vector<u8>> m_queued_data_to_write;
+#ifdef __APPLE__
+	// Readers are dropped without finalize (every load ends in a reset), so the context is freed here.
+	~compressed_zstd_stream_data()
+	{
+		ZSTD_freeDCtx(m_zd);
+	}
+#endif
 };
 
 void compressed_zstd_serialization_file_handler::initialize(utils::serial& ar)
@@ -837,7 +851,9 @@ void compressed_zstd_serialization_file_handler::initialize(utils::serial& ar)
 
 		auto& m_zd = m_stream->m_zd;
 		m_zd = ZSTD_createDCtx();
+#ifndef __APPLE__
 		m_stream->m_zs = ZSTD_createDStream();
+#endif
 		m_read_inited = true;
 		m_errored = false;
 	}
@@ -1030,8 +1046,10 @@ usz compressed_zstd_serialization_file_handler::read_at(utils::serial& ar, usz r
 
 		for (bool is_first = true; read_size < total_to_read && avail_in; is_first = false)
 		{
+#ifndef __APPLE__
 			bool need_more_file_memory = false;
 
+#endif
 			ZSTD_outBuffer outs{next_out, avail_out, 0};
 
 			// Try to extract previously held data first
@@ -1041,11 +1059,18 @@ usz compressed_zstd_serialization_file_handler::read_at(utils::serial& ar, usz r
 
 			if (ZSTD_isError(res))
 			{
+#ifdef __APPLE__
+				// Stop at the first error: going on would read the rest of the file into memory for nothing.
+				m_errored = true;
+				sys_log.error("Failure of compressed data reading. (error=%s, read_size=0x%x)", ZSTD_getErrorName(res), read_size);
+				return read_size;
+#else
 				need_more_file_memory = true;
 				// finalize(ar);
 				// m_errored = true;
 				// sys_log.error("Failure of compressed data reading. (res=%d, read_size=0x%x, avail_in=0x%x, avail_out=0x%x, ar=%s)", res, read_size, avail_in, avail_out, ar);
 				// return read_size;
+#endif
 			}
 
 			read_size += outs.pos;
@@ -1055,11 +1080,13 @@ usz compressed_zstd_serialization_file_handler::read_at(utils::serial& ar, usz r
 			avail_in -= ins.pos;
 
 			m_stream_data_index = next_in - m_stream_data.data();
+#ifndef __APPLE__
 
 			if (need_more_file_memory)
 			{
 				break;
 			}
+#endif
 		}
 
 		if (read_size >= total_to_read)
@@ -1124,7 +1151,13 @@ void compressed_zstd_serialization_file_handler::finalize(utils::serial& ar)
 	if (m_read_inited)
 	{
 		//ZSTD_decompressEnd(m_stream->m_zd);
+#ifdef __APPLE__
+		// The free returns 0 on success; m_zd is the struct's member, so the destructor then frees nothing.
+		ZSTD_freeDCtx(m_zd);
+		m_zd = nullptr;
+#else
 		ensure(ZSTD_freeDCtx(m_zd));
+#endif
 		m_read_inited = false;
 		return;
 	}
@@ -1238,7 +1271,12 @@ void compressed_zstd_serialization_file_handler::stream_data_prepare_thread_op()
 		}
 
 		stream_data.resize(::ZSTD_compressBound(data->size()));
+#ifdef __APPLE__
+		// Smaller match tables per context and a shorter capture pause; the frame format does not depend on the level.
+		const usz out_size = ZSTD_compressCCtx(m_zc, stream_data.data(), stream_data.size(), data->data(), data->size(), 3);
+#else
 		const usz out_size = ZSTD_compressCCtx(m_zc, stream_data.data(), stream_data.size(), data->data(), data->size(), ZSTD_btultra);
+#endif
 
 		ensure(!ZSTD_isError(out_size) && out_size);
 

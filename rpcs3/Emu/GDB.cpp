@@ -9,6 +9,9 @@
 #include "Emu/IdManager.h"
 #include "Emu/CPU/CPUThread.h"
 #include "Emu/Cell/PPUThread.h"
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 
 #ifdef _WIN32
 #include <WinSock2.h>
@@ -126,6 +129,9 @@ void gdb_thread::start_server()
 	// second for the whole session, paused and locked included (#196). It also left a port open
 	// that any app on the device could connect to.
 	GDB.notice("GDB Server is disabled on Android.");
+	return;
+#elif defined(__APPLE__) && TARGET_OS_IPHONE
+	GDB.notice("GDB Server is disabled on iOS.");
 	return;
 #endif
 

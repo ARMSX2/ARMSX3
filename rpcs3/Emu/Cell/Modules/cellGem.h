@@ -313,3 +313,8 @@ namespace
 		rw_paddle_r    = 0x02,
 	};
 }
+#ifdef __APPLE__
+
+// Move gem_num's sphere colour, 0 to 1 per channel; false while cellGem is not initialised or gem_num is out of range
+bool gem_get_sphere_rgb(u32 gem_num, f32& r, f32& g, f32& b);
+#endif

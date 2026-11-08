@@ -707,6 +707,71 @@ bool SCEDecrypter::LoadMetadata(const u8 erk[32], const u8 riv[16])
 	return true;
 }
 
+#ifdef __APPLE__
+// Appends one section, decrypted when encrypted; every field comes from the file, so indices and ranges are checked.
+static bool append_metadata_section(const fs::file& f, const MetadataSectionHeader& hdr, const MetadataHeader& meta_hdr, const std::vector<u8>& data_keys, std::vector<u8>& out)
+{
+	// An empty section appends nothing wherever it points, as a homebrew packer can leave one past the file's end.
+	if (hdr.data_size == 0)
+	{
+		return true;
+	}
+
+	const bool encrypted = hdr.encrypted == 3;
+	if (encrypted && (hdr.key_idx >= meta_hdr.key_count || hdr.iv_idx >= meta_hdr.key_count))
+	{
+		return false;
+	}
+
+	const u64 file_size = f.size();
+	if (hdr.data_offset > file_size || hdr.data_size > file_size - hdr.data_offset || hdr.data_size > u64{u32{umax}} - out.size())
+	{
+		return false;
+	}
+
+	const usz old_size = out.size();
+	out.resize(old_size + hdr.data_size);
+	u8* const data = out.data() + old_size;
+
+	f.seek(hdr.data_offset);
+	if (f.read(data, hdr.data_size) != hdr.data_size)
+	{
+		out.resize(old_size);
+		return false;
+	}
+
+	if (encrypted)
+	{
+		const std::array<u8, 0x10> data_key = read_from_ptr<std::array<u8, 0x10>>(data_keys, static_cast<usz>(hdr.key_idx) * 0x10);
+		std::array<u8, 0x10> data_iv = read_from_ptr<std::array<u8, 0x10>>(data_keys, static_cast<usz>(hdr.iv_idx) * 0x10);
+
+		// Zero out our ctr nonce, then perform AES-CTR on the data blocks.
+		u8 ctr_stream_block[0x10]{};
+		usz ctr_nc_off = 0;
+		aes_context aes;
+		aes_setkey_enc(&aes, data_key.data(), 128);
+		aes_crypt_ctr(&aes, hdr.data_size, &ctr_nc_off, data_iv.data(), ctr_stream_block, data, data);
+	}
+
+	return true;
+}
+
+bool SCEDecrypter::DecryptData()
+{
+	data_buf.clear();
+
+	for (const MetadataSectionHeader& hdr : meta_shdr)
+	{
+		if (!append_metadata_section(sce_f, hdr, meta_hdr, data_keys, data_buf))
+		{
+			data_buf.clear();
+			return false;
+		}
+	}
+
+	return true;
+}
+#else
 bool SCEDecrypter::DecryptData()
 {
 	aes_context aes;
@@ -777,6 +842,7 @@ bool SCEDecrypter::DecryptData()
 
 	return true;
 }
+#endif
 
 // Each section gets put into its own file.
 std::vector<fs::file> SCEDecrypter::MakeFile()
@@ -789,6 +855,13 @@ std::vector<fs::file> SCEDecrypter::MakeFile()
 	// Write data.
 	for (const MetadataSectionHeader& hdr : meta_shdr)
 	{
+#ifdef __APPLE__
+		// Stop at the first section data_buf does not hold, so a failed decrypt never reads past the buffer.
+		if (hdr.data_size > data_buf.size() - data_buf_offset)
+		{
+			break;
+		}
+#endif
 		const u8* src = data_buf.data() + data_buf_offset;
 		fs::file out_f = fs::make_stream<std::vector<u8>>();
 
@@ -1268,6 +1341,24 @@ bool SELFDecrypter::LoadMetadata(const u8* klic_key)
 	return true;
 }
 
+#ifdef __APPLE__
+bool SELFDecrypter::DecryptData()
+{
+	// Exactly the type-2 sections WriteElf consumes, in order, encrypted or plaintext.
+	data_buf.clear();
+
+	for (const MetadataSectionHeader& hdr : meta_shdr)
+	{
+		if (hdr.type == 2 && !append_metadata_section(self_f, hdr, meta_hdr, data_keys, data_buf))
+		{
+			data_buf.clear();
+			return false;
+		}
+	}
+
+	return true;
+}
+#else
 bool SELFDecrypter::DecryptData()
 {
 	// Debug/Fake SELF: data is not encrypted, read directly.
@@ -1354,6 +1445,7 @@ bool SELFDecrypter::DecryptData()
 
 	return true;
 }
+#endif
 
 fs::file SELFDecrypter::MakeElf(bool isElf32)
 {

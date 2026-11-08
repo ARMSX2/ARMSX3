@@ -1,5 +1,8 @@
 #pragma once
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 #include "system_config_types.h"
 #include "Utilities/Config.h"
 
@@ -22,6 +25,10 @@ struct cfg_root : cfg::node
 		cfg::string llvm_cpu{ this, "Use LLVM CPU" };
 		cfg::_int<0, 1024> llvm_threads{ this, "Max LLVM Compile Threads", 0 };
 		cfg::_bool llvm_precompilation{ this, "LLVM Precompilation", true };
+#ifdef __APPLE__
+		// Part of the PPU object name, so not dynamic.
+		cfg::_bool ppu_llvm_early_cse{ this, "PPU LLVM EarlyCSE", false };
+#endif
 		cfg::_enum<thread_scheduler_mode> thread_scheduler{this, "Thread Scheduler Mode", thread_scheduler_mode::os};
 		cfg::_bool set_daz_and_ftz{ this, "Set DAZ and FTZ", false };
 		cfg::_enum<spu_decoder_type> spu_decoder{ this, "SPU Decoder", spu_decoder_type::llvm };
@@ -34,6 +41,9 @@ struct cfg_root : cfg::node
 		cfg::_int<0, 6> preferred_spu_threads{ this, "Preferred SPU Threads", 0, true }; // Number of hardware threads dedicated to heavy simultaneous spu tasks
 		cfg::_int<0, 16> spu_delay_penalty{ this, "SPU delay penalty", 3 }; // Number of milliseconds to block a thread if a virtual 'core' isn't free
 		cfg::_bool spu_loop_detection{ this, "SPU loop detection", false }; // Try to detect wait loops and trigger thread yield
+#ifdef __APPLE__
+		cfg::string spu_poll_park_sites{ this, "SPU Poll Park Sites" };
+#endif
 		cfg::_int<1, 6> max_spurs_threads{ this, "Max SPURS Threads", 6, true }; // HACK. If less then 6, max number of running SPURS threads in each thread group.
 		cfg::_enum<spu_block_size_type> spu_block_size{ this, "SPU Block Size", spu_block_size_type::safe };
 		cfg::_bool spu_accurate_dma{ this, "Accurate SPU DMA", false };
@@ -208,7 +218,7 @@ struct cfg_root : cfg::node
 		cfg::_bool disable_msl_fast_math{ this, "Disable MSL Fast Math", false };
 		cfg::_bool disable_async_host_memory_manager{ this, "Disable Asynchronous Memory Manager", false, true };
 		cfg::_enum<output_scaling_mode> output_scaling{ this, "Output Scaling Mode", output_scaling_mode::bilinear, true };
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__APPLE__)
 		// ARMSX3: Lossless Scaling frame generation.
 		//
 		// Default off and it stays off unless the user supplies shaders from their own copy of
@@ -240,7 +250,7 @@ struct cfg_root : cfg::node
 		// purchased copy. Kept here so the shader cache can be rebuilt without asking again.
 		cfg::string frame_generation_dll_path{ this, "Frame Generation Lossless Path", "", true };
 #endif
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
 		// ARMSX3: absolute path to a RetroArch .slangp preset, used when
 		// Output Scaling Mode is "Shader chain (librashader)". Empty = no chain,
 		// which falls back to a plain blit rather than failing to present.

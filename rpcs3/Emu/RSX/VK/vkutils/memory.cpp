@@ -4,6 +4,10 @@
 
 #include "Emu/RSX/Utils/algorithm.hpp"
 #include "Emu/system_config.h"
+#ifdef __APPLE__
+#include <atomic>
+#include "ios_jit_dual_map.h"
+#endif
 
 namespace vk
 {
@@ -166,6 +170,39 @@ namespace vk
 		: m_device(dev), m_allocation_flags(0)
 	{}
 
+#ifdef __APPLE__
+	// Device-local VMA block bytes for the perf line, kept in an atomic the bridge can read during teardown.
+	static std::atomic<u64> s_device_local_block_bytes{0};
+
+	static bool is_device_local_type(VmaAllocator allocator, u32 memory_type)
+	{
+		const VkPhysicalDeviceMemoryProperties* props = nullptr;
+		vmaGetMemoryProperties(allocator, &props);
+		return props && (props->memoryHeaps[props->memoryTypes[memory_type].heapIndex].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT);
+	}
+
+	static void VKAPI_PTR on_vma_block_allocated(VmaAllocator allocator, u32 memory_type, VkDeviceMemory, VkDeviceSize size, void*)
+	{
+		if (is_device_local_type(allocator, memory_type))
+		{
+			s_device_local_block_bytes.fetch_add(size, std::memory_order_relaxed);
+		}
+	}
+
+	static void VKAPI_PTR on_vma_block_freed(VmaAllocator allocator, u32 memory_type, VkDeviceMemory, VkDeviceSize size, void*)
+	{
+		if (is_device_local_type(allocator, memory_type))
+		{
+			s_device_local_block_bytes.fetch_sub(size, std::memory_order_relaxed);
+		}
+	}
+
+	u64 vmm_get_device_local_block_bytes()
+	{
+		return s_device_local_block_bytes.load(std::memory_order_relaxed);
+	}
+
+#endif
 	mem_allocator_vma::mem_allocator_vma(const vk::render_device& dev, VkPhysicalDevice pdev, VkInstance inst)
 		: mem_allocator_base(dev, pdev)
 	{
@@ -177,6 +214,25 @@ namespace vk
 		allocatorInfo.device = dev;
 		allocatorInfo.instance = inst;
 		allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_2;
+#ifdef __APPLE__
+		// VMA copies these at vmaCreateAllocator, so a local is enough.
+		const VmaDeviceMemoryCallbacks block_callbacks{on_vma_block_allocated, on_vma_block_freed, nullptr};
+		allocatorInfo.pDeviceMemoryCallbacks = &block_callbacks;
+
+#ifdef ARCH_ARM64
+		// VMA's default 256 MiB blocks held 736 MiB of Metal memory for 493 MiB in use on a 4 GB iPhone.
+		if (utils::low_memory_device())
+		{
+			allocatorInfo.preferredLargeHeapBlockSize = 32 * 0x100000;
+			rsx_log.notice("VMA: low-memory device, %u MiB blocks", 32);
+		}
+		else
+		{
+			allocatorInfo.preferredLargeHeapBlockSize = 64 * 0x100000;
+			rsx_log.notice("VMA: not a low-memory device, %u MiB blocks", 64);
+		}
+#endif
+#endif
 
 		std::vector<VkDeviceSize> heap_limits;
 		const auto vram_allocation_limit = g_cfg.video.vk.vram_allocation_limit * 0x100000ull;
