@@ -1573,6 +1573,7 @@ struct MenuTabView: View {
     @State private var menuLargeTitleMorphResetTask: Task<Void, Never>?
     @State private var controllerTabEntryTask: Task<Void, Never>?
     @State private var gameRenamePresented = false
+    @State private var libraryMenuOpen = false
     @State private var controllerTabFocusState: MenuControllerTabFocusState
     @State private var menuViewportSize = CGSize.zero
     @AppStorage("ARMSX2iOSPortraitBottomNavigationTabBarHeight")
@@ -1664,6 +1665,11 @@ struct MenuTabView: View {
             bottomClearance: CGFloat(min(max(clearance, -32), 32)),
             showsLabels: storedShowsLabels != 0
         )
+    }
+
+    // The library's flag counts only on its own page, so a page change never leaves the bar hidden.
+    private var tabBarHidden: Bool {
+        gameRenamePresented || (libraryMenuOpen && selectedTab == 0)
     }
 
     private var tabContentBottomMargin: CGFloat {
@@ -1824,6 +1830,7 @@ struct MenuTabView: View {
                                 \.menuLargeTitleIsSource,
                                 titleMorphSelection == 0
                             )
+                            .onPreferenceChange(LibraryMenuOpenKey.self) { libraryMenuOpen = $0 }
                     } else if selectedTab == 1 {
                         // A tab has nothing to dismiss to, so InstallView hides its Done.
                         InstallView(showsDone: false,
@@ -1898,9 +1905,9 @@ struct MenuTabView: View {
                     .ignoresSafeArea(.container, edges: .horizontal)
                     // Half open like a book, the bar sits on the left leaf, off the fold.
                     .inLeftLeafInBookPose()
-                    .opacity(gameRenamePresented ? 0 : 1)
-                    .allowsHitTesting(!gameRenamePresented)
-                    .accessibilityHidden(gameRenamePresented)
+                    .opacity(tabBarHidden ? 0 : 1)
+                    .allowsHitTesting(!tabBarHidden)
+                    .accessibilityHidden(tabBarHidden)
                     // Retain the UIKit tab bar while OrbitKeys is presented so
                     // its title attributes and item identities survive dismissal.
                     .transaction { transaction in
