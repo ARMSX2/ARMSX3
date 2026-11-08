@@ -11,7 +11,7 @@
 #include "System.h"
 
 #include <set>
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 #include <chrono>
 #include <zstd.h>
 #endif
@@ -179,7 +179,7 @@ std::vector<version_entry> get_savestate_versioning_data(fs::file&& file, std::s
 	return ver_data;
 }
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 // Walks the zstd frame and block headers without decompressing, so a truncated state is refused before load.
 static bool zstd_stream_is_intact(const fs::file& file)
 {
@@ -280,7 +280,7 @@ std::shared_ptr<utils::serial> make_savestate_reader(const std::string& path)
 	}
 	else if (path.ends_with(".zst"))
 	{
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 		if (!zstd_stream_is_intact(save))
 		{
 			sys_log.error("Savestate '%s': the zstd stream is damaged or truncated, refusing to load it.", path);
@@ -852,7 +852,7 @@ bool hle_locks_t::try_finalize(std::function<bool()> test)
 	{
 		// Failed
 		ensure(lock_val.compare_and_swap_test(waiting_for_evaluation, 0));
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 		// try_lock callers parked on waiting_for_evaluation wait with no timeout
 		lock_val.notify_all();
 #endif

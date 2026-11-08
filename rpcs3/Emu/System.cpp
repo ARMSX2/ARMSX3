@@ -1718,7 +1718,7 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 		{
 			m_ar = make_savestate_reader(m_path);
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 			// A refused state ends the load here; otherwise Load goes on to boot the state file as a game.
 			if (!m_ar && m_path.ends_with(".zst"))
 			{

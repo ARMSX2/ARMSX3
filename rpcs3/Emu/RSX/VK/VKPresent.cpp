@@ -2175,7 +2175,7 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 		auto& driver_manager = g_fxo->get<vk::driver_manager_thread>();
 		driver_manager.set_enabled(false);
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 		// Keep the disposed present source alive past this hard sync, as VKGSRender does before its async flush
 		vk::get_resource_manager()->push_down_current_scope();
 #endif

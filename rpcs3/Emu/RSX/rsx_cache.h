@@ -10,7 +10,7 @@
 #include "Emu/Memory/vm.h"
 #include "Emu/RSX/Program/RSXVertexProgram.h"
 #include "Emu/RSX/Program/RSXFragmentProgram.h"
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 #include "Emu/RSX/Program/ProgramStateCache.h"
 #endif
 #include "Overlays/Shaders/shader_loading_dialog.h"
@@ -77,7 +77,7 @@ namespace rsx
 
 		backend_storage& m_storage;
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 		// A killed process must leave the old file or the new one, never a cut one
 		static bool write_cache_file(const std::string& path, const void* data, usz size)
 		{
@@ -368,7 +368,7 @@ namespace rsx
 			std::string vp_name = root_path + "/raw/" + fmt::format("%llX.vp", data.vertex_program_hash);
 
 			// Writeback to cache either if file does not exist or it is invalid (unexpected size)
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 			if (fs::stat_t s{}; !fs::get_stat(fp_name, s) || s.size != fp.ucode_length)
 			{
 				if (!write_cache_file(fp_name, fp.get_data(), fp.ucode_length))
@@ -420,7 +420,7 @@ namespace rsx
 
 			const std::string pipeline_file_name = fmt::format("%llX+%llX+%llX+%llX.bin", data.vertex_program_hash, data.fragment_program_hash, data.pipeline_storage_hash, state_hash);
 			const std::string pipeline_path = root_path + "/pipelines/" + pipeline_class_name + "/" + version_prefix + "/" + pipeline_file_name;
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 			if (!write_cache_file(pipeline_path, &data, sizeof(data)))
 			{
 				rsx_log.error("shaders_cache: failed to write %s (%s)", pipeline_path, fs::g_tls_error);
@@ -454,7 +454,7 @@ namespace rsx
 			}
 
 			auto buf = std::make_unique<u8[]>(size);
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 			if (f.read(buf.get(), size) != size || !holds_complete_fragment_program(buf.get(), size))
 			{
 				rsx_log.error("Removing cached fragment program %llX.fp since it does not hold a complete program (%u bytes)", program_hash, size);

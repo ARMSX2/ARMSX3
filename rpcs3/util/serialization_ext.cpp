@@ -787,12 +787,12 @@ usz compressed_serialization_file_handler::get_size(const utils::serial& ar, usz
 struct compressed_zstd_stream_data
 {
 	ZSTD_DCtx* m_zd{};
-#ifndef __APPLE__
+#if !defined(__APPLE__) && !defined(__ANDROID__)
 	ZSTD_DStream* m_zs{};
 #endif
 	lf_queue<std::vector<u8>> m_queued_data_to_process;
 	lf_queue<std::vector<u8>> m_queued_data_to_write;
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 	// Readers are dropped without finalize (every load ends in a reset), so the context is freed here.
 	~compressed_zstd_stream_data()
 	{
@@ -851,7 +851,7 @@ void compressed_zstd_serialization_file_handler::initialize(utils::serial& ar)
 
 		auto& m_zd = m_stream->m_zd;
 		m_zd = ZSTD_createDCtx();
-#ifndef __APPLE__
+#if !defined(__APPLE__) && !defined(__ANDROID__)
 		m_stream->m_zs = ZSTD_createDStream();
 #endif
 		m_read_inited = true;
@@ -1151,7 +1151,7 @@ void compressed_zstd_serialization_file_handler::finalize(utils::serial& ar)
 	if (m_read_inited)
 	{
 		//ZSTD_decompressEnd(m_stream->m_zd);
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 		// The free returns 0 on success; m_zd is the struct's member, so the destructor then frees nothing.
 		ZSTD_freeDCtx(m_zd);
 		m_zd = nullptr;
