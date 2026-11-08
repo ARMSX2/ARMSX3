@@ -433,7 +433,9 @@ class ARMSX3 {
 
 
     companion object {
-        var initialized = false
+        // Set by Rpcs3Bridge.initialize once the core has its folders; read from other threads
+        // (the avatar loaders wait on it), hence volatile.
+        @Volatile var initialized = false
         val instance = ARMSX3()
         var rootDirectory = ""
         var nativeLibDirectory = ""

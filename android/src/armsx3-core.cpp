@@ -4212,6 +4212,15 @@ extern "C" const char *_armsx3_rpcnDeleteTrophies() {
 // home/<user>/rpcs3_avatar, which sceNp reads whenever a game asks for the player's picture. These
 // hand the picker what RPCS3's avatar_selection_dialog takes from it.
 
+// Whether the core has its folders yet. Every avatar lookup goes through the VFS config, which
+// refuses an empty config dir and ends the app, and the XMB's welcome notice and RPCN column ask
+// at launch, which can be before _armsx3_initialize (11-08, the first launch after an install
+// closed the app). Until then the calls below answer "nothing yet"; the UI waits for the core
+// before asking, so this only guards a caller that does not.
+static bool avatar_folders_ready() {
+  return !fs::get_config_dir().empty();
+}
+
 // {"userDir", "selected", "default", "builtin": [path], "avatars": [{"path", "usable"}]}.
 //
 // Builtin is the firmware's own user icons, the ones a PS3 offers when a user picks a picture; the
@@ -4220,6 +4229,10 @@ extern "C" const char *_armsx3_rpcnDeleteTrophies() {
 // be decrypted, so the picker leaves it out and counts it.
 extern "C" const char *_armsx3_avatarList() {
   static thread_local std::string result;
+
+  if (!avatar_folders_ready()) {
+    return "";
+  }
 
   const std::string user = Emu.GetUsr();
   const std::string icon_dir = g_cfg_vfs.get_dev_flash() + "vsh/resource/explore/user/";
@@ -4261,6 +4274,10 @@ extern "C" const char *_armsx3_avatarList() {
 extern "C" const char *_armsx3_avatarCurrent() {
   static thread_local std::string result;
 
+  if (!avatar_folders_ready()) {
+    return "";
+  }
+
   const std::string user = Emu.GetUsr();
   result = np::avatar::get_selected_avatar(user);
 
@@ -4275,6 +4292,13 @@ extern "C" const char *_armsx3_avatarCurrent() {
 extern "C" bool _armsx3_avatarImage(std::string_view path, const u8 **data, usz *size) {
   static thread_local std::vector<u8> image;
 
+  if (!avatar_folders_ready()) {
+    image.clear();
+    *data = image.data();
+    *size = 0;
+    return false;
+  }
+
   image = np::avatar::load_file(std::string(path));
   *data = image.data();
   *size = image.size();
@@ -4284,6 +4308,10 @@ extern "C" bool _armsx3_avatarImage(std::string_view path, const u8 **data, usz 
 // Choose an avatar by path, or the default with an empty one. Read first, as the dialog does, so a
 // file that cannot be loaded never becomes the selection.
 extern "C" bool _armsx3_avatarSelect(std::string_view path) {
+  if (!avatar_folders_ready()) {
+    return false;
+  }
+
   const std::string s_path{path};
 
   if (!s_path.empty() && np::avatar::load_file(s_path).empty()) {
@@ -4300,7 +4328,7 @@ extern "C" bool _armsx3_avatarSelect(std::string_view path) {
 extern "C" bool _armsx3_avatarUseImage(const u8 *data, usz size) {
   static constexpr u8 png_signature[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
 
-  if (!data || size < sizeof(png_signature) || size > 16 * 1024 * 1024 ||
+  if (!avatar_folders_ready() || !data || size < sizeof(png_signature) || size > 16 * 1024 * 1024 ||
       std::memcmp(data, png_signature, sizeof(png_signature)) != 0) {
     return false;
   }

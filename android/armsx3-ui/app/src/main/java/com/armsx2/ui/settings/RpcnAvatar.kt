@@ -85,6 +85,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -391,6 +392,7 @@ private fun AvatarPicture(path: String?, modifier: Modifier, pixels: Int) {
 internal fun rememberDefaultAvatar(): ImageBitmap? {
     val image by produceState(DefaultAvatar.image) {
         if (value == null) {
+            awaitCore()
             val path = withContext(Dispatchers.IO) { readAvatarList()?.default }.orEmpty()
             if (path.isNotBlank()) value = AvatarImages.load(path, AvatarPixels)?.also { DefaultAvatar.image = it }
         }
@@ -402,12 +404,22 @@ private object DefaultAvatar {
     var image: ImageBitmap? = null
 }
 
+/** The avatar calls read the core's folders, which exist once ARMSX3.initialize has run. The XMB's
+ *  welcome notice and RPCN column ask at launch, which can be before that (11-08: the first launch
+ *  after an install closed the app), so the loaders wait for it, a few seconds at most. */
+private suspend fun awaitCore() {
+    while (!ARMSX3.initialized) delay(100)
+}
+
 /** The picture games are given for the player now: the chosen avatar, or the firmware's default.
  *  Read again whenever the picker closes. For the Friends headers ([com.armsx2.ui.friends.RpcnSelfChip]). */
 @Composable
 internal fun RpcnAvatarImage(modifier: Modifier) {
     val path by produceState<String?>(null, RpcnAvatarPicker.open.value) {
-        if (!RpcnAvatarPicker.open.value) value = withContext(Dispatchers.IO) { Rpcs3Bridge.avatarCurrent().ifBlank { null } }
+        if (!RpcnAvatarPicker.open.value) {
+            awaitCore()
+            value = withContext(Dispatchers.IO) { Rpcs3Bridge.avatarCurrent().ifBlank { null } }
+        }
     }
     AvatarPicture(path, modifier, AvatarPixels)
 }
@@ -418,6 +430,7 @@ internal fun rememberCurrentAvatar(): ImageBitmap? {
     val fallback = rememberDefaultAvatar()
     val image by produceState<ImageBitmap?>(null, RpcnAvatarPicker.open.value, RpcnAvatarPicker.changed.intValue) {
         if (!RpcnAvatarPicker.open.value) {
+            awaitCore()
             val path = withContext(Dispatchers.IO) { Rpcs3Bridge.avatarCurrent().ifBlank { null } }
             value = path?.let { withContext(Dispatchers.IO) { AvatarImages.load(it, AvatarPixels) } }
         }
