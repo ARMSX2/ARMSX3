@@ -2563,7 +2563,7 @@ bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t
 
 	if (vm::check_addr(addr, required_page_perms))
 	{
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__ANDROID__)
 		// The RSX locked this host page; while stopping its handler may be gone, so unlock it here.
 		if (Emu.IsStopped())
 		{
