@@ -2566,7 +2566,7 @@ namespace rsx
 
 			auto fast_fbo_check = [&]() -> sampled_image_descriptor
 			{
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 				// One draw can write overlapping color and depth surfaces with the same tag, so prefer the requested aspect
 				const auto* chosen = &overlapping_fbos.back();
 				if (const bool want_depth = helpers::is_gcm_depth_format(attr.gcm_format);
