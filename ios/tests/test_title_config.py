@@ -65,7 +65,7 @@ KILLZONE = "BCUS98234"
 
 IOS_ONLY_ROW = "Video:\\n  Emulate Extended Depth Range: true\\n"
 
-IOS_ONLY_REQUIRED = ("BLUS31011", "BLES01717", "NPUB30558", "BLUS30837", "BLES01613",
+IOS_ONLY_REQUIRED = ("BLUS30591", "BLES01031", "NPUB30558", "BLUS30837", "BLES01613",
                      "BLUS30405", "BLES00713", "BLES00714", "BLES00158", "BLUS30089")
 
 IOS_ONLY_NO_INTERPRETER = "Video:\\n  Shader Mode: Async Recompiler (multi-threaded)\\n"
@@ -512,13 +512,13 @@ class Mutations(unittest.TestCase):
         self.caught(behaviour_problems(h, self.product, self.kotlin), "iosonly")
 
     def test_ios_only_row_moved_into_the_ported_table(self):
-        row = '\t\t{"BLUS31011", "Video:\\n  Emulate Extended Depth Range: true\\n"},\n'
+        row = '\t\t{"BLUS30591", "Video:\\n  Emulate Extended Depth Range: true\\n"},\n'
         h = self.edited(self.header, row, "")
         h = self.edited(h, '\t\t{"BLUD80019", "Core:\\n  PPU Event Wake-Up Delay: 35\\n"},\n', '\t\t{"BLUD80019", "Core:\\n  PPU Event Wake-Up Delay: 35\\n"},\n' + row)
         self.caught(behaviour_problems(h, self.product, self.kotlin), "iosonly")
 
     def test_ios_only_row_sets_another_key(self):
-        h = self.edited(self.header, '{"BLES01717", "Video:\\n  Emulate Extended Depth Range: true\\n"},', '{"BLES01717", "Video:\\n  Strict Rendering Mode: true\\n"},')
+        h = self.edited(self.header, '{"BLES01031", "Video:\\n  Emulate Extended Depth Range: true\\n"},', '{"BLES01031", "Video:\\n  Strict Rendering Mode: true\\n"},')
         self.caught(behaviour_problems(h, self.product, self.kotlin), "iosonly")
 
     NBA_JAM_ROW = '{"NPUB30558", "Core:\\n  SPU loop detection: true\\n"},'

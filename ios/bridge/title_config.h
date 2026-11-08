@@ -664,16 +664,7 @@ namespace armsx3::bridge::title_config
 
 	// iOS-only rows, kept apart so the table above stays Android's entry for entry; tests check the two do not overlap.
 	inline constexpr local_override ios_only_overrides[] = {
-		// MoltenVK has no unrestricted depth range, so the viewmodel's 1 to 1e19 depth is squeezed and smears; costs early-Z.
-		{"BLUS31011", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLUS31140", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLES01717", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLES01718", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLES01719", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLES01720", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"NPUB31054", "Video:\n  Emulate Extended Depth Range: true\n"},
-
-		// Same engine and the same reported symptom as Black Ops II.
+		// Black Ops was reported with a smeared viewmodel; no dump has been tested without this key.
 		{"BLUS30591", "Video:\n  Emulate Extended Depth Range: true\n"},
 		{"BLES01031", "Video:\n  Emulate Extended Depth Range: true\n"},
 		{"BLES01032", "Video:\n  Emulate Extended Depth Range: true\n"},
