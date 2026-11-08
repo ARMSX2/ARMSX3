@@ -884,7 +884,7 @@ error_code sys_rsx_context_attribute(u32 context_id, u32 package_id, u64 a3, u64
 	}
 
 	// Flip/queue/reset flip/flip event/user command/vblank as trace to help with log spam
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 	// Some games set display sync (0x101) every frame
 	const bool trace_log = (package_id == 0x101 || package_id == 0x102 || package_id == 0x103 || package_id == 0x10a || package_id == 0xFEC || package_id == 0xFED || package_id == 0xFEF);
 #else
@@ -1401,7 +1401,7 @@ error_code sys_rsx_attribute(cpu_thread& cpu, u32 packageId, u32 a2, u32 a3, u32
 {
 	cpu.state += cpu_flag::wait;
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 	// Games call this every frame
 	sys_rsx.trace("sys_rsx_attribute(packageId=0x%x, a2=0x%x, a3=0x%x, a4=0x%x, a5=0x%x)", packageId, a2, a3, a4, a5);
 #else

@@ -23,7 +23,7 @@ namespace rsx
 		// no timeout length would ever have helped.
 		static atomic_t<u32> g_stuck_sema_addr{0};
 		static atomic_t<u32> g_stuck_sema_count{0};
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 		static atomic_t<u32> g_stuck_sema_logged{0};
 #endif
 
@@ -290,7 +290,7 @@ namespace rsx
 			}
 
 			if (const u32 stuck = g_stuck_sema_addr; stuck && addr == stuck)
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 			// Once per timeout: the guest writes this label every frame, about 10 lines a second.
 			if (const u32 n = g_stuck_sema_count; g_stuck_sema_logged.exchange(n) != n)
 #endif
