@@ -164,6 +164,9 @@ private:
 	u32 m_async_skipped_first_write = 0;
 	static constexpr u32 sync_compile_max_fp_ucode_bytes = 32;
 
+	// iOS kills the app before the GPU reports pressure, so the texture cache is held to its quota at frame end
+	void enforce_texture_cache_quota();
+
 #endif
 	vk::data_heap m_attrib_ring_info;                         // Vertex data
 	vk::data_heap m_fragment_constants_ring_info;             // Fragment program constants
