@@ -1707,6 +1707,12 @@ void spu_cache::initialize(bool build_existing_cache)
 		spu_log.notice("SPU object cache: hits=%u misses=%u rejected=%u not_persisted=%u written=%u write_failed=%u evicted=%u validate_ms=%.1f walk_ms=%.1f",
 			st.hits.load(), st.misses.load(), st.rejected.load(), st.not_persisted.load(), st.written.load(), st.write_failed.load(), st.evicted.load(),
 			st.validate_ns.load() / 1e6, st.walk_ns.load() / 1e6);
+#ifdef __ANDROID__
+		if (const u64 skipped = st.skipped_low_space.load())
+		{
+			spu_log.notice("SPU object cache: %u objects not written, as free space was under its margin", skipped);
+		}
+#endif
 	}
 #endif
 
@@ -1892,6 +1898,35 @@ static std::string spu_obj_cache_build_id()
 	}, &search);
 
 	return search.id;
+}
+
+extern std::string g_android_private_cache_dir; // Utilities/File.cpp, set by _armsx3_setPrivateCacheDir
+
+// Where a game's SPU object cache lives. The app's private cache folder on internal storage when
+// the glue gave one: the cache is thousands of small files, which on the data folder go through
+// Android's shared storage layer one operation at a time, and on an exFAT card take a 128 KB
+// cluster each (Odin 3, 11-08: 4.4 MB of objects took 306 MB, and writing them made the first
+// boot's SPU stage 64 s against 16 s). Android also empties that folder by itself when the phone
+// runs low on space. The game's place under the data folder's cache is kept below it, so each
+// game still has its own. Without a private folder (older glue) it stays beside the game's caches.
+static std::string spu_obj_cache_parent(const std::string& game_cache)
+{
+	if (g_android_private_cache_dir.empty())
+	{
+		return game_cache;
+	}
+
+	const std::string& data_cache = fs::get_cache_dir();
+
+	if (!data_cache.empty() && game_cache.starts_with(data_cache) && game_cache.size() > data_cache.size())
+	{
+		return g_android_private_cache_dir + "spuobj/" + game_cache.substr(data_cache.size());
+	}
+
+	// Not under the data folder's cache: named after its whole path instead.
+	u8 digest[20];
+	sha1(reinterpret_cast<const u8*>(game_cache.data()), game_cache.size(), digest);
+	return fmt::format("%sspuobj/other/%s/", g_android_private_cache_dir, fmt::base57(digest, 16));
 }
 
 // The g_cfg values folded into the object cache key, packed bit for bit. The key is made once at
@@ -2138,7 +2173,12 @@ spu_runtime::spu_runtime()
 #endif
 		sha1_finish(&ctx, key);
 
+#ifdef __ANDROID__
+		const std::string obj_parent = spu_obj_cache_parent(m_cache_path);
+		m_obj_cache_path = obj_parent + fmt::format("spuobj-v%u-%s/", SPU_OBJ_CACHE_VERSION, fmt::base57(key, 16));
+#else
 		m_obj_cache_path = m_cache_path + fmt::format("spuobj-v%u-%s/", SPU_OBJ_CACHE_VERSION, fmt::base57(key, 16));
+#endif
 
 		// Drop keyed directories left by other builds.
 		//
@@ -2179,20 +2219,32 @@ spu_runtime::spu_runtime()
 		const s64 now = std::time(nullptr);
 		fs::utime(m_obj_cache_path, now, now);
 #else
-		std::vector<std::string> stale_caches;
-
-		for (auto&& entry : fs::dir(m_cache_path))
+		// Other builds' directories go where the cache lives now, and so does every one left in the
+		// game's cache under the data folder, where it lived before 11-08.
+		const auto drop_other_caches = [&](const std::string& dir)
 		{
-			if (entry.is_directory && entry.name.starts_with("spuobj-") && m_cache_path + entry.name + "/" != m_obj_cache_path)
+			std::vector<std::string> stale_caches;
+
+			for (auto&& entry : fs::dir(dir))
 			{
-				stale_caches.push_back(entry.name);
+				if (entry.is_directory && entry.name.starts_with("spuobj-") && dir + entry.name + "/" != m_obj_cache_path)
+				{
+					stale_caches.push_back(entry.name);
+				}
 			}
-		}
 
-		for (const std::string& name : stale_caches)
+			for (const std::string& name : stale_caches)
+			{
+				spu_log.notice("Removing SPU object cache from another build: %s%s", dir, name);
+				fs::remove_all(dir + name + "/");
+			}
+		};
+
+		drop_other_caches(obj_parent);
+
+		if (obj_parent != m_cache_path)
 		{
-			spu_log.notice("Removing SPU object cache from another build: %s", name);
-			fs::remove_all(m_cache_path + name + "/");
+			drop_other_caches(m_cache_path);
 		}
 #endif
 
@@ -2248,10 +2300,12 @@ spu_runtime::spu_runtime()
 		}
 
 #ifdef __ANDROID__
-		// Saves come before the cache: on a nearly full card a failed save is fatal, and the
-		// cache writes a file for every new block during play, so below this much free space
-		// the boot compiles as before and writes nothing.
-		constexpr u64 SPU_OBJ_CACHE_MIN_FREE = 2ull << 30;
+		// Saves come before the cache: a failed write is fatal, and the cache writes a file for
+		// every new block during play, so below this much free space the boot compiles as before
+		// and uses no cache. Each write also keeps 512 MB free (JITLLVM.cpp), Android's own
+		// "storage low" line on large phones, and the whole cache is about 10 MB for a game of
+		// 2442 functions on internal storage (11-08), so 1 GB is room to start.
+		constexpr u64 SPU_OBJ_CACHE_MIN_FREE = 1ull << 30;
 		fs::device_stat free_stat{};
 
 		if (!m_obj_cache_path.empty())

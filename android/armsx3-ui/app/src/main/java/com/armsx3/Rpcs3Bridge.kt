@@ -202,6 +202,10 @@ object Rpcs3Bridge {
         runCatching { com.armsx2.config.ConfigDatabase.purgeIfStale() }
         // Applies whether or not the database was ever downloaded.
         runCatching { com.armsx2.config.ConfigDatabase.ensureLocalOverrides() }
+        // The SPU object cache goes in the app's own cache folder on internal storage: thousands of
+        // small files, slow and wasteful on the data folder (an exFAT card gives each a 128 KB
+        // cluster), and Android empties this folder itself when the phone runs low on space.
+        appContext?.cacheDir?.absolutePath?.let { dir -> runCatching { ARMSX3.instance.setPrivateCacheDir(dir) } }
         ARMSX3.instance.initialize(ARMSX3.rootDirectory, "00000001", com.armsx2.DeviceTier.socIdentity())
         ARMSX3.initialized = true
 

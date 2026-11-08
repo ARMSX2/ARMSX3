@@ -23,6 +23,9 @@ using namespace std::literals::string_literals;
 std::string g_android_executable_dir;
 std::string g_android_config_dir;
 std::string g_android_cache_dir;
+// The app's private cache folder on internal storage (Context.getCacheDir()), set by
+// _armsx3_setPrivateCacheDir. Empty with older glue.
+std::string g_android_private_cache_dir;
 #endif
 
 #ifdef _WIN32

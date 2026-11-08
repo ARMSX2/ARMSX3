@@ -532,6 +532,11 @@ struct jit_obj_cache_stats
 	atomic_t<u64> evicted{0};
 	atomic_t<u64> validate_ns{0};
 	atomic_t<u64> walk_ns{0};
+#ifdef __ANDROID__
+	// Set once free space fell under the write margin; no more objects are written this boot.
+	atomic_t<bool> disk_low{false};
+	atomic_t<u64> skipped_low_space{0};
+#endif
 };
 #endif
 

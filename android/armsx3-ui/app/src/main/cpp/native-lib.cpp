@@ -48,6 +48,7 @@ struct CoreApi {
   bool (*keyboardKey)(int androidKeyCode, int unicode, bool pressed, bool repeat);
   bool (*initialize)(std::string_view rootDir, std::string_view user);
   void (*setSocInfo)(std::string_view socInfo);
+  void (*setPrivateCacheDir)(std::string_view dir);
   void (*logPreviousExit)(std::string_view line);
   bool (*processCompilationQueue)(JNIEnv *env);
   bool (*startMainThreadProcessor)(JNIEnv *env);
@@ -244,6 +245,7 @@ struct CoreLibrary : CoreApi {
     result.keyboardKey = reinterpret_cast<decltype(keyboardKey)>(dlsym(handle, "_armsx3_keyboardKey"));
     result.initialize = reinterpret_cast<decltype(initialize)>(dlsym(handle, "_armsx3_initialize"));
     result.setSocInfo = reinterpret_cast<decltype(setSocInfo)>(dlsym(handle, "_armsx3_setSocInfo"));
+    result.setPrivateCacheDir = reinterpret_cast<decltype(setPrivateCacheDir)>(dlsym(handle, "_armsx3_setPrivateCacheDir"));
     result.logPreviousExit = reinterpret_cast<decltype(logPreviousExit)>(dlsym(handle, "_armsx3_logPreviousExit"));
     result.processCompilationQueue = reinterpret_cast<decltype(processCompilationQueue)>(dlsym(handle, "_armsx3_processCompilationQueue"));
     result.startMainThreadProcessor = reinterpret_cast<decltype(startMainThreadProcessor)>(dlsym(handle, "_armsx3_startMainThreadProcessor"));
@@ -706,6 +708,15 @@ extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_initialize(
   }
 
   return coreLib.initialize(unwrap(env, rootDir), unwrap(env, user));
+}
+
+// Before initialize(): the app's private cache folder, where the SPU object cache lives. Null on
+// cores older than this export, which keep that cache beside the game's other caches.
+extern "C" JNIEXPORT void JNICALL
+Java_com_armsx3_core_ARMSX3_setPrivateCacheDir(JNIEnv *env, jobject, jstring dir) {
+  if (coreLib.setPrivateCacheDir != nullptr) {
+    coreLib.setPrivateCacheDir(unwrap(env, dir));
+  }
 }
 
 // After initialize(), once the core's log file is open. Null on cores older than this export.

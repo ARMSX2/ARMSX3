@@ -1126,6 +1126,30 @@ public:
 			}
 		};
 #endif
+#if defined(__ANDROID__) && defined(ARCH_ARM64)
+		// Never the write that fills the disk. fs::file::write treats a failed write as fatal (an
+		// ensure, so ENOSPC ends the app), and the SPU object cache writes during play on storage it
+		// shares with everything else. So each SPU object is written only while at least 512 MB
+		// (Android's own "storage low" line on large phones) plus its worst case would stay free;
+		// past that, no more for the rest of this boot.
+		if (stats)
+		{
+			constexpr u64 min_free_after = 512ull << 20;
+			fs::device_stat free_stat{};
+
+			if (stats->disk_low || !fs::statfs(m_path, free_stat) || free_stat.avail_free < min_free_after + obj.getBufferSize() * 4)
+			{
+				if (!stats->disk_low.exchange(true))
+				{
+					jit_log.warning("LLVM: SPU object cache stops writing for this boot: %u MB free, under the %u MB it leaves alone",
+						free_stat.avail_free >> 20, min_free_after >> 20);
+				}
+
+				stats->skipped_low_space.fetch_add(1);
+				return;
+			}
+		}
+#endif
 
 		if (!obj.getBufferSize())
 		{

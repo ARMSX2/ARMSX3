@@ -87,6 +87,8 @@ class ARMSX3 {
     external fun frameGenShaderError(): String
     external fun getLibraryVersion(path: String): String?
     external fun initialize(rootDir: String, user: String, socInfo: String): Boolean
+    // Before initialize(): the app's private cache folder (Context.getCacheDir), for the SPU object cache.
+    external fun setPrivateCacheDir(dir: String)
     external fun logPreviousExit(line: String)
     external fun installFw(fd: Int, progressId: Long): Boolean
     external fun install(fd: Int, progressId: Long): Boolean

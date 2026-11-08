@@ -4588,6 +4588,23 @@ extern "C" void _armsx3_setSocInfo(std::string_view socInfo) {
   g_android_soc_info = std::string(socInfo);
 }
 
+// The app's private cache folder on internal storage (Context.getCacheDir()), for the SPU object
+// cache: thousands of small files, which on the data folder go through Android's shared storage
+// layer one operation at a time and, on an exFAT card with 128 KB clusters, take a cluster each
+// (Odin 3, 11-08: 2442 objects, 4.4 MB of data, 306 MB on the card, and the first boot's SPU stage
+// at 64 s against 16 s). A separate export like setSocInfo, for the same reason; must be called
+// before _armsx3_initialize. With older glue it is never called and the cache stays beside the
+// game's other caches.
+extern std::string g_android_private_cache_dir;
+
+extern "C" void _armsx3_setPrivateCacheDir(std::string_view dir) {
+  g_android_private_cache_dir = std::string(dir);
+
+  if (!g_android_private_cache_dir.empty() && g_android_private_cache_dir.back() != '/') {
+    g_android_private_cache_dir += '/';
+  }
+}
+
 // The "N of M" half of the compile banner. A game whose long compile during play is a known set of
 // modules gets a path fragment here; every module it loads with that fragment counts towards N,
 // compiled or straight from the cache, and M is how many such files it has. Castlevania: Harmony of
