@@ -64,6 +64,43 @@
 		</dict>
 	</dict>
 
+	<!-- A shared touch pad layout; opening one from Files, AirDrop or Messages adds it to Layouts. -->
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.armsx3.padlayout</string>
+			<key>UTTypeDescription</key>
+			<string>ARMSX3 Touch Layout</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.json</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>armsx3pad</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>ARMSX3 Touch Layout</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.armsx3.padlayout</string>
+			</array>
+		</dict>
+	</array>
+
 	<!-- armsx3://boot/SERIAL, armsx3://library and armsx3://settings, parsed strictly by DeepLink.swift. -->
 	<key>CFBundleURLTypes</key>
 	<array>

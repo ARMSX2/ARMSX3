@@ -18,6 +18,8 @@ struct GameScreenView: View {
     // A finger is down on the aim area; it resets when the drag ends or is cancelled.
     @GestureState private var aimHeld = false
     @State private var menuOpen = false
+    // The touch layout editor, opened from the menu; the menu stays open beneath it, so the game stays paused.
+    @State private var layoutEditor: PadEditor?
     @State private var stopping = false
     @State private var stopStatus: Int?
     // The pool (2 or 3) whose second StikDebug pass the alert offers; nil when none is up.
@@ -115,7 +117,7 @@ struct GameScreenView: View {
                 GeometryReader { area in
                     let inset = area.safeAreaInsets, even = min(inset.leading, inset.trailing)
                     if showPad {
-                        VirtualControllerView()
+                        VirtualControllerView(serial: game.serial)
                             .padding(.leading, even - inset.leading)  // ≤ 0: reaches into the wider side's inset
                             .padding(.trailing, even - inset.trailing)
                             // Tabletop: the pad keeps to the bottom leaf; its stack already sits at the bottom.
@@ -154,9 +156,7 @@ struct GameScreenView: View {
                         .onAppear { RecordingStore.shared.dotDrawn = true }
                 }
             }
-            .overlay {
-                if menuOpen { menuPanel }
-            }
+            .overlay { menuLayer }
             .overlay {
                 if session.restartPending || exitSaving { restartOverlay }
             }
@@ -482,6 +482,15 @@ struct GameScreenView: View {
         aiming = gun != nil
     }
 
+    // The touch layout editor takes the menu's place while it is open.
+    @ViewBuilder private var menuLayer: some View {
+        if menuOpen, let layoutEditor {
+            PadLayoutEditorView(editor: layoutEditor, overGame: true, onClose: { self.layoutEditor = nil })
+        } else if menuOpen {
+            menuPanel
+        }
+    }
+
     private var menuPanel: some View {
         // Only the menu itself splits around the fold; its slot, settings and friends panels sit on one leaf.
         GameOverlayContainer(onTapOutside: { setMenu(open: false) },
@@ -502,7 +511,10 @@ struct GameScreenView: View {
                     changeDisc: { discPicker = true },
                     record: { Task { await toggleRecording(fromMenu: true) } },
                     portal: { portalSheet = true },
-                    friends: { friendsOpen = true }),
+                    friends: { friendsOpen = true },
+                    touchLayout: controllerConnected ? nil : {
+                        layoutEditor = PadEditor(serial: game.serial, library: PadLayoutStore.shared.library)
+                    }),
                 controllerInput: controllerInput,
                 slotPanel: slotPanelView,
                 settingsPanel: settingsOpen
@@ -833,6 +845,7 @@ struct GameScreenView: View {
 
     private func showMenu(_ open: Bool) {
         menuOpen = open
+        if !open { layoutEditor = nil }
         if bootStatus == 0 { session.inputOwner = open ? .menu : .game }
         // The menu frees the pointer at once, and closing it locks the pointer again.
         KeyboardMouseFeed.shared.refreshPointerLock()

@@ -69,83 +69,116 @@ struct VirtualControllerView: View {
         }
     }
 
-    static let clusters: [(rule: PadHitRule, buttons: [Rpcs3PadButton])] = [
-        (.eightWay, [.up, .down, .left, .right]),
-        (.chord, [.cross, .circle, .square, .triangle]),
-        (.nearest, [.L1, .L2, .R1, .R2]),
-        (.nearest, [.select, .PS, .start]),
-    ]
+    // A split d-pad's arrows can sit anywhere, so each one is pressed by nearness instead of by angle.
+    static func clusters(_ layout: PadSlotLayout) -> [(rule: PadHitRule, buttons: [Rpcs3PadButton])] {
+        [(layout.isSplit(.dpad) ? .nearest : .eightWay, [.up, .down, .left, .right]),
+         (.chord, [.cross, .circle, .square, .triangle]),
+         (.nearest, [.L1, .L2, .R1, .R2]),
+         (.nearest, [.select, .PS, .start]),
+         (.nearest, [.L3, .R3])]
+    }
 
     // PadTouchSurface fills this coordinate space exactly.
     static let space = "armsx3.pad"
 
-    @Environment(\.scenePhase) private var scenePhase
+    // The game whose layout the pad draws; nil draws the shared one.
+    var serial: String?
 
-    private static let face: CGFloat = 50
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.padEditor) private var editor
+
+    static let face: CGFloat = 50
     // All four shoulders one size; a skin's shoulder art fills that frame, since Graphite's L1 and L2 differ in shape.
-    private static let shoulder = CGSize(width: 80, height: 28)
-    private static let small = CGSize(width: 58, height: 26)
+    static let shoulder = CGSize(width: 80, height: 28)
+    static let small = CGSize(width: 58, height: 26)
+    static let home = CGSize(width: 40, height: 40)
+    static let stick = CGSize(width: 104, height: 104)
     // The halt sentence keeps inside this in landscape, so it wraps instead of crossing L1 or R1.
     static let shoulderReach: CGFloat = 16 + shoulder.width * 2 + 10
     @State private var bookFold: ClosedRange<CGFloat>?
-    @State private var padWidth: CGFloat = 0
+    @State private var padSize: CGSize = .zero
+
+    private var slot: PadSlot {
+        if bookFold != nil { return .book }
+        return padSize.width > padSize.height ? .landscape : .portrait
+    }
+
+    private var layout: PadSlotLayout {
+        (editor?.draft ?? PadLayoutStore.shared.library.layout(for: serial))[slot]
+    }
 
     var body: some View {
+        let layout = layout
         VStack(spacing: 14) {
             Spacer()
             HStack(spacing: 10) {
-                PadButton(control: Self.control(.L2), size: Self.shoulder)
-                PadButton(control: Self.control(.L1), size: Self.shoulder)
+                button(.l2, .L2, Self.shoulder)
+                button(.l1, .L1, Self.shoulder)
                 Spacer()
-                PadButton(control: Self.control(.R1), size: Self.shoulder)
-                PadButton(control: Self.control(.R2), size: Self.shoulder)
+                button(.r1, .R1, Self.shoulder)
+                button(.r2, .R2, Self.shoulder)
             }
             HStack {
-                diamond(top: .up, left: .left, right: .right, bottom: .down)
+                diamond(.dpad, top: .up, left: .left, right: .right, bottom: .down)
                 Spacer()
-                diamond(top: .triangle, left: .square, right: .circle, bottom: .cross)
+                diamond(.face, top: .triangle, left: .square, right: .circle, bottom: .cross)
             }
             if let fold = bookFold {
                 // In book pose PS and Start go by the right stick, so nothing sits on the fold; 16 is the padding.
                 HStack(alignment: .bottom, spacing: 0) {
                     HStack(alignment: .bottom) {
-                        PadStick(left: true, click: .L3)
+                        stick(.lstick, click: .L3)
                         Spacer(minLength: 4)
-                        PadButton(control: Self.control(.select), size: Self.small)
+                        button(.select, .select, Self.small)
                     }
                     .frame(width: max(0, fold.lowerBound - 16 - 12))
                     Spacer(minLength: 0)
                     HStack(alignment: .bottom, spacing: 8) {
-                        PadButton(control: Self.control(.PS), size: CGSize(width: 40, height: 40))
-                        PadButton(control: Self.control(.start), size: Self.small)
+                        button(.ps, .PS, Self.home)
+                        button(.start, .start, Self.small)
                         Spacer(minLength: 4)
-                        PadStick(left: false, click: .R3)
+                        stick(.rstick, click: .R3)
                     }
-                    .frame(width: max(0, padWidth - fold.upperBound - 16 - 12))
+                    .frame(width: max(0, padSize.width - fold.upperBound - 16 - 12))
                 }
             } else {
                 HStack(alignment: .bottom) {
-                    PadStick(left: true, click: .L3)
+                    stick(.lstick, click: .L3)
                     Spacer(minLength: 4)
                     HStack(spacing: 8) {
-                        PadButton(control: Self.control(.select), size: Self.small)
-                        PadButton(control: Self.control(.PS), size: CGSize(width: 40, height: 40))
-                        PadButton(control: Self.control(.start), size: Self.small)
+                        button(.select, .select, Self.small)
+                        button(.ps, .PS, Self.home)
+                        button(.start, .start, Self.small)
                     }
                     Spacer(minLength: 4)
-                    PadStick(left: false, click: .R3)
+                    stick(.rstick, click: .R3)
                 }
             }
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 20)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { padWidth = $0 }
+        .overlay { FloatingStickZones() }
+        .environment(\.padSlot, layout)
+        .environment(\.padArea, padSize)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { padSize = $0 }
         .onBookFoldChange { bookFold = $0 }
         .coordinateSpace(.named(Self.space))
         .background { PadTouchSurface() }
         .onPreferenceChange(PadArtFrames.self) { frames in
-            MainActor.assumeIsolated { PadTouches.shared.layout(frames) }
+            MainActor.assumeIsolated { PadTouches.shared.layout(frames, clusters: Self.clusters(layout)) }
         }
+        .onPreferenceChange(PadStickFrames.self) { frames in
+            MainActor.assumeIsolated { PadTouches.shared.sticks = frames }
+        }
+        .onChange(of: layout.split) { _, _ in
+            PadTouches.shared.layout(PadTouches.shared.frames, clusters: Self.clusters(layout))
+        }
+        .onPreferenceChange(PadPieceFrames.self) { frames in
+            MainActor.assumeIsolated { editor?.frames = frames }
+        }
+        .onChange(of: slot, initial: true) { _, slot in editor?.slot = slot }
+        .onChange(of: padSize, initial: true) { _, size in editor?.area = size }
+        .onChange(of: bookFold, initial: true) { _, fold in editor?.fold = fold }
         // Leaving the active state or hiding the pad lifts every finger, so nothing stays held.
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { PadTouches.shared.liftAll() }
@@ -153,25 +186,137 @@ struct VirtualControllerView: View {
         .onDisappear { PadTouches.shared.liftAll() }
     }
 
-    private func diamond(top: Rpcs3PadButton, left: Rpcs3PadButton, right: Rpcs3PadButton, bottom: Rpcs3PadButton) -> some View {
-        let size = CGSize(width: Self.face, height: Self.face)
+    private func button(_ piece: PadPiece, _ button: Rpcs3PadButton, _ base: CGSize) -> some View {
+        PadPieceView(piece: piece, base: base) { PadButton(control: Self.control(button), size: $0) }
+    }
+
+    private func stick(_ piece: PadPiece, click: Rpcs3PadButton) -> some View {
+        PadPieceView(piece: piece, base: Self.stick) { PadStick(left: piece == .lstick, click: click, size: $0.width) }
+            // L3 or R3, hidden at first, on the stick's inner side; an overlay, so it moves with the stick.
+            .overlay(alignment: piece == .lstick ? .trailing : .leading) {
+                button(piece == .lstick ? .l3 : .r3, click, Self.home)
+                    .offset(x: (piece == .lstick ? 1 : -1) * (Self.home.width + 6))
+            }
+    }
+
+    private func diamond(_ cluster: PadPiece, top: Rpcs3PadButton, left: Rpcs3PadButton, right: Rpcs3PadButton,
+                         bottom: Rpcs3PadButton) -> some View {
+        let split = layout.isSplit(cluster)
         // One cross behind four arrows reads as a d-pad and shows a diagonal works; each arrow keeps its own touch frame.
-        let cross = top == .up && PadArt.image(Self.control(.up).art) == nil
-        return VStack(spacing: 0) {
-            PadButton(control: Self.control(top), size: size)
-            HStack(spacing: Self.face) {
-                PadButton(control: Self.control(left), size: size)
-                PadButton(control: Self.control(right), size: size)
+        let cross = cluster == .dpad && PadArt.image(Self.control(.up).art) == nil
+        return PadPieceView(piece: cluster, base: CGSize(width: Self.face * 3, height: Self.face * 3)) { size in
+            let face = size.width / 3
+            VStack(spacing: 0) {
+                member(top, face, alone: split && cross)
+                HStack(spacing: face) {
+                    member(left, face, alone: split && cross)
+                    member(right, face, alone: split && cross)
+                }
+                member(bottom, face, alone: split && cross)
             }
-            PadButton(control: Self.control(bottom), size: size)
-        }
-        .background {
-            if cross {
-                DpadCross().fill(.black.opacity(0.45))
-                    .overlay(DpadCross().stroke(.white.opacity(0.7), lineWidth: 1.5))
-                    .opacity(SettingsStore.shared.padOpacity)
+            .background {
+                if cross && !split { DpadBacking(shape: DpadCross()) }
             }
         }
+    }
+
+    // A split arrow with no art of its own gets a key of the cross's look, since a bare glyph does not read as a button.
+    private func member(_ button: Rpcs3PadButton, _ face: CGFloat, alone: Bool) -> some View {
+        let base = CGSize(width: face, height: face)
+        return PadPieceView(piece: PadPiece(button)!, base: base) { size in
+            PadButton(control: Self.control(button), size: size)
+                .background {
+                    if alone { DpadBacking(shape: RoundedRectangle(cornerRadius: 12)) }
+                }
+        }
+    }
+}
+
+private struct DpadBacking<S: Shape>: View {
+    let shape: S
+    @Environment(\.padPieceOpacity) private var pieceOpacity
+
+    var body: some View {
+        shape.fill(.black.opacity(0.45))
+            .overlay(shape.stroke(.white.opacity(0.7), lineWidth: 1.5))
+            .opacity(SettingsStore.shared.padOpacity * pieceOpacity)
+    }
+}
+
+extension PadPiece {
+    init?(_ button: Rpcs3PadButton) {
+        switch button {
+        case .up: self = .up
+        case .down: self = .down
+        case .left: self = .left
+        case .right: self = .right
+        case .triangle: self = .triangle
+        case .circle: self = .circle
+        case .square: self = .square
+        case .cross: self = .cross
+        default: return nil
+        }
+    }
+}
+
+extension EnvironmentValues {
+    @Entry var padSlot = PadSlotLayout()
+    @Entry var padArea = CGSize.zero
+    @Entry var padEditor: PadEditor?
+    @Entry var padPieceOpacity: CGFloat = 1
+    @Entry var padTouchScale: CGFloat = 1
+}
+
+// Draws one piece where its layout puts it. Its layout frame stays the default one, so the rest of the pad never moves.
+private struct PadPieceView<Content: View>: View {
+    let piece: PadPiece
+    let base: CGSize
+    @ViewBuilder let content: (CGSize) -> Content
+    @Environment(\.padSlot) private var slot
+    @Environment(\.padArea) private var area
+    @Environment(\.padEditor) private var editor
+    @Environment(\.padPieceOpacity) private var inheritedOpacity
+    @Environment(\.padTouchScale) private var inheritedTouch
+    @State private var home: CGRect = .zero
+
+    // A cluster's own placement holds until it is split; then its buttons carry theirs.
+    private var placement: PadPlacement {
+        if !piece.members.isEmpty, slot.isSplit(piece) { return PadPlacement() }
+        if let cluster = piece.cluster, !slot.isSplit(cluster) { return PadPlacement() }
+        return slot[piece]
+    }
+
+    var body: some View {
+        let placement = placement
+        let drawn = CGSize(width: base.width * placement.size, height: base.height * placement.size)
+        let editing = editor.map { !$0.trying } ?? false
+        // Hidden until the default spot is known, so a moved piece never flashes there first.
+        let waiting = placement.centre != nil && home == .zero
+        content(drawn)
+            .environment(\.padPieceOpacity, inheritedOpacity * placement.opacity)
+            .environment(\.padTouchScale, inheritedTouch * placement.touch)
+            // A cluster's split buttons are pieces of their own inside it, so they still need its touches.
+            .allowsHitTesting(!placement.hidden && (!editing || !piece.members.isEmpty))
+            .background {
+                GeometryReader { geometry in
+                    Color.clear.preference(key: PadPieceFrames.self,
+                                           value: [piece: geometry.frame(in: .named(VirtualControllerView.space))])
+                }
+            }
+            .overlay {
+                if editing { PadPieceEditOverlay(piece: piece, placement: placement) }
+            }
+            .frame(width: base.width, height: base.height)
+            .opacity(waiting ? 0 : placement.hidden ? (editing ? 0.3 : 0) : 1)
+            .transformPreference(PadArtFrames.self) { if placement.hidden { $0 = [:] } }
+            .transformPreference(PadStickFrames.self) { if placement.hidden { $0 = [:] } }
+            .offset(offset(placement))
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(VirtualControllerView.space)) } action: { home = $0 }
+    }
+
+    private func offset(_ placement: PadPlacement) -> CGSize {
+        guard let centre = placement.centre, home != .zero else { return .zero }
+        return CGSize(width: centre.x * area.width - home.midX, height: centre.y * area.height - home.midY)
     }
 }
 
@@ -181,17 +326,24 @@ struct VirtualControllerView: View {
 
     // What the press highlight draws.
     private(set) var held: Set<Rpcs3PadButton> = []
-    @ObservationIgnored private(set) var frames: [Rpcs3PadButton: CGRect] = [:]
+    // Observed, so a floating stick's zone redraws its cut-outs when a button moves.
+    private(set) var frames: [Rpcs3PadButton: CGRect] = [:]
     @ObservationIgnored private var tracker = PadTouchTracker<ObjectIdentifier, Rpcs3PadButton>()
-    // shortcut: always on; add a "Touch pad vibration" toggle when settings gain a pad section.
     @ObservationIgnored private let haptic = UIImpactFeedbackGenerator(style: .light)
     @ObservationIgnored private var aiming = Set<ObjectIdentifier>()
 
+    // The sticks' frames, so a finger on one never aims.
+    var sticks: [Bool: CGRect] = [:]
+    // Try mode in the layout editor: presses light up and reach nothing.
+    @ObservationIgnored var muted = false
+    // Sticks held off centre in try mode, by left, for the editor's readout.
+    var heldSticks: Set<Bool> = []
+
     private init() {}
 
-    func layout(_ frames: [Rpcs3PadButton: CGRect]) {
+    func layout(_ frames: [Rpcs3PadButton: CGRect], clusters: [(rule: PadHitRule, buttons: [Rpcs3PadButton])]) {
         self.frames = frames
-        tracker.clusters = VirtualControllerView.clusters.map { cluster in
+        tracker.clusters = clusters.map { cluster in
             PadCluster(rule: cluster.rule, art: frames.filter { cluster.buttons.contains($0.key) })
         }
     }
@@ -228,7 +380,7 @@ struct VirtualControllerView: View {
 
     private func claims(_ point: CGPoint) -> Bool {
         tracker.clusters.contains { PadHit.covers($0, point) }
-            || [Rpcs3PadButton.L3, .R3].contains { frames[$0]?.contains(point) ?? false }
+            || sticks.values.contains { $0.contains(point) }
     }
 
     func liftAll() {
@@ -242,12 +394,14 @@ struct VirtualControllerView: View {
 
     private func apply(_ change: PadChange<Rpcs3PadButton>) {
         guard !change.isEmpty else { return }
-        for button in change.released { PadSnapshot.shared.set(button, pressed: false) }
-        for button in change.pressed { PadSnapshot.shared.set(button, pressed: true) }
-        PadSnapshot.shared.send(source: .touch)
+        if !muted {
+            for button in change.released { PadSnapshot.shared.set(button, pressed: false) }
+            for button in change.pressed { PadSnapshot.shared.set(button, pressed: true) }
+            PadSnapshot.shared.send(source: .touch)
+        }
         held = tracker.held
         if !change.pressed.isEmpty {
-            haptic.impactOccurred()
+            if SettingsStore.shared.padVibrates { haptic.impactOccurred() }
             haptic.prepare()
         }
     }
@@ -261,12 +415,33 @@ private struct PadArtFrames: PreferenceKey {
     }
 }
 
+// Keyed by left.
+private struct PadStickFrames: PreferenceKey {
+    static let defaultValue: [Bool: CGRect] = [:]
+
+    static func reduce(value: inout [Bool: CGRect], nextValue: () -> [Bool: CGRect]) {
+        value.merge(nextValue()) { $1 }
+    }
+}
+
+// Every piece's drawn frame, for the layout editor.
+struct PadPieceFrames: PreferenceKey {
+    static let defaultValue: [PadPiece: CGRect] = [:]
+
+    static func reduce(value: inout [PadPiece: CGRect], nextValue: () -> [PadPiece: CGRect]) {
+        value.merge(nextValue()) { $1 }
+    }
+}
+
 private struct PadTouchSurface: UIViewRepresentable {
     func makeUIView(context: Context) -> PadTouchView {
         PadTouchView()
     }
 
-    func updateUIView(_ view: PadTouchView, context: Context) {}
+    // The editor's own gestures take the touches unless it is in try mode.
+    func updateUIView(_ view: PadTouchView, context: Context) {
+        view.isUserInteractionEnabled = context.environment.padEditor?.trying ?? true
+    }
 }
 
 final class PadTouchView: UIView {
@@ -310,6 +485,8 @@ final class PadTouchView: UIView {
 private struct PadButton: View {
     let control: PadControl
     let size: CGSize
+    @Environment(\.padPieceOpacity) private var pieceOpacity
+    @Environment(\.padTouchScale) private var touchScale
 
     var body: some View {
         let pressed = PadTouches.shared.held.contains(control.button)
@@ -317,11 +494,14 @@ private struct PadButton: View {
             .frame(width: size.width, height: size.height)
             .background {
                 GeometryReader { geometry in
+                    let art = geometry.frame(in: .named(VirtualControllerView.space))
+                    // A larger touch area is the art grown about its centre.
                     Color.clear.preference(key: PadArtFrames.self,
-                                           value: [control.button: geometry.frame(in: .named(VirtualControllerView.space))])
+                                           value: [control.button: art.insetBy(dx: art.width * (1 - touchScale) / 2,
+                                                                               dy: art.height * (1 - touchScale) / 2)])
                 }
             }
-            .opacity(pressed ? 1 : SettingsStore.shared.padOpacity)
+            .opacity(pressed ? 1 : SettingsStore.shared.padOpacity * pieceOpacity)
             .scaleEffect(pressed ? 0.9 : 1)
             .brightness(pressed ? 0.2 : 0)
             .shadow(color: .white.opacity(pressed ? 0.9 : 0), radius: 10)
@@ -421,14 +601,17 @@ private struct DpadCross: Shape {
 private struct PadStick: View {
     let left: Bool
     let click: Rpcs3PadButton
-    private let radius: CGFloat = 52
-    private let knob: CGFloat = 52
+    let size: CGFloat
+    private var radius: CGFloat { size / 2 }
+    private var knob: CGFloat { size / 2 }
+    @Environment(\.padPieceOpacity) private var pieceOpacity
     @State private var offset: CGSize = .zero
     @State private var travelled: CGFloat = 0
     // SwiftUI resets this on end and on cancellation, which re-centres a stick onEnded alone missed.
     @GestureState private var touching = false
 
     var body: some View {
+        let floating = FloatingSticks.shared.held[left]
         ZStack {
             art(VirtualControllerView.stickBaseArt) {
                 Circle().fill(.black.opacity(0.3))
@@ -439,14 +622,18 @@ private struct PadStick: View {
                     .overlay(Circle().stroke(.white.opacity(0.8), lineWidth: 1.5))
             }
                 .frame(width: knob, height: knob)
-                .offset(offset)
+                .offset(floating?.knob ?? offset)
         }
         .frame(width: radius * 2, height: radius * 2)
-        .opacity(touching ? 1 : SettingsStore.shared.padOpacity)
-        // The stick's frame, so a finger on it never aims. No cluster names L3 or R3.
+        // A floating stick is drawn where the thumb landed; the frame after this offset stays home.
+        .offset(floating.flatMap { held in
+            PadTouches.shared.sticks[left].map { CGSize(width: held.centre.x - $0.midX, height: held.centre.y - $0.midY) }
+        } ?? .zero)
+        .opacity(touching || floating != nil ? 1 : SettingsStore.shared.padOpacity * pieceOpacity)
+        // The stick's frame, so a finger on it never aims.
         .background {
             GeometryReader { geometry in
-                Color.clear.preference(key: PadArtFrames.self, value: [click: geometry.frame(in: .named(VirtualControllerView.space))])
+                Color.clear.preference(key: PadStickFrames.self, value: [left: geometry.frame(in: .named(VirtualControllerView.space))])
             }
         }
         .contentShape(Circle())
@@ -463,7 +650,7 @@ private struct PadStick: View {
                 .onEnded { _ in
                     offset = .zero
                     send(.zero)
-                    if travelled < 8 { VirtualControllerView.press(click) }
+                    if travelled < 8, !PadTouches.shared.muted { VirtualControllerView.press(click) }
                     travelled = 0
                 }
         )
@@ -487,17 +674,101 @@ private struct PadStick: View {
         }
     }
 
-    private func axis(_ value: CGFloat) -> UInt8 {
-        UInt8(clamping: Int((CGFloat(PadSnapshot.centre) + value / radius * 127).rounded()))
+    private func send(_ offset: CGSize) {
+        Self.send(left: left, offset, radius: radius)
     }
 
-    private func send(_ offset: CGSize) {
+    // The floating zone sends through here too.
+    static func send(left: Bool, _ offset: CGSize, radius: CGFloat) {
+        func axis(_ value: CGFloat) -> UInt8 {
+            UInt8(clamping: Int((CGFloat(PadSnapshot.centre) + value / radius * 127).rounded()))
+        }
         let x = axis(offset.width)
         let y = axis(offset.height)
+        // Try mode sends nothing, so the real pad's centred axes say nothing about a lift.
+        if PadTouches.shared.muted {
+            if offset == .zero { PadTouches.shared.heldSticks.remove(left) } else { PadTouches.shared.heldSticks.insert(left) }
+            return
+        }
         let pad = PadSnapshot.shared
         let unchanged = left ? (pad.lx == x && pad.ly == y) : (pad.rx == x && pad.ry == y)
         guard !unchanged else { return }
         pad.setStick(left: left, x: x, y: y)
         pad.send(source: .touch)
+    }
+}
+
+// Where a floating stick sits while a thumb holds it, and how far its knob is pushed, by left.
+@MainActor @Observable final class FloatingSticks {
+    struct Held {
+        var centre: CGPoint
+        var knob: CGSize
+    }
+
+    static let shared = FloatingSticks()
+    var held: [Bool: Held] = [:]
+}
+
+// A floating stick's zone takes a thumb anywhere in it, except on a button, which keeps its own touches.
+private struct FloatingStickZones: View {
+    @Environment(\.padSlot) private var slot
+    @Environment(\.padArea) private var area
+    @Environment(\.padEditor) private var editor
+
+    var body: some View {
+        if editor.map(\.trying) ?? true {
+            ZStack(alignment: .topLeading) {
+                ForEach([PadPiece.lstick, .rstick].filter { slot.floating.contains($0) && !slot[$0].hidden }, id: \.self) { stick in
+                    let share = slot.zone(stick)
+                    FloatingStickZone(left: stick == .lstick,
+                                      rect: CGRect(x: share.minX * area.width, y: share.minY * area.height,
+                                                   width: share.width * area.width, height: share.height * area.height))
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+}
+
+private struct FloatingStickZone: View {
+    let left: Bool
+    let rect: CGRect
+    @GestureState private var touching = false
+
+    var body: some View {
+        // The buttons' regions and the other stick are cut out of the zone.
+        let blocked = PadTouches.shared.frames.values.map(PadHit.region) + PadTouches.shared.sticks.filter { $0.key != left }.map(\.value)
+        let shape = blocked.reduce(Path(CGRect(origin: .zero, size: rect.size))) { zone, region in
+            zone.subtracting(Path(region.offsetBy(dx: -rect.minX, dy: -rect.minY)))
+        }
+        Color.clear
+            .frame(width: rect.width, height: rect.height)
+            .contentShape(shape)
+            .gesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .named(VirtualControllerView.space))
+                    .updating($touching) { _, touching, _ in touching = true }
+                    .onChanged { value in
+                        let radius = (PadTouches.shared.sticks[left]?.width ?? VirtualControllerView.stick.width) / 2
+                        let length = hypot(value.translation.width, value.translation.height)
+                        let scale = length > radius ? radius / length : 1
+                        let knob = CGSize(width: value.translation.width * scale, height: value.translation.height * scale)
+                        FloatingSticks.shared.held[left] = .init(centre: value.startLocation, knob: knob)
+                        PadStick.send(left: left, knob, radius: radius)
+                    }
+            )
+            // A lift or a cancel sends the stick home and centres it.
+            .onChange(of: touching) { _, down in
+                guard !down else { return }
+                FloatingSticks.shared.held[left] = nil
+                PadStick.send(left: left, .zero, radius: (PadTouches.shared.sticks[left]?.width ?? VirtualControllerView.stick.width) / 2)
+            }
+            // The menu or a controller can take the pad away under a held thumb, and no lift follows.
+            .onDisappear {
+                guard FloatingSticks.shared.held[left] != nil else { return }
+                FloatingSticks.shared.held[left] = nil
+                PadStick.send(left: left, .zero, radius: (PadTouches.shared.sticks[left]?.width ?? VirtualControllerView.stick.width) / 2)
+            }
+            .position(x: rect.midX, y: rect.midY)
+            .accessibilityHidden(true)
     }
 }

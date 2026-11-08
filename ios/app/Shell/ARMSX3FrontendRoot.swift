@@ -95,6 +95,10 @@ struct ARMSX3FrontendRoot: View {
     }
 
     private func receive(_ url: URL) {
+        if url.isFileURL, url.pathExtension.lowercased() == PadLayoutFile.fileExtension {
+            linkMessage = PadLayoutStore.shared.importMessage(url)
+            return
+        }
         guard let link = DeepLink.parse(url) else {
             linkMessage = String(localized: "That isn't an ARMSX3 link.")
             return

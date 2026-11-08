@@ -621,6 +621,7 @@ struct ControllersPaneView: View {
     @State private var model: ControllersModel
     // Use All-Games Mapping deletes the title's own mapping, so it asks first.
     @State private var confirmingFollow = false
+    @State private var layoutEditor: PadEditor?
     @Environment(\.menuControllerInputRouter) private var environmentRouter
     @Environment(\.openURL) private var openURL // the app's Settings page
 
@@ -659,6 +660,10 @@ struct ControllersPaneView: View {
                     }
                 }
             }
+            // In a game the quick menu opens the editor over the paused frame instead.
+            TouchPadCard(onEdit: model.scope == .game ? nil : {
+                layoutEditor = PadEditor(serial: nil, library: PadLayoutStore.shared.library)
+            })
             OverlaySectionCard(title: String(localized: "Devices")) {
                 OverlayActionRow(controllerNavigationID: "settings.controllers.microphone", label: "Microphone",
                                  systemImage: model.mic == .off ? "mic.slash" : "mic",
@@ -801,6 +806,9 @@ struct ControllersPaneView: View {
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(isPresented: Binding(get: { model.showsPlayer }, set: { model.showsPlayer = $0 })) {
             ControllersPlayerPage(model: model, controller: controller, router: router)
+        }
+        .fullScreenCover(item: $layoutEditor) { editor in
+            PadLayoutEditorView(editor: editor, onClose: { layoutEditor = nil })
         }
         .controllerAccessibilityNavigation(controllerInput: controller.input, scopeKey: "settings.pane." + SettingsPane.controllers.navigationKey,
                                            // At the root, Back closes the in-game sheet.
