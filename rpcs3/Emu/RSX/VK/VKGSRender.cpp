@@ -2447,12 +2447,33 @@ bool VKGSRender::load_program()
 			!(fragment_program.ctrl & RSX_SHADER_CONTROL_EMULATE_DEPTH_RANGE);
 #endif
 
+#ifdef __APPLE__
+		const u64 load_started_us = get_system_time();
+#endif
 		std::tie(m_program, m_vertex_prog, m_fragment_prog) = m_prog_buffer->get_graphics_pipeline(
 			&m_ctx->program.cache_hint,
 			vertex_program,
 			fragment_program,
 			m_pipeline_properties,
 			allow_async, true);
+#ifdef __APPLE__
+		if (m_prog_buffer->check_cache_missed())
+		{
+			const u64 us = get_system_time() - load_started_us;
+			m_program_misses++;
+			m_program_miss_us += us;
+			m_program_miss_max_us = std::max(m_program_miss_max_us, us);
+
+			// A missed load with async off built its pipeline here unless it was already pending.
+			if (!allow_async)
+			{
+				m_program_inline++;
+				m_program_inline_tiny += fragment_program.ucode_length <= sync_compile_max_fp_ucode_bytes;
+				m_program_inline_us += us;
+				m_program_inline_max_us = std::max(m_program_inline_max_us, us);
+			}
+		}
+#endif
 
 		if (vk::vspec::active())
 		{

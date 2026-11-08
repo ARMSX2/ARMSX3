@@ -256,6 +256,19 @@ namespace vk
 	void resize_pipe_compiler(int num_worker_threads = 0);
 	void destroy_pipe_compiler();
 	pipe_compiler* get_pipe_compiler();
+
+#ifdef __APPLE__
+	// Background graphics compiles since the last flip; the RSX thread logs and clears them.
+	struct pipe_compile_stats
+	{
+		atomic_t<u32> jobs{};
+		atomic_t<u64> total_us{};
+		atomic_t<u64> max_us{};
+		atomic_t<u32> max_qos{};
+	};
+
+	extern pipe_compile_stats g_pipe_compile_stats;
+#endif
 }
 
 namespace rpcs3
