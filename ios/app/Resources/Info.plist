@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Hand-written rather than generated, so the comments beside its keys survive a regenerate. -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundleDisplayName</key>
+	<string>ARMSX3</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.1</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+
+	<!-- Makes the app's documents visible under Files and over a Finder connection, since a sideloaded container is otherwise unreachable. -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+
+	<!-- Add-only access to Photos, asked on the player's tap; the app never reads the library. -->
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>ARMSX3 saves the screenshots you choose to your photo library.</string>
+
+	<!-- Core Motion may not need this key; it is insurance against a refusal on first use. -->
+	<key>NSMotionUsageDescription</key>
+	<string>ARMSX3 uses motion so tilt controls work in games that support them.</string>
+
+	<!-- iOS asks the first time a game captures from the microphone, never at launch. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>ARMSX3 lets games that use a microphone hear you, only while such a game is running.</string>
+
+	<!-- iOS asks only when a game opens the camera (the PlayStation Eye), never at launch. -->
+	<key>NSCameraUsageDescription</key>
+	<string>ARMSX3 lets games that use the PlayStation Eye see you, only while such a game is running.</string>
+
+	<!-- iOS asks once, after the first RPCN sign-in, never during a game; no Bonjour services are used. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Games use your local network to reach a player on the same Wi-Fi.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>a0.ww.np.dl.playstation.net</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+			<key>b0.ww.np.dl.playstation.net</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
+
+	<!-- armsx3://boot/SERIAL, armsx3://library and armsx3://settings, parsed strictly by DeepLink.swift. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.armsx3.deeplink</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>armsx3</string>
+			</array>
+		</dict>
+	</array>
+
+	<!-- One query scheme so canOpenURL can tell whether StikDebug is installed; no URL scheme is registered. -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>stikdebug</string>
+	</array>
+
+	<key>UILaunchScreen</key>
+	<dict/>
+	<!-- The app is dark only, whatever the system appearance, alerts and sheets included. -->
+	<key>UIUserInterfaceStyle</key>
+	<string>Dark</string>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>arm64</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+
+	<!-- Emu and ios_frame are process singletons with one attached view, so iPad windows may resize but a second scene must never open. -->
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+	</dict>
+</dict>
+</plist>

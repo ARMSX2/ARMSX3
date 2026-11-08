@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The app's entitlements: debugger-enabled JIT and a higher resident-memory limit on A14 and later. -->
+<plist version="1.0">
+<dict>
+	<!-- get-task-allow lets a debugger attach, which sets CS_DEBUGGED, the precondition for JIT on iOS 26. -->
+	<key>com.apple.security.get-task-allow</key>
+	<true/>
+
+	<!-- Declares that the process runs code it generated itself, which the recompilers need. -->
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+
+	<!-- Under TXM the write and execute addresses differ, so the JIT needs an unsigned writable alias of the executable mapping. -->
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+
+	<!-- Raises the resident-memory jetsam limit; it needs no paid membership and has no effect on iPhone 11 and earlier. -->
+	<key>com.apple.developer.kernel.increased-memory-limit</key>
+	<true/>
+</dict>
+</plist>
