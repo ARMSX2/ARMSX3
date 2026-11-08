@@ -1272,6 +1272,9 @@ void spu_cache::initialize(bool build_existing_cache)
 
 	atomic_t<usz> fnext{};
 	atomic_t<u8> fail_flag{0};
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+	atomic_t<bool> pool_capped{false};
+#endif
 
 	auto data_list = g_fxo->get<spu_cache>().precompile_funcs.pop_all();
 	g_fxo->get<spu_cache>().collect_funcs_to_precompile = false;
@@ -1413,6 +1416,15 @@ void spu_cache::initialize(bool build_existing_cache)
 
 		auto compile_program = [&](spu_program&& program) -> spu_function_t
 		{
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+			// The cache can hold more than pool 2, and blocks the game builds while running need the other half.
+			if (utils::jit_pool2_precompile_full())
+			{
+				pool_capped = true;
+				return nullptr;
+			}
+
+#endif
 #ifdef ARCH_ARM64
 			return compile_spu_llvm_with_retry(compiler, program);
 #else
@@ -1736,7 +1748,15 @@ void spu_cache::initialize(bool build_existing_cache)
 	// The programs that DID build are valid and worth keeping; the rest are compiled on demand,
 	// which is the normal path for anything precompilation did not reach anyway. So report what
 	// was actually lost and fall through.
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+	if (pool_capped)
+	{
+		spu_log.notice("SPU Runtime: stopped after building %u programs, at half of JIT pool 2. The rest are compiled on demand; cached programs are kept.", built_total);
+	}
+	else if (fail_flag)
+#else
 	if (fail_flag)
+#endif
 	{
 		spu_log.error("SPU Runtime: ran out of JIT memory after building %u programs."
 			" The rest are compiled on demand; cached programs are kept.", built_total);

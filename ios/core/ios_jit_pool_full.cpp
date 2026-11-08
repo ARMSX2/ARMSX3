@@ -22,6 +22,15 @@ namespace
 {
 	// Set by jit_pool_full while the allocator lock is held; the parker reads it once the lock is released.
 	thread_local bool s_park_after_unlock = false;
+
+	// Lock-free top of the code half. A failed pool keeps its sticky 0x40000000 bit in here, so it reads as full.
+	u64 pool2_code_used()
+	{
+		// Size 0 and align 0 return the code half's base, which is constant for the process.
+		static u8* const base = jit_runtime::alloc(0, 0, true);
+
+		return static_cast<u64>(jit_runtime::peek(true) - base);
+	}
 }
 #endif
 
@@ -95,12 +104,7 @@ bool utils::jit_pool2_refuse_spu_block()
 
 	const u64 limit = utils::g_pool2_code_limit;
 	const u64 reserve = limit < 2 * k_pool2_spu_reserve ? limit / 2 : k_pool2_spu_reserve;
-
-	// Size 0 and align 0 return the code half's base, which is constant for the process.
-	static u8* const base = jit_runtime::alloc(0, 0, true);
-
-	// Lock-free top of the code half. A failed pool keeps its sticky 0x40000000 bit in here, so it reads as full.
-	const u64 position = static_cast<u64>(jit_runtime::peek(true) - base);
+	const u64 position = pool2_code_used();
 
 	if (position + reserve < limit)
 	{
@@ -127,8 +131,18 @@ bool utils::jit_pool2_refuse_spu_block()
 
 	return true;
 }
+
+bool utils::jit_pool2_precompile_full()
+{
+	return pool2_code_used() >= utils::g_pool2_code_limit / 2;
+}
 #else
 bool utils::jit_pool2_refuse_spu_block()
+{
+	return false;
+}
+
+bool utils::jit_pool2_precompile_full()
 {
 	return false;
 }
