@@ -54,6 +54,9 @@ struct InstalledSkin: Identifiable, Hashable {
     private(set) var installed: [InstalledSkin] = []
     private(set) var active: String?
     var browse: BrowseState = .idle
+    // A layout the last installed skin came with, already added to Layouts; the Skins pane offers to use it.
+    var offeredLayout: PadLayoutPreset?
+    static let layoutFile = "layout." + PadLayoutFile.fileExtension
     // nil when the skin lacks the image. Cleared on every switch.
     @ObservationIgnored private var cache: [String: UIImage?] = [:]
 
@@ -128,6 +131,14 @@ struct InstalledSkin: Identifiable, Hashable {
             try files.moveItem(at: staging, to: target)
             let meta = try JSONSerialization.data(withJSONObject: ["name": folder])
             try meta.write(to: target.appendingPathComponent("skin.json"), options: .atomic)
+            // A layout that cannot be read is skipped, and the skin installs as before.
+            let layout = target.appendingPathComponent(Self.layoutFile)
+            if let data = try? Data(contentsOf: layout), let file = try? PadLayoutFile.decode(data, fallbackName: folder) {
+                var preset: PadLayoutPreset?
+                PadLayoutStore.shared.update { preset = $0.installSkinLayout(folder, layout: file.layout) }
+                offeredLayout = preset
+            }
+            try? files.removeItem(at: layout)
             reload()
             setActive(folder)
             return counts
@@ -146,11 +157,17 @@ struct InstalledSkin: Identifiable, Hashable {
         let counts = try SaveDataStore.extractTree(archive, limits: &limits) { entry in
             if entry.hasSuffix("/") { return (staging, "") }   // a folder entry: nothing to write, not counted
             let parts = entry.split(separator: "/").map(String.init)
+            // Finder's zips carry __MACOSX/._name copies of each file, which would overwrite the real layout.
+            if parts.contains(where: { $0 == "__MACOSX" || $0.hasPrefix("._") }) { return nil }
+            if parts.count <= 2, let leaf = parts.last, leaf.lowercased().hasSuffix("." + PadLayoutFile.fileExtension) {
+                return (staging, Self.layoutFile)
+            }
             guard parts.count <= 2, let leaf = parts.last, leaf.lowercased().hasSuffix(".png") else { return nil }
             let stem = String(leaf.dropLast(4))
             return Self.imageNames.contains(stem) ? (staging, stem + ".png") : nil
         }
-        let kept = (try? files.contentsOfDirectory(at: staging, includingPropertiesForKeys: nil)) ?? []
+        let kept = ((try? files.contentsOfDirectory(at: staging, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension == "png" }
         guard !kept.isEmpty else { throw Refusal(message: Self.noImages) }
         for image in kept where UIImage(contentsOfFile: image.path) == nil {
             throw Refusal(message: String(localized: "One of the skin's images couldn't be read."))
@@ -246,7 +263,7 @@ struct SkinsPaneView: View {
                 OverlayActionRow(controllerNavigationID: "settings.skins.import", label: String(localized: "Import skin…"),
                                  systemImage: "square.and.arrow.down") { importing = true }
                     .disabled(busy)
-                Text("A skin is a zip of ic_controller_*.png images. Missing images use the default look. Touch and hold a skin to remove it.")
+                Text("A skin is a zip of ic_controller_*.png images, and can carry a .armsx3pad button layout. Missing images use the default look. Touch and hold a skin to remove it.")
                     .font(.subheadline)
                     .foregroundStyle(OverlayTheme.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -278,6 +295,15 @@ struct SkinsPaneView: View {
         .alert(message ?? "", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
             Button("OK", role: .cancel) {}
         }
+        // Asked only once the message, if any, is gone, so the two never stack.
+        .controllerPrompt(String(localized: "Use this skin's layout?"),
+                          isPresented: Binding(get: { store.offeredLayout != nil && message == nil },
+                                               set: { if !$0 { store.offeredLayout = nil } }),
+                          message: String(localized: "“\(store.offeredLayout?.name ?? "")” comes with its own button layout. It's added to Layouts either way."),
+                          actions: [.init(title: String(localized: "Use This Skin's Layout"), run: {
+                                        if let id = store.offeredLayout?.id { PadLayoutStore.shared.update { $0.shared = .preset(id) } }
+                                    }),
+                                    .init(title: String(localized: "Not Now"), isCancel: true)])
         .alert("Remove “\(removing?.name ?? "")”?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
                presenting: removing) { skin in
             Button("Remove", role: .destructive) { store.remove(skin.id) }
