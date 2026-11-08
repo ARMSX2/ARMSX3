@@ -2437,15 +2437,8 @@ bool VKGSRender::load_program()
 
 		// Load current program from cache
 		// The shader interpreter does not emulate the depth range; compile those programs synchronously instead
-#ifdef __APPLE__
-		// Async Recompiler skips a draw whose pipeline is not ready, and a skipped fill or copy leaves its target unwritten
-		const bool tiny_fp = shadermode == shader_mode::async_recompiler && fragment_program.ucode_length <= sync_compile_max_fp_ucode_bytes;
-		const bool allow_async = shadermode != shader_mode::recompiler &&
-			!(fragment_program.ctrl & RSX_SHADER_CONTROL_EMULATE_DEPTH_RANGE) && !tiny_fp;
-#else
 		const bool allow_async = shadermode != shader_mode::recompiler &&
 			!(fragment_program.ctrl & RSX_SHADER_CONTROL_EMULATE_DEPTH_RANGE);
-#endif
 
 #ifdef __APPLE__
 		const u64 load_started_us = get_system_time();
@@ -2468,7 +2461,7 @@ bool VKGSRender::load_program()
 			if (!allow_async)
 			{
 				m_program_inline++;
-				m_program_inline_tiny += fragment_program.ucode_length <= sync_compile_max_fp_ucode_bytes;
+				m_program_inline_tiny += fragment_program.ucode_length <= tiny_fp_max_ucode_bytes;
 				m_program_inline_us += us;
 				m_program_inline_max_us = std::max(m_program_inline_max_us, us);
 			}

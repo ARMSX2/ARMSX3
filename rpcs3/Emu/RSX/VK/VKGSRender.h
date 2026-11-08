@@ -162,7 +162,7 @@ private:
 	u32 m_async_skipped_draws = 0;
 	u32 m_async_skipped_tiny = 0;
 	u32 m_async_skipped_first_write = 0;
-	static constexpr u32 sync_compile_max_fp_ucode_bytes = 32;
+	static constexpr u32 tiny_fp_max_ucode_bytes = 32;
 
 	// Program loads that missed the cache this frame and how long the RSX thread spent in them, logged in flip()
 	u32 m_program_misses = 0;

@@ -1457,7 +1457,7 @@ bool VKGSRender::end_draw()
 		// Program is not ready, skip drawing this
 #ifdef __APPLE__
 		m_async_skipped_draws++;
-		if (m_ctx->program.fragment_program.ucode_length <= sync_compile_max_fp_ucode_bytes)
+		if (m_ctx->program.fragment_program.ucode_length <= tiny_fp_max_ucode_bytes)
 		{
 			m_async_skipped_tiny++;
 		}
