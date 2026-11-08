@@ -25,6 +25,7 @@ struct GameListView: View {
     @State private var licenceEntry: LibraryCache.Entry?
     @State private var licenceNotice: String?
     @State private var coverEntry: LibraryCache.Entry?
+    @State private var touchLayoutEntry: LibraryCache.Entry?
     @State private var pickingCoverPhoto = false
     @State private var pickingCoverFile = false
     @State private var coverPhoto: PhotosPickerItem?
@@ -139,6 +140,7 @@ struct GameListView: View {
         .alert(licenceNotice ?? "", isPresented: noticeShown) {
             Button("OK", role: .cancel) {}
         }
+        .modifier(TouchLayoutChoice(entry: $touchLayoutEntry))
         .libraryMoveAsk(model)
         .photosPicker(isPresented: $pickingCoverPhoto, selection: $coverPhoto, matching: .images)
         .onChange(of: coverPhoto) { _, item in
@@ -439,6 +441,10 @@ struct GameListView: View {
             title: favourite ? String(localized: "Remove from Favourites") : String(localized: "Add to Favourites"),
             systemImage: favourite ? "star.slash" : "star")]
         items.append(GameLibraryControllerMenuItem(action: .perGameSettings, title: "Game Settings", systemImage: "slider.horizontal.3"))
+        // A layout is kept by serial, so a game without one has nothing to choose.
+        if PadLayoutLibrary.key(entry.serial) != nil {
+            items.append(GameLibraryControllerMenuItem(action: .touchLayout, title: "Touch Layout", systemImage: "hand.tap"))
+        }
         items.append(GameLibraryControllerMenuItem(action: .patches, title: "Patches", systemImage: "bandage"))
         if GameUpdates.titleID(entry.serial) != nil {
             items.append(GameLibraryControllerMenuItem(action: .checkForUpdate, title: "Check for Update", systemImage: "arrow.down.app"))
@@ -531,6 +537,8 @@ struct GameListView: View {
             addLicence(for: entry)
         case .perGameSettings:
             sheet = .gameSettings(serial: entry.serial, title: entry.title)
+        case .touchLayout:
+            touchLayoutEntry = entry
         case .patches:
             sheet = .patches(serial: entry.serial, title: entry.title)
         case .checkForUpdate:
@@ -684,4 +692,28 @@ extension View {
 struct PlayRequest: Identifiable {
     let id = UUID()
     let game: Rpcs3GameEntry
+}
+
+// Which touch layout a game uses, chosen before it starts.
+private struct TouchLayoutChoice: ViewModifier {
+    @Binding var entry: LibraryCache.Entry?
+
+    func body(content: Content) -> some View {
+        let library = PadLayoutStore.shared.library
+        let serial = entry?.serial
+        content.controllerPrompt(String(localized: "Touch Layout"),
+                                 isPresented: Binding(get: { entry != nil }, set: { if !$0 { entry = nil } }),
+                                 message: String(localized: "“\(entry?.title ?? "")” uses \(library.name(of: library.choice(for: serial)))."),
+                                 actions: actions(library, serial: serial))
+    }
+
+    private func actions(_ library: PadLayoutLibrary, serial: String?) -> [ControllerPrompt.Action] {
+        let choices = library.choices + (library.exists(.game, serial: serial) ? [.game] : [])
+        let pin = { (choice: PadLayoutChoice?) in
+            PadLayoutStore.shared.update { $0.pin(serial, to: choice) }
+        }
+        return [.init(title: String(localized: "Same as All Games"), run: { pin(nil) })]
+            + choices.map { choice in .init(title: library.name(of: choice), run: { pin(choice) }) }
+            + [.init(title: String(localized: "Cancel"), isCancel: true)]
+    }
 }
