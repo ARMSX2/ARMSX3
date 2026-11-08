@@ -127,6 +127,7 @@ struct GameListView: View {
                 }
             }
         }
+        .preference(key: LibraryMenuOpenKey.self, value: contextEntry != nil)
         // The capture's events are the menu's; every other event belongs to the grid's scope.
         .onChange(of: controllerInput?.latestEvent) { _, event in
             guard let event, event.captureOwner == MenuControllerNavigationCaptureOwner.gameLibraryPresentation else { return }
@@ -605,6 +606,15 @@ struct GameListView: View {
         case "": return nil
         default: return entry.category
         }
+    }
+}
+
+// The menu tab's bar draws above the library, so it steps aside while a game's menu is open.
+struct LibraryMenuOpenKey: PreferenceKey {
+    static let defaultValue = false
+
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
+        value = value || nextValue()
     }
 }
 
