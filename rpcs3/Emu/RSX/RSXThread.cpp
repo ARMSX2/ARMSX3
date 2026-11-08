@@ -139,12 +139,12 @@ namespace rsx
 				else
 				{
 					// Division operator
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 					// The shader reads floor((index - base) / frequency), so rounding up here over-read
 					const u32 max = max_index / attrib.frequency;
 #endif
 					_min_index = std::min(_min_index, first / attrib.frequency);
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 					_max_index = std::max<u32>(_max_index, max);
 					max_result_by_division = std::max<u32>(max_result_by_division, max);
 #else
@@ -153,7 +153,7 @@ namespace rsx
 
 					if (freq_count > 0 && freq_count != umax)
 					{
-#ifndef __APPLE__
+#if !defined(__APPLE__) && !defined(__ANDROID__)
 						const u32 max = utils::aligned_div(max_index, attrib.frequency);
 						max_result_by_division = std::max<u32>(max_result_by_division, max);
 
@@ -194,7 +194,7 @@ namespace rsx
 				break;
 			}
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 			// The modulo pass only raises the maximum; seeded from 0 it dropped what divided attributes need.
 			_max_index = max_result_by_division;
 #else
