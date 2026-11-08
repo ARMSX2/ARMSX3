@@ -32,6 +32,10 @@ import SwiftUI
         didSet { defaults.set(padOpacity, forKey: Self.key("padOpacity")) }
     }
 
+    var padVibrates: Bool {
+        didSet { defaults.set(padVibrates, forKey: Self.key("padVibrates")) }
+    }
+
     var backgroundDim: Double {
         didSet { defaults.set(backgroundDim, forKey: Self.key("backgroundDim")) }
     }
@@ -263,6 +267,7 @@ import SwiftUI
             .flatMap { try? JSONDecoder().decode(DynamicAppearancePreferences.self, from: $0) } ?? .standard
         backgroundDim = min(max(double("backgroundDim", 0), 0), 1)
         padOpacity = min(max(double("padOpacity", 0.75), 0.2), 1)
+        padVibrates = bool("padVibrates", true)
         func asset(_ member: String) -> BackgroundAsset? {
             defaults.data(forKey: Self.key(member)).flatMap { try? JSONDecoder().decode(BackgroundAsset.self, from: $0) }
         }
