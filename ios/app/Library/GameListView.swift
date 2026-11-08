@@ -24,6 +24,7 @@ struct GameListView: View {
     @State private var lockedEntry: LibraryCache.Entry?
     @State private var licenceEntry: LibraryCache.Entry?
     @State private var licenceNotice: String?
+    @State private var clearingCacheEntry: LibraryCache.Entry?
     @State private var coverEntry: LibraryCache.Entry?
     @State private var touchLayoutEntry: LibraryCache.Entry?
     @State private var pickingCoverPhoto = false
@@ -65,6 +66,12 @@ struct GameListView: View {
                     Button("Cancel", role: .cancel) {}
                 } message: { _ in
                     Text("Pick the game's .rap licence file. It is matched to this game whatever the file is called.")
+                }
+                .alert("Clear this game's cache?", isPresented: clearingCacheShown, presenting: clearingCacheEntry) { entry in
+                    Button("Clear", role: .destructive) { Task { await clearCache(for: entry) } }
+                    Button("Cancel", role: .cancel) {}
+                } message: { _ in
+                    Text("Its compiled PPU, SPU and shader caches are removed and built again on its next boot, which takes a while. Saves are kept.")
                 }
                 .background { backdrop }
                 // The system presents this picker itself: embedded in a sheet, its Open button did nothing for a folder.
@@ -465,6 +472,7 @@ struct GameListView: View {
         if entry.locked == true {
             items.append(GameLibraryControllerMenuItem(action: .addLicence, title: "Add licence…", systemImage: "key"))
         }
+        items.append(GameLibraryControllerMenuItem(action: .clearGameCache, title: "Clear Game Cache", systemImage: "arrow.counterclockwise"))
         // Only a title installed into dev_hdd0 can be uninstalled; a disc folder or an ISO is the player's.
         if !entry.fromGamesYml && entry.category == "HG" {
             items.append(GameLibraryControllerMenuItem(action: .deleteGame, title: "Uninstall", systemImage: "trash"))
@@ -483,6 +491,22 @@ struct GameListView: View {
 
     private var noticeShown: Binding<Bool> {
         Binding(get: { licenceNotice != nil }, set: { if !$0 { licenceNotice = nil } })
+    }
+
+    private var clearingCacheShown: Binding<Bool> {
+        Binding(get: { clearingCacheEntry != nil }, set: { if !$0 { clearingCacheEntry = nil } })
+    }
+
+    private func clearCache(for entry: LibraryCache.Entry) async {
+        licenceNotice = Self.describe(clearedCache: await Rpcs3Bridge.clearGameCache(withSerial: entry.serial))
+    }
+
+    static func describe(clearedCache status: Int) -> String {
+        switch status {
+        case 0: return String(localized: "Game cache cleared. It is built again the next time the game boots.")
+        case -9: return String(localized: "Stop the game first")
+        default: return String(localized: "The cache wasn't cleared (status \(status))")
+        }
     }
 
     private func addLicence(for entry: LibraryCache.Entry) {
@@ -552,6 +576,8 @@ struct GameListView: View {
             sheet = .trophies(titleDir: entry.bootPath, title: entry.title)
         case .deleteGame:
             sheet = .uninstall(serial: entry.serial, title: entry.title)
+        case .clearGameCache:
+            clearingCacheEntry = entry
         case .chooseCoverPhoto:
             coverEntry = entry
             pickingCoverPhoto = true

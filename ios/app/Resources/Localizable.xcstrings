@@ -1808,6 +1808,36 @@
         }
       }
     },
+    "Clear" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear"
+          }
+        }
+      }
+    },
+    "Clear Game Cache" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear Game Cache"
+          }
+        }
+      }
+    },
+    "Clear this game's cache?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear this game's cache?"
+          }
+        }
+      }
+    },
     "CPU/SPU" : {
       "localizations" : {
         "en" : {
@@ -4535,6 +4565,16 @@
         }
       }
     },
+    "Game cache cleared. It is built again the next time the game boots." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Game cache cleared. It is built again the next time the game boots."
+          }
+        }
+      }
+    },
     "GNU General Public License v2.0" : {
       "localizations" : {
         "en" : {
@@ -5190,6 +5230,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "It isn't a settings file ARMSX3 can read. Pick a .yml settings file from RPCS3 or ARMSX3."
+          }
+        }
+      }
+    },
+    "Its compiled PPU, SPU and shader caches are removed and built again on its next boot, which takes a while. Saves are kept." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Its compiled PPU, SPU and shader caches are removed and built again on its next boot, which takes a while. Saves are kept."
           }
         }
       }
@@ -10071,6 +10121,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "The %@ update is removed first."
+          }
+        }
+      }
+    },
+    "The cache wasn't cleared (status %lld)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The cache wasn't cleared (status %lld)"
           }
         }
       }
