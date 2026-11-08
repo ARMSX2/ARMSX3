@@ -334,9 +334,22 @@ namespace glsl
 			// Import vertex header
 			program_common::define_glsl_switches(OS, enabled_options);
 
+#ifdef __APPLE__
+			{
+				// The no-fp64 fallback compresses clip Z where window Z is meant, which flattens perspective draws above depth 1 onto one depth
+				constexpr std::string_view prologue =
+					#include "GLSLSnippets/RSXProg/RSXVertexPrologue.glsl"
+				;
+				constexpr std::string_view clip_z = "(pos.z - near_plane)";
+				constexpr usz clip_z_at = prologue.find(clip_z);
+				static_assert(clip_z_at != std::string_view::npos);
+				OS << prologue.substr(0, clip_z_at) << "(d - near_plane)" << prologue.substr(clip_z_at + clip_z.size());
+			}
+#else
 			OS <<
 				#include "GLSLSnippets/RSXProg/RSXVertexPrologue.glsl"
 			;
+#endif
 
 			return;
 		}
