@@ -1411,7 +1411,7 @@ bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)
 				for (auto i = 0ull; i < texture_array.size(); ++i)
 				{
 					const auto& tex = texture_array[i];
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 					// A disabled slot keeps a stale offset, and the throwing get_address would end the RSX thread
 					if (!tex.enabled())
 					{
@@ -1469,7 +1469,7 @@ bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)
 		resources->surface_cache.trim(*m_current_command_buffer, severity);
 	}
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 	// A surface-cache relief can destroy views bound descriptors use, so mark every such slot dirty at any severity
 	if (surface_cache_relieved)
 	{
@@ -3138,7 +3138,7 @@ void VKGSRender::close_and_submit_command_buffer(vk::fence* pFence, VkSemaphore 
 
 bool VKGSRender::is_framebuffer_bound() const
 {
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 	// A retired framebuffer does not count as bound, so on_framebuffer_bound rebuilds it
 	return m_draw_fbo && !m_draw_fbo->retired;
 #else
@@ -3148,7 +3148,7 @@ bool VKGSRender::is_framebuffer_bound() const
 
 bool VKGSRender::on_framebuffer_bound(const rsx::framebuffer_layout& layout)
 {
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 	if (m_draw_fbo && m_draw_fbo->retired)
 	{
 		// Nulling the pointer defeats the ignore_change early return; release while the holder is alive

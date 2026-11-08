@@ -40,7 +40,7 @@ namespace vk
 			auto& queue = found->second;
 			for (const auto& fbo : queue)
 			{
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 				if (!fbo->retired && fbo->matches(image_list, width, height))
 #else
 				if (fbo->matches(image_list, width, height))
@@ -83,7 +83,7 @@ namespace vk
 			auto& queue = found->second;
 			for (const auto& e : queue)
 			{
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 				if (!e->retired && e->attachments[0]->info.image == attachment)
 #else
 				if (e->attachments[0]->info.image == attachment)
@@ -117,7 +117,7 @@ namespace vk
 		for (auto It = g_framebuffers_cache.begin(); It != g_framebuffers_cache.end();)
 		{
 			It->second.erase(
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 				std::remove_if(It->second.begin(), It->second.end(), [&](const auto& fbo)
 				{
 					if (!criteria(fbo))

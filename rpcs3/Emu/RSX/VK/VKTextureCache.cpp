@@ -503,7 +503,7 @@ namespace vk
 		}
 		baseclass::clear();
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 		// Not held across baseclass::clear(), whose disposals take the same lock.
 		std::lock_guard lock(m_cached_pool_lock);
 #endif
@@ -1786,7 +1786,7 @@ namespace vk
 		}
 
 		// Nuke temporary resources. They will still be visible to the GPU.
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 		// The driver thread pushes into the pool under its lock, so swap it out and dispose outside it.
 		auto gc = vk::get_resource_manager();
 		std::deque<cached_image_t> released_images;
@@ -1832,7 +1832,7 @@ namespace vk
 			purge_unreleased_sections();
 		}
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 		if (std::lock_guard lock(m_cached_pool_lock);
 			m_cached_images.size() > max_cached_image_pool_size ||
 			m_cached_memory_size > 256 * 0x100000)
@@ -1943,7 +1943,7 @@ namespace vk
 
 	u32 texture_cache::get_unreleased_textures_count() const
 	{
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 		// Taken after the baseclass call, so this never holds it while the base takes its own.
 		const u32 base_count = baseclass::get_unreleased_textures_count();
 		reader_lock lock(m_cached_pool_lock);

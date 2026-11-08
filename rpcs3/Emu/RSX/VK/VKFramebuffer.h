@@ -7,7 +7,7 @@ namespace vk
 	struct framebuffer_holder : public vk::framebuffer, public rsx::ref_counted
 	{
 		using framebuffer::framebuffer;
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 		// Set under the cache lock when an image dies while the holder is still referenced; read unlocked
 		atomic_t<bool> retired = false;
 #endif
