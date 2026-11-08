@@ -1828,6 +1828,11 @@ public:
 #endif
 
 #endif
+#if defined(__ANDROID__) && defined(ARCH_ARM64)
+			// Cached objects are counted and checked, and a module that still bakes a host
+			// address runs but is never written (JITLLVM.cpp, module_bakes_host_address).
+			m_jit.set_obj_cache_stats(&m_spurt->obj_cache_stats);
+#endif
 			const auto md_name = llvm::MDString::get(m_context, "branch_weights");
 			const auto md_low = llvm::ValueAsMetadata::get(llvm::ConstantInt::get(GetType<u32>(), 1));
 			const auto md_high = llvm::ValueAsMetadata::get(llvm::ConstantInt::get(GetType<u32>(), 999));
@@ -2020,6 +2025,17 @@ public:
 			// The PPU side already learned this and versions its objects (v8-kusa -> v9-kusa
 			// after the XER fix). Bump this letter whenever ARM64 SPU codegen changes semantics.
 			fmt::append(m_hash, "__spu-a-0x%05x-%s", func.entry_point, fmt::base57(output));
+
+#if defined(__ANDROID__) && defined(ARCH_ARM64)
+			// The name is also the persistent object cache's only key per function, and the code
+			// emitted for it depends on where the function's code starts as well (compile() begins
+			// at m_pos = lower_bound). The same bytes and entry with a different start would share
+			// one cached object, so a start other than the entry is part of the name.
+			if (func.lower_bound != func.entry_point)
+			{
+				fmt::append(m_hash, "-lb%05x", func.lower_bound);
+			}
+#endif
 
 #ifdef ARCH_ARM64
 			// The ARM64 retry recompiles the SAME guest function with different codegen -- it
@@ -4619,7 +4635,17 @@ public:
 				}
 				else if (const std::string& obj_cache = m_spurt->get_obj_cache_path(); !obj_cache.empty())
 				{
-					// DISABLED: cached SPU objects are not safe to reuse across processes on ARM64.
+					// ON again since 11-08, with the cause below fixed. Every host address the
+					// recompiler used to bake (g_timebase_offs in RDCH and WRCH SPU_RdDec/SPU_WrDec,
+					// vm::g_pages in WRCH's MFC check and the Killzone 3 guard in A) now goes
+					// through host_data_ptr, a relocatable global resolved when the object loads,
+					// from Jeen's iOS port (231adcea6). As a backstop, JITLLVM.cpp walks each
+					// module's IR before writing it and never writes one that still turns a
+					// constant in [2^32, 2^48) into a pointer, and checks every object it reads
+					// back. ARMSX3_SPU_OBJ_CACHE=0 in driver_env.txt turns the cache off.
+					//
+					// What it was disabled for: cached SPU objects were not safe to reuse across
+					// processes on ARM64.
 					//
 					// This branch used to call the cache-less try_add overload, so ARM64 never wrote
 					// SPU objects at all and recompiled every session. Passing obj_cache here made it
@@ -4643,7 +4669,7 @@ public:
 					// two more places -- so the cache is only sound once every such site goes through
 					// a relocatable symbol instead of IntToPtr(getInt64(...)). Until then, correctness
 					// over the boot time: recompile per session, as ARM64 always did before.
-#if defined(__APPLE__) && defined(ARCH_ARM64)
+#if (defined(__APPLE__) || defined(__ANDROID__)) && defined(ARCH_ARM64)
 					// Every host address goes through host_data_ptr here, so the cached object is safe to load
 					added = m_jit.try_add(std::move(_module), obj_cache, llvm_error);
 #else
@@ -5623,7 +5649,7 @@ public:
 #if defined(ARCH_X64) || defined(ARCH_ARM64)
 			if (utils::get_tsc_freq() && !(g_cfg.core.spu_loop_detection) && (g_cfg.core.clocks_scale == 100))
 			{
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 				const auto timebase_offs = m_ir->CreateLoad(get_type<u64>(), host_data_ptr("spu_host_g_timebase_offs", &g_timebase_offs));
 #else
 				const auto timebase_offs = m_ir->CreateLoad(get_type<u64>(), m_ir->CreateIntToPtr(m_ir->getInt64(reinterpret_cast<u64>(&g_timebase_offs)), get_type<u64*>()));
@@ -6265,7 +6291,7 @@ public:
 							? (vm::page_readable | vm::page_allocated)
 							: (vm::page_writable | vm::page_allocated);
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 						const auto pages = host_data_ptr("spu_host_vm_g_pages", vm::g_pages.data());
 #else
 						const auto pages = m_ir->CreateIntToPtr(
@@ -6570,7 +6596,7 @@ public:
 #if defined(ARCH_X64) || defined(ARCH_ARM64)
 			if (utils::get_tsc_freq() && !(g_cfg.core.spu_loop_detection) && (g_cfg.core.clocks_scale == 100))
 			{
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 				const auto timebase_offs = m_ir->CreateLoad(get_type<u64>(), host_data_ptr("spu_host_g_timebase_offs", &g_timebase_offs));
 #else
 				const auto timebase_offs = m_ir->CreateLoad(get_type<u64>(), m_ir->CreateIntToPtr(m_ir->getInt64(reinterpret_cast<u64>(&g_timebase_offs)), get_type<u64*>()));
@@ -6925,7 +6951,7 @@ public:
 			spu_log.notice("Killzone 3: KD-tree traversal guard compiled in at LS 0x21238 (%s)", Emu.GetTitleID());
 
 			const auto ea = eval(extract(get_vr(op.rt), 3)).value;
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 			const auto pages = host_data_ptr("spu_host_vm_g_pages", vm::g_pages.data());
 #else
 			const auto pages = m_ir->CreateIntToPtr(
@@ -11682,11 +11708,11 @@ public:
 		return func;
 	}
 
-#ifdef __APPLE__
-	// A host data address the cached object can carry: a relocatable global on Apple ARM64
+#if defined(__APPLE__) || defined(__ANDROID__)
+	// A host data address the cached object can carry: a relocatable global on ARM64 (Apple and Android)
 	llvm::Value* host_data_ptr(const char* name, const void* addr)
 	{
-#if defined(__APPLE__) && defined(ARCH_ARM64)
+#if (defined(__APPLE__) || defined(__ANDROID__)) && defined(ARCH_ARM64)
 		m_engine->updateGlobalMapping(name, reinterpret_cast<u64>(addr));
 		return m_module->getOrInsertGlobal(name, get_type<u8>());
 #else

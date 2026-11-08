@@ -43,6 +43,11 @@
 #include "ios_jit_dual_map.h"
 #include "ios_jit_pool_full.h"
 #endif
+#ifdef __ANDROID__
+#include "rpcs3_version.h"
+#include <elf.h>
+#include <link.h>
+#endif
 
 const extern spu_decoder<spu_itype> g_spu_itype;
 const extern spu_decoder<spu_iname> g_spu_iname;
@@ -1694,7 +1699,7 @@ void spu_cache::initialize(bool build_existing_cache)
 	}
 
 	spu_log.notice("SPU Runtime: Workers built %u programs.", built_total);
-#if defined(__APPLE__) && defined(ARCH_ARM64)
+#if (defined(__APPLE__) || defined(__ANDROID__)) && defined(ARCH_ARM64)
 	// Whether this boot's precompile hit the object cache
 	if (const auto spurt = g_fxo->try_get<spu_runtime>(); spurt && !spurt->get_obj_cache_path().empty())
 	{
@@ -1779,6 +1784,159 @@ bool spu_program::operator<(const spu_program& rhs) const noexcept
 	return lhs_offs < rhs_offs;
 }
 
+#ifdef __ANDROID__
+// Why this boot must not use the persistent SPU object cache, or null.
+//
+// The debug levers below change which code is compiled or what it contains, and none of them is
+// part of the cache key, so with the cache on an object built without the lever would quietly
+// run in its place and the lever would seem to do nothing. Each counts as set the way its own
+// reader decides it (any value but empty or "0"). ARMSX3_SPU_OBJ_CACHE=0 in driver_env.txt turns
+// the cache off without a new build.
+static const char* spu_obj_cache_off_reason()
+{
+	const auto set = [](const char* v)
+	{
+		return v && *v && !(v[0] == '0' && v[1] == '\0');
+	};
+
+	if (const char* v = std::getenv("ARMSX3_SPU_OBJ_CACHE"); v && v[0] == '0')
+	{
+		return "ARMSX3_SPU_OBJ_CACHE=0";
+	}
+
+	for (const char* lever : {"ARMSX3_SPU_INTERP", "ARMSX3_SPU_INTERP_RANGE", "ARMSX3_SPU_TRAP_PC", "ARMSX3_SHUFB_CHECK", "ARMSX3_SHUFB_SKIP"})
+	{
+		if (set(std::getenv(lever)))
+		{
+			return lever;
+		}
+	}
+
+	return nullptr;
+}
+
+// The GNU build ID of the library this code is linked into, as hex, or empty when it has none.
+// The linker derives it from the library's contents, so every changed build gets a new one,
+// including a test build made from uncommitted changes, which shares its commit with the build
+// before it. Folded into the object cache key, it keeps objects from one binary away from any
+// other: the SPU codegen also lives in files that hold no build stamp of their own
+// (JITLLVM.cpp, CPUTranslator.cpp, the AArch64 GHC pass).
+static std::string spu_obj_cache_build_id()
+{
+	struct search_t
+	{
+		uptr addr;
+		std::string id;
+	} search{reinterpret_cast<uptr>(&spu_obj_cache_build_id), {}};
+
+	dl_iterate_phdr([](dl_phdr_info* info, usz, void* arg) -> int
+	{
+		auto& s = *static_cast<search_t*>(arg);
+		bool ours = false;
+
+		for (u32 i = 0; i < info->dlpi_phnum; i++)
+		{
+			const auto& ph = info->dlpi_phdr[i];
+
+			if (ph.p_type == PT_LOAD && s.addr >= info->dlpi_addr + ph.p_vaddr && s.addr < info->dlpi_addr + ph.p_vaddr + ph.p_memsz)
+			{
+				ours = true;
+				break;
+			}
+		}
+
+		if (!ours)
+		{
+			return 0;
+		}
+
+		for (u32 i = 0; i < info->dlpi_phnum; i++)
+		{
+			const auto& ph = info->dlpi_phdr[i];
+
+			if (ph.p_type != PT_NOTE)
+			{
+				continue;
+			}
+
+			const u8* p = reinterpret_cast<const u8*>(info->dlpi_addr + ph.p_vaddr);
+			const u8* const end = p + ph.p_memsz;
+
+			while (p + sizeof(ElfW(Nhdr)) <= end)
+			{
+				const auto& nh = *reinterpret_cast<const ElfW(Nhdr)*>(p);
+				const u8* const name = p + sizeof(ElfW(Nhdr));
+				const u8* const desc = name + ((nh.n_namesz + 3) & ~3u);
+				const u8* const next = desc + ((nh.n_descsz + 3) & ~3u);
+
+				if (next > end)
+				{
+					break;
+				}
+
+				if (nh.n_type == NT_GNU_BUILD_ID && nh.n_namesz == 4 && std::memcmp(name, "GNU", 4) == 0)
+				{
+					for (u32 j = 0; j < nh.n_descsz; j++)
+					{
+						fmt::append(s.id, "%02x", desc[j]);
+					}
+
+					return 1;
+				}
+
+				p = next;
+			}
+		}
+
+		return 1;
+	}, &search);
+
+	return search.id;
+}
+
+// The g_cfg values folded into the object cache key, packed bit for bit. The key is made once at
+// boot, but a setting can still change during play (Accurate RSX reservation access is dynamic),
+// and code compiled after such a change must neither be written under the boot key nor mixed with
+// objects built under it. Keep this in step with the folds in the spu_runtime ctor.
+static u64 spu_obj_cache_settings()
+{
+	return
+		(static_cast<u64>(g_cfg.core.spu_xfloat_accuracy.get()) & 0x7) << 0 |
+		(static_cast<u64>(g_cfg.core.spu_block_size.get()) & 0x7) << 3 |
+		(static_cast<u64>(g_cfg.core.clocks_scale.get()) & 0xfff) << 6 |
+		(static_cast<u64>(g_cfg.core.mfc_transfers_shuffling.get()) & 0x1f) << 18 |
+		(static_cast<u64>(g_cfg.core.spu_decoder.get()) & 0x7) << 23 |
+		static_cast<u64>(g_cfg.core.use_accurate_dfma.get()) << 26 |
+		static_cast<u64>(g_cfg.core.spu_accurate_reservations.get()) << 27 |
+		static_cast<u64>(g_cfg.core.spu_accurate_dma.get()) << 28 |
+		static_cast<u64>(g_cfg.core.spu_prof.get()) << 29 |
+		static_cast<u64>(g_cfg.core.spu_verification.get()) << 30 |
+		static_cast<u64>(g_cfg.core.precise_spu_verification.get()) << 31 |
+		static_cast<u64>(g_cfg.core.spu_loop_detection.get()) << 32 |
+		static_cast<u64>(g_cfg.core.mfc_debug.get()) << 33 |
+		static_cast<u64>(g_cfg.core.rsx_accurate_res_access.get()) << 34 |
+		static_cast<u64>(g_cfg.savestate.compatible_mode.get()) << 35;
+}
+
+const std::string& spu_runtime::get_obj_cache_path() const
+{
+	if (!m_obj_cache_path.empty() && spu_obj_cache_settings() != m_obj_cache_settings)
+	{
+		static atomic_t<bool> s_told = false;
+
+		if (!s_told.exchange(true))
+		{
+			spu_log.notice("SPU object cache off for the rest of this session: a setting in its key changed during play");
+		}
+
+		static const std::string s_none;
+		return s_none;
+	}
+
+	return m_obj_cache_path;
+}
+
+#endif
 spu_runtime::spu_runtime()
 {
 	// Drop the previous session's failed-block set.
@@ -1838,7 +1996,7 @@ spu_runtime::spu_runtime()
 		// so they fault as soon as a later process maps things elsewhere. Disabling the write is
 		// not enough on its own -- what is already on disk would still be read back.
 		constexpr u32 SPU_OBJ_CACHE_VERSION = 3;
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 		// One big executable builds over 20000 objects; over the cap only the oldest go
 		constexpr usz SPU_OBJ_CACHE_MAX_FILES = 40000;
 		constexpr usz SPU_OBJ_CACHE_KEEP_FILES = 30000;
@@ -1951,6 +2109,33 @@ spu_runtime::spu_runtime()
 		sha1_update(&ctx, reinterpret_cast<const u8*>(s_jit_codegen.data()), s_jit_codegen.size());
 
 #endif
+#ifdef __ANDROID__
+		// Also in the Android key since the cache started writing (11-08):
+		// - the JIT feature bits not folded above: setMAttrs also reads SVE, SVE2 and SHA512
+		//   (+sha3 needs SHA512 as well as SHA3, JITLLVM.cpp), so a card moved to another
+		//   phone gets its own dir;
+		// - the SPU decoder, which changes spu_interpreter.obj (the interpreter it builds);
+		// - the app's commit, so a build whose JIT setup (JITLLVM.cpp) or translator helpers
+		//   (CPUTranslator.cpp) changed never reads objects an older build wrote, even when
+		//   neither file holding a build stamp was recompiled.
+		const u32 hw2 =
+			(static_cast<u32>(utils::has_sve())    << 0) |
+			(static_cast<u32>(utils::has_sve2())   << 1) |
+			(static_cast<u32>(utils::has_sha512()) << 2);
+		fold(hw2);
+		const u32 spu_decoder = static_cast<u32>(g_cfg.core.spu_decoder.get());
+		fold(spu_decoder);
+		m_obj_cache_settings = spu_obj_cache_settings();
+		const auto [app_commit, app_hash] = rpcs3::get_commit_and_hash();
+		sha1_update(&ctx, reinterpret_cast<const u8*>(app_commit.data()), app_commit.size());
+		sha1_update(&ctx, reinterpret_cast<const u8*>(app_hash.data()), app_hash.size());
+
+		// The exact binary as well (see spu_obj_cache_build_id).
+		const std::string build_id = spu_obj_cache_build_id();
+		sha1_update(&ctx, reinterpret_cast<const u8*>(build_id.data()), build_id.size());
+		spu_log.notice("SPU object cache key: build %s, commit %s-%s", build_id.empty() ? "(no build ID)" : build_id, app_commit, app_hash);
+
+#endif
 		sha1_finish(&ctx, key);
 
 		m_obj_cache_path = m_cache_path + fmt::format("spuobj-v%u-%s/", SPU_OBJ_CACHE_VERSION, fmt::base57(key, 16));
@@ -2019,10 +2204,11 @@ spu_runtime::spu_runtime()
 		{
 			// Bounded storage. Counted once here, single-threaded, before any compile worker
 			// starts writing; the writers share no index and never evict, so a mid-session
-			// count would race. Over the cap the whole keyed dir is dropped and rebuilt rather
-			// than evicting piecemeal -- there is no recency information to evict on.
+			// count would race. Over the cap the objects written longest ago go first, by the
+			// file's write time, down to the keep count, so a title with more objects than the
+			// cap does not drop and rebuild its whole cache on every boot.
 			usz file_count = 0;
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 			// The write time of each object, so the oldest can go first.
 			std::vector<std::pair<s64, std::string>> objects;
 #endif
@@ -2032,7 +2218,7 @@ spu_runtime::spu_runtime()
 				if (!entry.is_directory)
 				{
 					file_count++;
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 					objects.emplace_back(entry.mtime, entry.name);
 #endif
 				}
@@ -2040,7 +2226,7 @@ spu_runtime::spu_runtime()
 
 			if (file_count > SPU_OBJ_CACHE_MAX_FILES)
 			{
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 				std::sort(objects.begin(), objects.end());
 				const usz drop = file_count - SPU_OBJ_CACHE_KEEP_FILES;
 
@@ -2060,6 +2246,29 @@ spu_runtime::spu_runtime()
 
 			spu_log.notice("SPU object cache: %s (%u files)", m_obj_cache_path, file_count);
 		}
+
+#ifdef __ANDROID__
+		// Saves come before the cache: on a nearly full card a failed save is fatal, and the
+		// cache writes a file for every new block during play, so below this much free space
+		// the boot compiles as before and writes nothing.
+		constexpr u64 SPU_OBJ_CACHE_MIN_FREE = 2ull << 30;
+		fs::device_stat free_stat{};
+
+		if (!m_obj_cache_path.empty())
+		{
+			if (const char* why = spu_obj_cache_off_reason())
+			{
+				spu_log.notice("SPU object cache off for this boot: %s is set", why);
+				m_obj_cache_path.clear();
+			}
+			else if (!fs::statfs(m_obj_cache_path, free_stat) || free_stat.avail_free < SPU_OBJ_CACHE_MIN_FREE)
+			{
+				spu_log.notice("SPU object cache off for this boot: %u MB free, under the %u MB it keeps for saves",
+					free_stat.avail_free >> 20, SPU_OBJ_CACHE_MIN_FREE >> 20);
+				m_obj_cache_path.clear();
+			}
+		}
+#endif
 	}
 #endif
 }

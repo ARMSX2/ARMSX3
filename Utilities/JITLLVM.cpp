@@ -56,7 +56,7 @@ LOG_CHANNEL(jit_log, "JIT");
 #include "llvm/ExecutionEngine/JITEventListener.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Object/SymbolSize.h"
-#if defined(__APPLE__) && defined(ARCH_ARM64)
+#if (defined(__APPLE__) || defined(__ANDROID__)) && defined(ARCH_ARM64)
 #include "llvm/ADT/StringSet.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
@@ -884,7 +884,7 @@ struct mapped_object final : llvm::MemoryBuffer
 };
 #endif
 
-#if defined(__APPLE__) && defined(ARCH_ARM64)
+#if (defined(__APPLE__) || defined(__ANDROID__)) && defined(ARCH_ARM64)
 // SPU object cache checks. All but the gzip trailer check run only for compilers that carry stats.
 
 // unzip returns a zero-padded buffer on an inflate error, so check the gzip trailer's CRC32 and size.
@@ -1087,7 +1087,7 @@ class ObjectCache final : public llvm::ObjectCache
 {
 	const std::string& m_path;
 	const std::add_pointer_t<jit_compiler> m_compiler = nullptr;
-#if defined(__APPLE__) && defined(ARCH_ARM64)
+#if (defined(__APPLE__) || defined(__ANDROID__)) && defined(ARCH_ARM64)
 	// Cleared by getObject when the module bakes a host address; one ObjectCache per add().
 	bool m_persist = true;
 #endif
@@ -1109,7 +1109,7 @@ public:
 		//fs::file(name, fs::rewrite).write(obj.getBufferStart(), obj.getBufferSize());
 		name.append(".gz");
 
-#if defined(__APPLE__) && defined(ARCH_ARM64)
+#if (defined(__APPLE__) || defined(__ANDROID__)) && defined(ARCH_ARM64)
 		jit_obj_cache_stats* const stats = m_compiler ? m_compiler->get_obj_cache_stats() : nullptr;
 
 		// getObject found a baked host address: the module runs but is not written
@@ -1130,7 +1130,7 @@ public:
 		if (!obj.getBufferSize())
 		{
 			jit_log.error("LLVM: Nothing to write: %s", name);
-#if defined(__APPLE__) && defined(ARCH_ARM64)
+#if (defined(__APPLE__) || defined(__ANDROID__)) && defined(ARCH_ARM64)
 			failed();
 #endif
 			return;
@@ -1143,7 +1143,7 @@ public:
 		if (!module_file.open((name)))
 		{
 			jit_log.error("LLVM: Failed to create module file: %s (%s)", name, fs::g_tls_error);
-#if defined(__APPLE__) && defined(ARCH_ARM64)
+#if (defined(__APPLE__) || defined(__ANDROID__)) && defined(ARCH_ARM64)
 			failed();
 #endif
 			return;
@@ -1155,7 +1155,7 @@ public:
 		if (!m_compiler->add_sub_disk_space(0 - max_size))
 		{
 			jit_log.error("LLVM: Failed to create module file: %s (not enough disk space left)", name);
-#if defined(__APPLE__) && defined(ARCH_ARM64)
+#if (defined(__APPLE__) || defined(__ANDROID__)) && defined(ARCH_ARM64)
 			failed();
 #endif
 			return;
@@ -1164,7 +1164,7 @@ public:
 		if (!zip(obj.getBufferStart(), obj.getBufferSize(), module_file.file))
 		{
 			jit_log.error("LLVM: Failed to compress module: %s", std::string(_module->getName()));
-#if defined(__APPLE__) && defined(ARCH_ARM64)
+#if (defined(__APPLE__) || defined(__ANDROID__)) && defined(ARCH_ARM64)
 			failed();
 #endif
 			return;
@@ -1174,7 +1174,7 @@ public:
 
 		// Restore space that was overestimated
 		ensure(m_compiler->add_sub_disk_space(max_size - module_file.file.size()));
-#if defined(__APPLE__) && defined(ARCH_ARM64)
+#if (defined(__APPLE__) || defined(__ANDROID__)) && defined(ARCH_ARM64)
 		// A failed rename leaves no object under the final name, so it is logged and counted.
 		if (!module_file.commit())
 		{
@@ -1192,7 +1192,7 @@ public:
 #endif
 	}
 
-#if defined(__APPLE__) && defined(ARCH_ARM64)
+#if (defined(__APPLE__) || defined(__ANDROID__)) && defined(ARCH_ARM64)
 	static std::unique_ptr<llvm::MemoryBuffer> load(const std::string& path, std::string* reason = nullptr)
 #else
 	static std::unique_ptr<llvm::MemoryBuffer> load(const std::string& path)
@@ -1228,7 +1228,7 @@ public:
 					return nullptr;
 				}
 
-#if defined(__APPLE__) && defined(ARCH_ARM64)
+#if (defined(__APPLE__) || defined(__ANDROID__)) && defined(ARCH_ARM64)
 				// PPU loads too: a damaged object recompiles. The direct path needs none, zlib checks the trailer itself.
 				if (!gzip_trailer_matches(cached_data, out))
 				{
@@ -1272,7 +1272,7 @@ public:
 		std::string path = m_path;
 		path.append(_module->getName().data());
 
-#if defined(__APPLE__) && defined(ARCH_ARM64)
+#if (defined(__APPLE__) || defined(__ANDROID__)) && defined(ARCH_ARM64)
 		if (jit_obj_cache_stats* const stats = m_compiler ? m_compiler->get_obj_cache_stats() : nullptr)
 		{
 			return get_checked(*_module, path, *stats);
@@ -1288,7 +1288,7 @@ public:
 		return nullptr;
 	}
 
-#if defined(__APPLE__) && defined(ARCH_ARM64)
+#if (defined(__APPLE__) || defined(__ANDROID__)) && defined(ARCH_ARM64)
 	// A cached object is returned only after it passes the checks; a bad one is deleted and recompiled.
 	std::unique_ptr<llvm::MemoryBuffer> get_checked(const llvm::Module& module, const std::string& path, jit_obj_cache_stats& stats)
 	{

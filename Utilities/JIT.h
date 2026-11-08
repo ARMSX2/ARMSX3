@@ -519,7 +519,7 @@ inline FT build_function_asm(std::string_view name, F&& builder, ::jit_runtime* 
 	return reinterpret_cast<FT>(uptr(result));
 }
 
-#if defined(__APPLE__) && defined(ARCH_ARM64)
+#if (defined(__APPLE__) || defined(__ANDROID__)) && defined(ARCH_ARM64)
 // One boot's SPU object cache events, owned by spu_runtime.
 struct jit_obj_cache_stats
 {
@@ -569,7 +569,7 @@ class jit_compiler final
 
 	bool m_poisoned = false;
 
-#if defined(__APPLE__) && defined(ARCH_ARM64)
+#if (defined(__APPLE__) || defined(__ANDROID__)) && defined(ARCH_ARM64)
 	jit_obj_cache_stats* m_obj_cache_stats = nullptr;
 #endif
 
@@ -636,7 +636,7 @@ public:
 
 	bool add_sub_disk_space(ssz space);
 
-#if defined(__APPLE__) && defined(ARCH_ARM64)
+#if (defined(__APPLE__) || defined(__ANDROID__)) && defined(ARCH_ARM64)
 	// With stats set, cached objects are counted and checked, and a module that bakes a host address is not persisted.
 	void set_obj_cache_stats(jit_obj_cache_stats* stats)
 	{
