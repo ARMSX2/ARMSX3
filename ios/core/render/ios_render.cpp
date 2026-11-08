@@ -458,6 +458,7 @@ namespace armsx3::ios_render
 			"  PPU Decoder: \"Interpreter (static)\"\n"
 			"  SPU Decoder: \"Interpreter (static)\"\n"
 #endif
+			"  Thread Scheduler Mode: \"Operating System\"\n"
 			"Video:\n"
 			"  Renderer: \"Vulkan\"\n"
 			"Audio:\n"

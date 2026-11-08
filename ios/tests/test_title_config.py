@@ -406,6 +406,9 @@ class RealFiles(unittest.TestCase):
     def test_the_merge_behaves(self):
         self.assertEqual([], behaviour_problems(read(HEADER), product_text(read(RENDER)), read(KOTLIN_CONFIG_DB)))
 
+    def test_product_pins_the_os_scheduler(self):
+        self.assertIn('  Thread Scheduler Mode: "Operating System"\n', section(product_text(read(RENDER)), "Core") or "")
+
 
 class Mutations(unittest.TestCase):
     @classmethod
