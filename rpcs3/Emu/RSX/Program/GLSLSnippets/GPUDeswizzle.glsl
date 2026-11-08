@@ -48,11 +48,11 @@ bool init_invocation_properties(const in uint offset)
 	while (offset >= level_end && level < lod_count)
 	{
 		invocation.data_offset = level_end;
-		invocation.size.xy /= 2;
-		invocation.size.xy = max(invocation.size.xy, uvec2(1));
-		invocation.size_log2.xy = max(invocation.size_log2.xy, uvec2(1));
-		invocation.size_log2.xy --;
-		level_end += (invocation.size.x * invocation.size.y * image_depth);
+		// Each level halves the depth as well (3D mipmaps). With a depth of 1 this is the 2D chain
+		// as before; keeping the depth whole put every level past the first at the wrong offset.
+		invocation.size = max(invocation.size / 2u, uvec3(1));
+		invocation.size_log2 = max(invocation.size_log2, uvec3(1)) - 1u;
+		level_end += (invocation.size.x * invocation.size.y * invocation.size.z);
 		level++;
 	}
 
