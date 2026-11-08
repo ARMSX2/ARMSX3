@@ -18,6 +18,8 @@ struct QuickMenuView: View {
         var portal: () -> Void
         // A menu that never shows the row (the smoke scenes' own menus) leaves it empty.
         var friends: () -> Void = {}
+        // nil while no touch pad is on screen, which hides the row.
+        var touchLayout: (() -> Void)? = nil
     }
 
     static let controllerScope = "game.quickmenu"
@@ -182,6 +184,11 @@ struct QuickMenuView: View {
             OverlayActionRow(controllerNavigationID: "quickmenu.controllers", label: "Controllers", systemImage: "gamecontroller",
                              action: actions.controllers)
                 .disabled(busy)
+            if let touchLayout = actions.touchLayout {
+                OverlayActionRow(controllerNavigationID: "quickmenu.touchlayout", label: "Edit Touch Layout", systemImage: "hand.tap",
+                                 action: touchLayout)
+                    .disabled(busy)
+            }
         }
     }
 
@@ -271,6 +278,7 @@ struct QuickMenuView: View {
     // Only rows drawn now, or a press would seek a row that is not there.
     private var controllerOrder: [String] {
         let actions = [Self.rowIDs[1], Self.rowIDs[2], "quickmenu.controllers"]
+            + (self.actions.touchLayout != nil ? ["quickmenu.touchlayout"] : [])
         let capture = ["quickmenu.screenshot", "quickmenu.record", "quickmenu.portal"] + (signedIn ? [Self.rowIDs[4]] : [])
         let settings = ["quickmenu.volume.down", "quickmenu.volume.up", "quickmenu.scale.down", "quickmenu.scale.up",
                         "quickmenu.framelimit", "quickmenu.perfoverlay", "quickmenu.settings"]

@@ -28,6 +28,7 @@ enum GameLibraryControllerMenuAction: String, Identifiable, Equatable {
     case trophies
     case patches
     case checkForUpdate
+    case touchLayout
 
     var id: String { rawValue }
 }
