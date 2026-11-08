@@ -631,7 +631,7 @@ fragment_program_utils::fragment_program_metadata fragment_program_utils::analys
 			return result;
 		}
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 		// A NOP with a literal operand owns the next slot as data, as the decoder treats it; it is not the program start.
 		if (is_any_src_constant(inst))
 		{
