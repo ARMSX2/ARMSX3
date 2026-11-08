@@ -3192,7 +3192,7 @@ namespace rsx
 				return {};
 			}
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 			// Vulkan allows at most floor(log2(max(w, h))) + 1 levels, and a narrowed extent can hold fewer
 			attributes.mipmaps = std::min<u32>(attributes.mipmaps, floor_log2(std::max<u32>(attributes.width, attributes.height)) + 1);
 
@@ -3305,7 +3305,7 @@ namespace rsx
 					}
 				}
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 				// Drop the levels the final extent cannot hold before the list becomes an image
 				const u32 final_w = use_upscaling ? sections.front().dst_w : attributes.width;
 				const u32 final_h = use_upscaling ? sections.front().dst_h : attributes.height;
@@ -3368,7 +3368,7 @@ namespace rsx
 			invalidate_range_impl_base(cmd, tex_range, invalidation_cause::read, {}, std::forward<Args>(extras)...);
 
 			// Upload from CPU. Note that sRGB conversion is handled in the FS
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 			// The level count is the one capped after validation
 			auto uploaded = upload_image_from_cpu(cmd, tex_range, attributes.width, attributes.height, attributes.depth, attributes.mipmaps, attributes.pitch, attributes.gcm_format,
 				texture_upload_context::shader_read, subresources_layout, extended_dimension, attributes.swizzled);
