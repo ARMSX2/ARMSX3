@@ -23,9 +23,11 @@
 #include "Emu/Cell/Modules/cellMsgDialog.h"
 #include "Emu/Cell/Modules/cellOskDialog.h"
 #include "Emu/Cell/Modules/cellSaveData.h"
+#include "Emu/Cell/Modules/cellSysutil.h"
 #include "Emu/Cell/Modules/sceNp.h"
 #include "Emu/Cell/Modules/sceNpTrophy.h"
 #include "Emu/RSX/Overlays/overlay_manager.h"
+#include "Emu/RSX/Overlays/overlay_save_dialog.h"
 #include "Emu/RSX/Overlays/overlay_trophy_notification.h"
 #include "util/video_source.h"
 #include "Input/pad_thread.h"
@@ -93,6 +95,29 @@ namespace armsx3::bridge
 				}
 
 				return 0;
+			}
+		};
+
+		// The core's PS3-style save list, which upstream's Qt dialog shows first; without it every list save is cancelled.
+		class ios_save_dialog final : public SaveDialogBase
+		{
+		public:
+			s32 ShowSaveDataList(const std::string& base_dir, std::vector<SaveDataEntry>& save_entries, s32 focused, u32 op, vm::ptr<CellSaveDataListSet> listSet, bool enable_overlay) override
+			{
+				auto manager = g_fxo->try_get<rsx::overlays::display_manager>();
+				if (!manager)
+				{
+					return rsx::overlays::user_interface::selection_code::canceled;
+				}
+
+				const bool use_end = sysutil_send_system_cmd(CELL_SYSUTIL_DRAWING_BEGIN, 0) >= 0;
+				const s32 result = manager->create<rsx::overlays::save_dialog>()->show(base_dir, save_entries, focused, op, listSet, enable_overlay);
+				if (use_end)
+				{
+					sysutil_send_system_cmd(CELL_SYSUTIL_DRAWING_END, 0);
+				}
+
+				return result == rsx::overlays::user_interface::selection_code::error ? rsx::overlays::user_interface::selection_code::canceled : result;
 			}
 		};
 
@@ -245,7 +270,7 @@ namespace armsx3::bridge
 			// A callable returning nullptr is safe; an empty std::function throws bad_function_call.
 			.get_msg_dialog = ARMSX3_OWNED(8, get_msg_dialog, []() -> std::shared_ptr<MsgDialogBase> { return nullptr; }),
 			.get_osk_dialog = ARMSX3_OWNED(8, get_osk_dialog, []() -> std::shared_ptr<OskDialogBase> { return nullptr; }),
-			.get_save_dialog = ARMSX3_OWNED(8, get_save_dialog, []() -> std::unique_ptr<SaveDialogBase> { return nullptr; }),
+			.get_save_dialog = ARMSX3_REAL(get_save_dialog, []() -> std::unique_ptr<SaveDialogBase> { return std::make_unique<ios_save_dialog>(); }),
 			// PSN basic-messaging dialogs, which this port has no overlay for.
 			.get_sendmessage_dialog = ARMSX3_DELIBERATE(get_sendmessage_dialog, []() -> std::shared_ptr<SendMessageDialogBase>
 			{
