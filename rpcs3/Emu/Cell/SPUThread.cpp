@@ -3349,7 +3349,7 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
 		// Leave those transfers to fault like any other access, as upstream does.
 		const auto game_handles_faults = [&]() -> bool
 		{
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 			// A raw SPU command issued by a PPU over MMIO has no spu_thread, and vm::get would throw
 			if (!_this)
 			{
