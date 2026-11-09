@@ -155,6 +155,22 @@ def reads_problems(diag):
     return problems
 
 
+def wait_problems(diag):
+    problems = []
+    dump = function_body(diag, "dump_stalled_threads")
+    if dump is None or "if (locked && s.current_function)" not in dump or "wait_target(" not in dump:
+        problems.append("wait: dump_stalled_threads does not resolve wait_target( only while locked")
+    body = function_body(diag, "wait_target")
+    if body is None:
+        return problems + ["wait: no single wait_target definition"]
+    problems += ["wait: wait_target lacks " + w for w in
+                 ("lv2_mutex>", "lv2_lwmutex>", "lv2_lwcond>", "lv2_cond>", "lv2_sema>") if w not in body]
+    problems += ["wait: wait_target names " + w for w in ("lock(", "idm::select", "idm::check<") if w in body]
+    if "stall ppu id=0x%x cia=0x%08x lr=0x%08x state=%s in=%s func=%s%s " not in diag:
+        problems.append("wait: the stall ppu line does not carry the wait target after func")
+    return problems
+
+
 def nosuspend_problems(diag):
     return ["nosuspend: diag_log.cpp names " + w for w in ("thread_suspend", "task_suspend") if w in diag]
 
@@ -283,6 +299,9 @@ class TheDumpIsWired(unittest.TestCase):
     def test_nosuspend(self):
         self.assertEqual([], nosuspend_problems(read(DIAG_CPP)))
 
+    def test_wait(self):
+        self.assertEqual([], wait_problems(read(DIAG_CPP)))
+
     def test_sync(self):
         self.assertEqual([], sync_problems(read(DIAG_CPP)))
 
@@ -332,6 +351,15 @@ class EachCheckCanFail(unittest.TestCase):
         bad = body.replace("u64 fp = out.fp;", "u64 fp = out.fp; fp = *reinterpret_cast<const u64*>(fp);", 1)
         self.assertNotEqual(body, bad)
         self.assertTrue(reads_problems(diag.replace(body, bad)))
+
+    def test_wait_unlocked_read(self):
+        self.assertTrue(wait_problems(self.edited(DIAG_CPP, "if (locked && s.current_function)", "if (s.current_function)")))
+
+    def test_wait_lock_inserted(self):
+        diag = read(DIAG_CPP)
+        body = function_body(diag, "wait_target")
+        self.assertIsNotNone(body)
+        self.assertTrue(wait_problems(diag.replace(body, body.replace("{", "{ std::lock_guard lock(s_stall_mutex);", 1))))
 
     def test_nosuspend_call_appended(self):
         self.assertTrue(nosuspend_problems(read(DIAG_CPP) + "\nvoid f(thread_t t) { thread_suspend(t); }\n"))
