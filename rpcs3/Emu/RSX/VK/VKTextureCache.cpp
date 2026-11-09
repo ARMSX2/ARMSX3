@@ -881,6 +881,44 @@ namespace vk
 		vk::get_resource_manager()->dispose(disposable);
 	}
 
+#ifdef __APPLE__
+	using surface_copy_region = rsx::copy_region_descriptor_base<vk::image*>;
+
+	static std::array<u32, 6> pack_copy_region(const surface_copy_region& region)
+	{
+		return
+		{
+			region.src_x | (u32{region.src_y} << 16),
+			region.src_w | (u32{region.src_h} << 16),
+			region.dst_x | (u32{region.dst_y} << 16),
+			region.dst_w | (u32{region.dst_h} << 16),
+			region.dst_z | (u32{region.level} << 16),
+			region.xform
+		};
+	}
+
+	static vk::render_target* single_surface_source(const rsx::simple_array<surface_copy_region>& sections)
+	{
+		return sections.size() == 1 ? dynamic_cast<vk::render_target*>(sections[0].src) : nullptr;
+	}
+
+	static void note_copy_source(vk::image* dst, const rsx::simple_array<surface_copy_region>& sections)
+	{
+		const auto surface = single_surface_source(sections);
+		dst->copied_source = surface;
+		dst->copied_source_serial = surface ? surface->write_serial : 0;
+		dst->copied_region = surface ? pack_copy_region(sections[0]) : std::array<u32, 6>{};
+	}
+
+	static bool copy_is_current(const vk::image* dst, const rsx::simple_array<surface_copy_region>& sections)
+	{
+		const auto surface = single_surface_source(sections);
+		return surface && dst->copied_source == surface &&
+			dst->copied_source_serial == surface->write_serial &&
+			dst->copied_region == pack_copy_region(sections[0]);
+	}
+
+#endif
 	vk::image_view* texture_cache::create_temporary_subresource_view_impl(
 		vk::command_buffer& cmd, vk::image* source, VkImageType image_type, VkImageViewType view_type,
 		u32 gcm_format, u16 w, u16 h, u16 d, u8 mips,
@@ -927,7 +965,17 @@ namespace vk
 			vk::change_image_layout(cmd, image.get(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 			copy_transfer_regions_impl(cmd, image.get(), region);
 			vk::change_image_layout(cmd, image.get(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+#ifdef __APPLE__
+			note_copy_source(image.get(), region);
+#endif
 		}
+#ifdef __APPLE__
+		else
+		{
+			// A reused image may still describe its last copy
+			image->copied_source = nullptr;
+		}
+#endif
 
 		// TODO: Floating reference. We can do better with some restructuring.
 		image.release();
@@ -1165,9 +1213,20 @@ namespace vk
 	void texture_cache::update_image_contents(vk::command_buffer& cmd, vk::image_view* dst_view, const deferred_subresource& desc)
 	{
 		auto dst = dst_view->image();
+#ifdef __APPLE__
+		// The copy would end the render pass, and on a tile GPU that stores and reloads every attachment
+		if (copy_is_current(dst, desc.sections_to_copy))
+		{
+			return;
+		}
+
+#endif
 		dst->push_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 		copy_transfer_regions_impl(cmd, dst, desc.sections_to_copy);
 		dst->pop_layout(cmd);
+#ifdef __APPLE__
+		note_copy_source(dst, desc.sections_to_copy);
+#endif
 	}
 
 	// Single-row textures in a linear layout (ARMSX3).

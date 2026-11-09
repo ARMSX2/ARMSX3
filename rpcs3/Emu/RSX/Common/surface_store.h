@@ -1505,6 +1505,23 @@ namespace rsx
 
 		void on_write(const std::array<bool, 4>& color_mrt_writes_enabled, const bool depth_stencil_writes_enabled)
 		{
+#ifdef __APPLE__
+			// The tag check below skips all but the first draw into a binding; the serial needs every one
+			for (const auto& i : m_bound_render_target_ids)
+			{
+				if (color_mrt_writes_enabled[i])
+				{
+					m_bound_render_targets[i].second->note_write();
+				}
+			}
+
+			if (auto zsurface = m_bound_depth_stencil.second;
+				zsurface && depth_stencil_writes_enabled)
+			{
+				zsurface->note_write();
+			}
+
+#endif
 			if (write_tag >= cache_tag && !m_invalidate_on_write)
 			{
 				return;
