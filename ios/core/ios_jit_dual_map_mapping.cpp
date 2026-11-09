@@ -384,6 +384,7 @@ namespace jit_dual_map_internal
 
 			// The reader fills the budget even without history; with no reader (the Mac) it is 0.
 			s_script_budget_ms = armsx3_jit_budget_ms(stored_budget_ms, k_script_budget_ms);
+			budget_stored = armsx3_jit_budget_ms(stored_budget_ms, 0) != 0;
 		}
 
 		// Neither pool may hand out an unprepared page, since executing one is a SIGBUS; 0 available means no limit applies.
@@ -397,9 +398,21 @@ namespace jit_dual_map_internal
 			prep_pool3_bytes = small ? k_prep_pool3_small : k_prep_pool3_bytes;
 			// The stored history moves those tiers and sets the StikDebug walk's first shares.
 			read_pool_history();
-			armsx3_jit_split_compute(&history, small ? 1 : 0, prep_pool2_bytes, prep_pool3_bytes, k_pool2_size,
-				(k_stub_off - k_pool3_off) / k_pool3_granule * k_pool3_granule, (k_exec_half_size - k_stub_off + k_pool1_size) / 0x4000ull,
+			const unsigned long long pool3_max = (k_stub_off - k_pool3_off) / k_pool3_granule * k_pool3_granule;
+			const unsigned long long fixed_pages = (k_exec_half_size - k_stub_off + k_pool1_size) / 0x4000ull;
+			armsx3_jit_split_compute(&history, small ? 1 : 0, prep_pool2_bytes, prep_pool3_bytes, k_pool2_size, pool3_max, fixed_pages,
 				static_cast<unsigned long long>(s_script_budget_ms), &split);
+
+			// A walk too short for the learned needs gets more time, unless a leg stored its budget on purpose.
+			const unsigned long long grown_ms = armsx3_jit_walk_budget_ms(&split, &history, fixed_pages, static_cast<unsigned long long>(s_script_budget_ms));
+
+			if (!budget_stored && grown_ms != static_cast<unsigned long long>(s_script_budget_ms))
+			{
+				s_script_budget_ms = static_cast<int>(grown_ms);
+				armsx3_jit_split_compute(&history, small ? 1 : 0, prep_pool2_bytes, prep_pool3_bytes, k_pool2_size, pool3_max, fixed_pages,
+					grown_ms, &split);
+			}
+
 			prep_pool2_bytes = split.size2;
 			prep_pool3_bytes = split.size3;
 		}
@@ -720,6 +733,8 @@ namespace jit_dual_map_internal
 		// The stored history read before main(), the split it gave, and the store's writer.
 		armsx3_jit_pool_history history{};
 		armsx3_jit_split split{};
+		// A leg's stored budget is kept as it is; only the compiled default grows.
+		bool budget_stored = false;
 		history_write_fn history_write = nullptr;
 		// This process's session maximum, its ring slot (-1 until the first put), and the rate taken.
 		armsx3_jit_pool_session noted{};
