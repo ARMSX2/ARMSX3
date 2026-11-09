@@ -49,6 +49,12 @@ namespace vk
 		u32 current_queue_family = VK_QUEUE_FAMILY_IGNORED;
 		VkImageCreateInfo info = { .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
 		std::shared_ptr<vk::memory_block> memory;
+#ifdef __APPLE__
+		// What the last copy into this image read: the source surface, its write serial and the region
+		const image* copied_source = nullptr;
+		u64 copied_source_serial = 0;
+		std::array<u32, 6> copied_region = {};
+#endif
 
 		image(const vk::render_device& dev,
 			const memory_type_info& memory_type,
