@@ -2207,6 +2207,10 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 
 		// Restore the driver manager state to keep things from crashing...
 		driver_manager.set_enabled(true);
+#ifdef __APPLE__
+		// The disabled manager dropped this sync's completions; without them a recording never frees what it disposes.
+		driver_manager.notify_completed(vk::last_completed_event_id());
+#endif
 
 		const bool is_bgra = image_to_copy->format() == VK_FORMAT_B8G8R8A8_UNORM;
 		if (user_asked_for_screenshot)
