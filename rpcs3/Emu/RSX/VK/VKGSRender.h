@@ -164,6 +164,9 @@ private:
 	u32 m_async_skipped_first_write = 0;
 	static constexpr u32 tiny_fp_max_ucode_bytes = 32;
 
+	// A bound colour or depth surface has not been drawn to since it was created or re-formatted
+	bool bound_target_unwritten();
+
 	// Program loads that missed the cache this frame and how long the RSX thread spent in them, logged in flip()
 	u32 m_program_misses = 0;
 	u64 m_program_miss_us = 0;

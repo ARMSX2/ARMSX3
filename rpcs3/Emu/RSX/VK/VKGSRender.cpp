@@ -2442,13 +2442,24 @@ bool VKGSRender::load_program()
 
 #ifdef __APPLE__
 		const u64 load_started_us = get_system_time();
-#endif
+
+		// A skipped fill or copy, or a skipped first write, leaves its target unwritten
+		const bool urgent = allow_async && (fragment_program.ucode_length <= tiny_fp_max_ucode_bytes || bound_target_unwritten());
+
+		std::tie(m_program, m_vertex_prog, m_fragment_prog) = m_prog_buffer->get_graphics_pipeline(
+			&m_ctx->program.cache_hint,
+			vertex_program,
+			fragment_program,
+			m_pipeline_properties,
+			allow_async, true, urgent);
+#else
 		std::tie(m_program, m_vertex_prog, m_fragment_prog) = m_prog_buffer->get_graphics_pipeline(
 			&m_ctx->program.cache_hint,
 			vertex_program,
 			fragment_program,
 			m_pipeline_properties,
 			allow_async, true);
+#endif
 #ifdef __APPLE__
 		if (m_prog_buffer->check_cache_missed())
 		{

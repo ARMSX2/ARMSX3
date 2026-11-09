@@ -1436,6 +1436,27 @@ bool VKGSRender::resolve_sampler_state(rsx::flags32_t& invalidated_programs)
 	return true;
 }
 
+#ifdef __APPLE__
+bool VKGSRender::bound_target_unwritten()
+{
+	// dirty() stays true until the first write after creation or re-format.
+	if (auto ds = std::get<1>(res()->surface_cache.m_bound_depth_stencil); ds && ds->dirty())
+	{
+		return true;
+	}
+
+	for (auto& rtt : res()->surface_cache.m_bound_render_targets)
+	{
+		if (auto surface = std::get<1>(rtt); surface && surface->dirty())
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+#endif
 bool VKGSRender::end_draw()
 {
 	// begin_draw() carries a scope and end_draw() did not, so every per-draw cost here fell
@@ -1462,20 +1483,7 @@ bool VKGSRender::end_draw()
 			m_async_skipped_tiny++;
 		}
 
-		// dirty() stays true until the first write after creation or re-format.
-		bool first_write = false;
-		if (auto ds = std::get<1>(res()->surface_cache.m_bound_depth_stencil); ds && ds->dirty())
-		{
-			first_write = true;
-		}
-		for (auto& rtt : res()->surface_cache.m_bound_render_targets)
-		{
-			if (auto surface = std::get<1>(rtt); surface && surface->dirty())
-			{
-				first_write = true;
-			}
-		}
-		m_async_skipped_first_write += first_write;
+		m_async_skipped_first_write += bound_target_unwritten();
 
 #endif
 		std::this_thread::yield();

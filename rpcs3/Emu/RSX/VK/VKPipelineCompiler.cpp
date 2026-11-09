@@ -148,9 +148,12 @@ namespace vk
 #endif
 		while (thread_ctrl::state() != thread_state::aborting)
 		{
-			for (auto&& job : m_work_queue.pop_all())
-			{
 #ifdef __APPLE__
+			while (auto* queue = next_job_queue())
+			{
+				pipe_compiler_job job = std::move(queue->front());
+				queue->pop_front();
+
 				// Stopping: the rest of the queue is dropped and compiled again on a later boot.
 				if (g_pipe_compilers_stopping)
 				{
@@ -190,6 +193,9 @@ namespace vk
 				}
 #endif
 
+#else
+			for (auto&& job : m_work_queue.pop_all())
+			{
 #endif
 				if (!job.is_graphics_job)
 				{
@@ -230,6 +236,24 @@ namespace vk
 			thread_ctrl::wait_on(m_work_queue);
 		}
 	}
+
+#ifdef __APPLE__
+	std::deque<pipe_compiler::pipe_compiler_job>* pipe_compiler::next_job_queue()
+	{
+		// Looked at before every job, so an urgent one waits only for the compile in hand.
+		for (auto&& job : m_work_queue.pop_all())
+		{
+			(job.flags & COMPILE_URGENT ? m_urgent_jobs : m_queued_jobs).push_back(std::move(job));
+		}
+
+		if (!m_urgent_jobs.empty())
+		{
+			return &m_urgent_jobs;
+		}
+
+		return m_queued_jobs.empty() ? nullptr : &m_queued_jobs;
+	}
+#endif
 
 	std::unique_ptr<glsl::program> pipe_compiler::int_compile_compute_pipe(
 		const VkComputePipelineCreateInfo& create_info,
