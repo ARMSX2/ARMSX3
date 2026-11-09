@@ -5,6 +5,9 @@
 #include "util/fnv_hash.hpp"
 
 #include <array>
+#ifdef __APPLE__
+#include <deque>
+#endif
 
 namespace vk
 {
@@ -128,6 +131,9 @@ namespace vk
 		// This worker's async jobs, queued or compiling; get_pipe_compiler() picks the fewest.
 		u32 pending_jobs() const { return m_pending_jobs.observe(); }
 
+		// A deferred job a skipped draw would hurt most; the worker takes it before its other queued jobs.
+		static constexpr op_flags COMPILE_URGENT = 32;
+
 #endif
 	private:
 		class compute_pipeline_props : public VkComputePipelineCreateInfo
@@ -223,6 +229,12 @@ namespace vk
 		lf_queue<pipe_compiler_job> m_work_queue;
 #ifdef __APPLE__
 		atomic_t<u32> m_pending_jobs{0};
+
+		// Jobs taken off m_work_queue, urgent ones apart; only the worker thread touches these.
+		std::deque<pipe_compiler_job> m_urgent_jobs;
+		std::deque<pipe_compiler_job> m_queued_jobs;
+
+		std::deque<pipe_compiler_job>* next_job_queue();
 #endif
 		VkPipelineCache m_pipeline_cache = VK_NULL_HANDLE;
 
