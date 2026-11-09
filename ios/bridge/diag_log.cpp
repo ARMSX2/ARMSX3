@@ -48,6 +48,15 @@
 #include "Emu/IdManager.h"
 #include "Emu/Cell/PPUThread.h"
 #include "Emu/Cell/SPUThread.h"
+#include "Emu/Cell/lv2/sys_cond.h"
+#include "Emu/Cell/lv2/sys_event.h"
+#include "Emu/Cell/lv2/sys_event_flag.h"
+#include "Emu/Cell/lv2/sys_lwcond.h"
+#include "Emu/Cell/lv2/sys_lwmutex.h"
+#include "Emu/Cell/lv2/sys_mutex.h"
+#include "Emu/Cell/lv2/sys_rwlock.h"
+#include "Emu/Cell/lv2/sys_semaphore.h"
+#include "Emu/Cell/lv2/sys_spu.h"
 
 LOG_CHANNEL(diag_log, "IOSDIAG");
 
@@ -633,7 +642,102 @@ namespace
 		const char* last_function = nullptr;
 		u64 start_time = 0;
 		u64 native = 0;
+		std::string wait;
 	};
+
+	std::string owner_word(u32 owner)
+	{
+		return owner && owner != lwmutex_free ? fmt::format("0x%x", owner) : std::string("none");
+	}
+
+	u32 lwmutex_owner(u32 lwmutex_id)
+	{
+		const auto lw = idm::check_unlocked<lv2_obj, lv2_lwmutex>(lwmutex_id);
+
+		if (!lw || !lw->control || !vm::check_addr(lw->control.addr(), vm::page_readable, sizeof(sys_lwmutex_t)))
+		{
+			return 0;
+		}
+
+		return lw->control->vars.owner;
+	}
+
+	// An lv2 call's first argument is the id of the object it blocks on; empty when that id names nothing live.
+	// Called with id_manager::g_mutex held shared, so each object outlives the read.
+	std::string wait_target(u32 id)
+	{
+		switch (id >> 24)
+		{
+		case lv2_mutex::id_base >> 24:
+			if (const auto m = idm::check_unlocked<lv2_obj, lv2_mutex>(id))
+			{
+				return fmt::format(" on=mutex:0x%x owner=%s", id, owner_word(m->control.load().owner));
+			}
+			break;
+		case lv2_lwmutex::id_base >> 24:
+			if (idm::check_unlocked<lv2_obj, lv2_lwmutex>(id))
+			{
+				return fmt::format(" on=lwmutex:0x%x owner=%s", id, owner_word(lwmutex_owner(id)));
+			}
+			break;
+		case lv2_lwcond::id_base >> 24:
+			if (const auto c = idm::check_unlocked<lv2_obj, lv2_lwcond>(id))
+			{
+				return fmt::format(" on=lwcond:0x%x lwmutex=0x%x owner=%s", id, c->lwid, owner_word(lwmutex_owner(c->lwid)));
+			}
+			break;
+		case lv2_cond::id_base >> 24:
+			if (const auto c = idm::check_unlocked<lv2_obj, lv2_cond>(id))
+			{
+				const auto m = idm::check_unlocked<lv2_obj, lv2_mutex>(c->mtx_id);
+				return fmt::format(" on=cond:0x%x mutex=0x%x owner=%s last_signal_by=0x%x", id, c->mtx_id,
+					owner_word(m ? m->control.load().owner : 0), c->dbg_last_signaller.load());
+			}
+			break;
+		case lv2_sema::id_base >> 24:
+			if (const auto sem = idm::check_unlocked<lv2_obj, lv2_sema>(id))
+			{
+				return fmt::format(" on=sema:0x%x val=%d last_post_by=0x%x", id, sem->val.load(), sem->dbg_last_poster.load());
+			}
+			break;
+		case lv2_rwlock::id_base >> 24:
+			if (const auto rw = idm::check_unlocked<lv2_obj, lv2_rwlock>(id))
+			{
+				// Positive is the writer's id shifted left once; negative counts readers in steps of two.
+				const s64 owner = rw->owner.load();
+				return owner > 0 ? fmt::format(" on=rwlock:0x%x writer=0x%x", id, static_cast<u32>(owner >> 1)) :
+					fmt::format(" on=rwlock:0x%x readers=%lld", id, -owner / 2);
+			}
+			break;
+		case lv2_event_queue::id_base >> 24:
+			if (idm::check_unlocked<lv2_obj, lv2_event_queue>(id))
+			{
+				return fmt::format(" on=event_queue:0x%x", id);
+			}
+			break;
+		case lv2_event_flag::id_base >> 24:
+			if (idm::check_unlocked<lv2_obj, lv2_event_flag>(id))
+			{
+				return fmt::format(" on=event_flag:0x%x", id);
+			}
+			break;
+		case ppu_thread::id_base >> 24:
+			if (idm::check_unlocked<named_thread<ppu_thread>>(id))
+			{
+				return fmt::format(" on=ppu:0x%x", id);
+			}
+			break;
+		case lv2_spu_group::id_base >> 24:
+			if (idm::check_unlocked<lv2_spu_group>(id))
+			{
+				return fmt::format(" on=spu_group:0x%x", id);
+			}
+			break;
+		default: break;
+		}
+
+		return {};
+	}
 
 	struct spu_snapshot
 	{
@@ -781,6 +885,12 @@ namespace
 				s.last_function = ppu.last_function;
 				s.start_time = ppu.start_time;
 				s.native = thread_ctrl::get_native_id(ppu);
+
+				if (locked && s.current_function)
+				{
+					s.wait = wait_target(static_cast<u32>(ppu.syscall_args[0]));
+				}
+
 				ppus.push_back(std::move(s));
 			}, idm::unlocked);
 		}
@@ -846,8 +956,8 @@ namespace
 			const char* const func = s.current_function ? s.current_function : s.last_function ? s.last_function : "-";
 			const double sleep_s = s.start_time && s.start_time <= now ? static_cast<double>(now - s.start_time) / 1e6 : 0.0;
 
-			diag_log.notice("stall ppu id=0x%x cia=0x%08x lr=0x%08x state=%s in=%s func=%s sleep_s=%.1f name='%s'",
-				s.id, s.cia, s.lr, s.state, in, func, sleep_s, s.name);
+			diag_log.notice("stall ppu id=0x%x cia=0x%08x lr=0x%08x state=%s in=%s func=%s%s sleep_s=%.1f name='%s'",
+				s.id, s.cia, s.lr, s.state, in, func, s.wait, sleep_s, s.name);
 
 			switch (h.status)
 			{
