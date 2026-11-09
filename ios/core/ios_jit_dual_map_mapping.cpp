@@ -809,7 +809,7 @@ namespace jit_dual_map_internal
 
 			const unsigned below_stubs = static_cast<unsigned>((k_stub_off - k_pool3_off) / k_pool3_granule);
 			const bool near3 = pool3_prepared_granules < below_stubs
-				&& (carve_waits > offer_waits_at_start || units_live + 1 >= pool3_prepared_granules);
+				&& (carve_waits > offer_waits_at_start || units_live + ARMSX3_JIT_SPLIT_ROUND / k_pool3_granule >= pool3_prepared_granules);
 			const bool near2 = utils::g_pool2_code_limit < k_pool2_size && utils::jit_pool2_refused_blocks() != 0;
 			const int trigger = near3 ? 3 : near2 ? 2 : 0;
 
@@ -935,7 +935,7 @@ namespace jit_dual_map_internal
 
 			::pthread_mutex_lock(&unit_lock);
 
-			// Capacity is set at the first carve and never recomputed; units vary in size, so the counts are in 2 MiB granules.
+			// Capacity is set at the first carve and never recomputed; units vary in size, so the counts are in granules.
 			if (unit_bytes == 0)
 			{
 				unit_bytes = k_pool3_granule;
