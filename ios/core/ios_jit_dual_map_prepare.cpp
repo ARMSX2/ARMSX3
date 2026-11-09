@@ -41,7 +41,7 @@ namespace jit_dual_map_internal
 	static_assert(ARMSX3_JIT_SPLIT_MIB(ARMSX3_JIT_SPLIT_SHARE3_MIB) % ARMSX3_JIT_SPLIT_ROUND == 0 && ARMSX3_JIT_SPLIT_MIB(ARMSX3_JIT_SPLIT_SHARE3_MIB) <= k_prep_pool3_bytes, "pool 3's default share is whole granules inside its normal prepare");
 	static_assert(ARMSX3_JIT_SPLIT_MIB(ARMSX3_JIT_SPLIT_FLOOR2_MIB) % ARMSX3_JIT_SPLIT_ROUND == 0 && ARMSX3_JIT_SPLIT_MIB(ARMSX3_JIT_SPLIT_FLOOR2_MIB) <= k_prep_pool2_small, "pool 2's floor is a 2 MiB multiple inside its small prepare");
 	static_assert(ARMSX3_JIT_SPLIT_MIB(ARMSX3_JIT_SPLIT_FLOOR3_MIB) % ARMSX3_JIT_SPLIT_ROUND == 0 && ARMSX3_JIT_SPLIT_MIB(ARMSX3_JIT_SPLIT_FLOOR3_MIB) <= k_prep_pool3_small, "pool 3's floor is whole granules inside its small prepare");
-	static_assert(ARMSX3_JIT_SPLIT_ROUND == k_pool3_granule && ARMSX3_JIT_SPLIT_PAGE == 0x4000ull, "the split rounds to pool 3's granule and counts the script's 16 KiB pages (P=16384)");
+	static_assert(ARMSX3_JIT_SPLIT_ROUND % k_pool3_granule == 0 && ARMSX3_JIT_SPLIT_PAGE == 0x4000ull && k_pool3_granule % ARMSX3_JIT_SPLIT_PAGE == 0, "the split rounds to whole pool 3 granules, each whole script pages (P=16384)");
 	// Pool 2's first 16 MiB, walked first. Every share and prepare is at least this, so the ranges after it stay in order.
 	constexpr unsigned long long k_walk_pool2_floor = 0x1000000ull;
 	static_assert(k_walk_pool2_floor == ARMSX3_JIT_SPLIT_MIB(ARMSX3_JIT_SPLIT_WALK2_MIB) && k_walk_pool2_floor <= ARMSX3_JIT_SPLIT_MIB(ARMSX3_JIT_SPLIT_FLOOR2_MIB) && k_walk_pool2_floor % ARMSX3_JIT_SPLIT_ROUND == 0, "the walk's pool-2 floor is the split's, inside pool 2's smallest share and prepare");

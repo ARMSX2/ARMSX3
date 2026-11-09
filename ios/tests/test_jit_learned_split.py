@@ -28,7 +28,7 @@ ROUND = 0x200000
 MAGIC = 0x41334A31
 RING = 8
 POOL2_MAX = 0x40000000
-POOL3_MAX = 1054867456  # (k_stub_off - k_pool3_off) / k_pool3_granule * k_pool3_granule, 1006 MiB
+POOL3_MAX = 1056931840  # (k_stub_off - k_pool3_off) / k_pool3_granule * k_pool3_granule, 1008 MiB less 32 KiB
 FIXED_PAGES = 1026      # (k_exec_half_size - k_stub_off + k_pool1_size) / 0x4000: the stubs and pool 1
 BUDGET_MS = 15000  # the compiled default
 STORED_10S = 10000  # a stored 10 s budget, the one the 10 s rates below were measured under
@@ -353,7 +353,8 @@ LAYOUT = (
     "ARMSX3_JIT_SPLIT_MIB(ARMSX3_JIT_SPLIT_FLOOR2_MIB) <= k_prep_pool2_small,",
     "static_assert(ARMSX3_JIT_SPLIT_MIB(ARMSX3_JIT_SPLIT_FLOOR3_MIB) % ARMSX3_JIT_SPLIT_ROUND == 0 && "
     "ARMSX3_JIT_SPLIT_MIB(ARMSX3_JIT_SPLIT_FLOOR3_MIB) <= k_prep_pool3_small,",
-    "static_assert(ARMSX3_JIT_SPLIT_ROUND == k_pool3_granule && ARMSX3_JIT_SPLIT_PAGE == 0x4000ull,",
+    "static_assert(ARMSX3_JIT_SPLIT_ROUND % k_pool3_granule == 0 && ARMSX3_JIT_SPLIT_PAGE == 0x4000ull && "
+    "k_pool3_granule % ARMSX3_JIT_SPLIT_PAGE == 0,",
 )
 STORE_NAMES = ("armsx3_jit_pool_history_read", "armsx3_jit_pool_history_write")
 BUDGET_TAKEN = "s_script_budget_ms = armsx3_jit_budget_ms(stored_budget_ms, k_script_budget_ms);"
@@ -368,7 +369,7 @@ def layout_values(dual):
         if m is None:
             raise AssertionError(name + " not found")
         return int(m.group(1), 16)
-    granule = ROUND  # utils::jit_pool3_unit_granularity; the layout static_assert pins ROUND == k_pool3_granule
+    granule = PAGE  # utils::jit_pool3_unit_granularity; the layout static_assert pins it to whole pages dividing ROUND
     pool3_max = (const("k_stub_off") - const("k_pool3_off")) // granule * granule
     fixed = (const("k_exec_half_size") - const("k_stub_off") + const("k_pool1_size")) // PAGE
     return pool3_max, fixed
