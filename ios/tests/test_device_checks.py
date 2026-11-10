@@ -50,7 +50,10 @@ CASES = {
     "empty": {},
 }
 
-GTA_FIX = "No JIT method works without it. Sign ARMSX3 again with get-task-allow turned on, then reinstall it."
+# Cases also run with a Pairing File row set: one without the LiveContainer row and one with it.
+PAIRING_CASES = ("all", "lc")
+
+GTA_FIX ="No JIT method works without it. Sign ARMSX3 again with get-task-allow turned on, then reinstall it."
 IML_FIX = "Games are more likely to close when memory runs low. Sign ARMSX3 again with the increased-memory-limit entitlement."
 IML_FIX_LC = ("Games are more likely to close when memory runs low. "
               "Sign LiveContainer again with the increased-memory-limit entitlement.")
@@ -98,10 +101,18 @@ def driver():
         "        print(\"row \\(name) \\(row.label)|\\(row.value)|\\(row.isProblem ? 1 : 0)|\\(row.fix ?? \"none\")\")",
         "    }",
         "}",
+        "func pairing(_ name: String, _ checks: [String: NSNumber], set: Bool) {",
+        "    guard var report = DeviceReport(checks) else { return }",
+        "    if set { report.pairingRow = DeviceRow(label: \"Pairing File\", value: \"Own\", isProblem: false, fix: nil) }",
+        "    print(\"pair \\(name) \\(report.rows.map { $0.label }.joined(separator: \"|\"))\")",
+        "}",
     ]
     for name, checks in sorted(CASES.items()):
         body = ", ".join('"{0}": NSNumber(value: Int64({1}))'.format(k, v) for k, v in sorted(checks.items()))
         lines.append("show(\"{0}\", [{1}])".format(name, body or ":"))
+        if name in PAIRING_CASES:
+            for state in ("nil", "set"):
+                lines.append("pairing(\"{0}-{1}\", [{2}], set: {3})".format(name, state, body, str(state == "set").lower()))
     for value in sorted(MEMORY):
         lines.append("print(\"mem {0} \\(DeviceReport.memoryText(Int64({0})))\")".format(value))
     return "\n".join(lines) + "\n"
@@ -116,10 +127,12 @@ def read(path):
 
 
 def device_checks_problems(out):
-    rows, unreadable, memory = {}, set(), {}
+    rows, unreadable, memory, labels = {}, set(), {}, {}
     for line in out.splitlines():
         parts = line.split(" ", 2)
-        if len(parts) == 3 and parts[0] == "row":
+        if len(parts) == 3 and parts[0] == "pair":
+            labels[parts[1]] = parts[2].split("|")
+        elif len(parts) == 3 and parts[0] == "row":
             rows.setdefault(parts[1], []).append(parts[2])
         elif len(parts) == 3 and parts[0] == "case" and parts[2] == "unreadable":
             unreadable.add(parts[1])
@@ -135,6 +148,12 @@ def device_checks_problems(out):
             problems.append("unreadable: {0} gave no report, wanted {1}".format(name, want))
         elif rows.get(name) != want:
             problems.append("rows: {0} gave {1}, wanted {2}".format(name, rows.get(name), want))
+    for name in PAIRING_CASES:
+        base = [row.split("|")[0] for row in expected_rows(CASES[name])]
+        if labels.get(name + "-nil") != base:
+            problems.append("pairing: {0} without the row gave {1}, wanted {2}".format(name, labels.get(name + "-nil"), base))
+        if labels.get(name + "-set") != base + ["Pairing File"]:
+            problems.append("pairing: {0} with the row gave {1}, wanted it last after {2}".format(name, labels.get(name + "-set"), base))
     for value, text in sorted(MEMORY.items()):
         if memory.get(value) != text:
             problems.append("memory: {0} gave {1!r}, wanted {2!r}".format(value, memory.get(value), text))
@@ -212,6 +231,9 @@ class Mutations(unittest.TestCase):
 
     def test_mutation_a_missing_key_still_makes_a_report(self):
         self.assert_caught("guard Self.keys.allSatisfy({ checks[$0] != nil }) else { return nil }", "", "unreadable:")
+
+    def test_mutation_the_pairing_row_listed_first(self):
+        self.assert_caught("if let pairingRow { rows.append(pairingRow) }", "if let pairingRow { rows.insert(pairingRow, at: 0) }", "pairing:")
 
     def test_mutation_the_spdx_line_dropped(self):
         text = self.edited(self.text, "SPDX-License-Identifier: GPL-2.0-only", "License: see COPYING")

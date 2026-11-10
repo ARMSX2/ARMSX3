@@ -95,8 +95,25 @@ struct ARMSX3FrontendRoot: View {
     }
 
     private func receive(_ url: URL) {
+        if PairingLink.isPairingLink(url) {
+            switch PairingLink.take(url, at: Date(), in: .standard) {
+            case .accepted(let data):
+                installPairing(data, origin: .sidestoreLink)
+            case .ignored:
+                PairingLink.lastAnswer = .ignored
+                linkMessage = String(localized: "ARMSX3 didn't ask for that pairing file, so it was ignored.")
+            case .malformed:
+                PairingLink.lastAnswer = .invalid
+                linkMessage = JitNextStep.importRefusalSentence(PairingImport.Outcome.invalid.rawValue)
+            }
+            return
+        }
         if url.isFileURL, url.pathExtension.lowercased() == PadLayoutFile.fileExtension {
             linkMessage = PadLayoutStore.shared.importMessage(url)
+            return
+        }
+        if url.isFileURL, ["plist", "mobiledevicepairing", "mobiledevicepair"].contains(url.pathExtension.lowercased()) {
+            installPairing(PairingImport.readShared(url), origin: .shared)
             return
         }
         guard let link = DeepLink.parse(url) else {
@@ -105,6 +122,28 @@ struct ARMSX3FrontendRoot: View {
         }
         pendingLink = link
         resolvePending()
+    }
+
+    // A nil read counts as a failed import. The link's answer is kept for the pane; a shared file is only told in the alert.
+    private func installPairing(_ data: Data?, origin: PairingSource.Origin) {
+        let result = data.map { PairingImport.install(data: $0, origin: origin) } ?? (outcome: PairingImport.Outcome.failed, replaced: false)
+        let answer: PairingLink.Answer
+        switch result.outcome {
+        case .imported: answer = result.replaced ? .replaced : .added
+        case .legacyLockdown: answer = .lockdown
+        case .invalid: answer = .invalid
+        case .failed: answer = .failed
+        }
+        if origin == .sidestoreLink { PairingLink.lastAnswer = answer }
+        switch answer {
+        case .replaced:
+            linkMessage = String(localized: "Pairing file replaced. ARMSX3 uses the new one the next time it opens.")
+        case .added:
+            linkMessage = String(localized: "Pairing file added. ARMSX3 uses it the next time it opens.")
+        default:
+            let refusal = JitNextStep.importRefusalSentence(result.outcome.rawValue)
+            linkMessage = answer == .lockdown && origin == .sidestoreLink ? refusal.map { $0 + " " + PairingSource.sideStoreLockdownFix } : refusal
+        }
     }
 
     private func resolvePending() {
