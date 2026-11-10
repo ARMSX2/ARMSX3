@@ -1579,6 +1579,43 @@ namespace vk
 		return { scratch_buf, linear_data_scratch_offset };
 	}
 
+	// Keeps a blit region inside the image it reads or writes.
+	//
+	// The bounds checks at the end of scale_image refuse a region that does not fit, but the
+	// typeless conversions before them copy the region first, and copy_image_to_buffer stops the
+	// game on one that runs past its image. A tester on 1.6.7 (Ratchet & Clank: Tools of Destruction,
+	// Snapdragon 8 Gen 3, Resolution Scale 83%) had the blit engine shrink a 192x106 render target to
+	// 48x53 and the game stopped with "Verification failed" at the height check there. A region one
+	// texel past the edge loses that texel here instead; one with nothing left inside is refused, as
+	// the later checks would refuse it.
+	static bool fit_blit_area(areai& area, const vk::image* image, std::string_view what)
+	{
+		const areai asked = area;
+		area.x1 = std::max(area.x1, 0);
+		area.y1 = std::max(area.y1, 0);
+		area.x2 = std::min(area.x2, static_cast<s32>(image->width()));
+		area.y2 = std::min(area.y2, static_cast<s32>(image->height()));
+
+		if (area.x2 <= area.x1 || area.y2 <= area.y1)
+		{
+			rsx_log.error("Blit request denied because the %s region (%d,%d)-(%d,%d) is outside its %ux%u image.", what, asked.x1, asked.y1, asked.x2, asked.y2, image->width(), image->height());
+			return false;
+		}
+
+		if (area.x1 != asked.x1 || area.y1 != asked.y1 || area.x2 != asked.x2 || area.y2 != asked.y2)
+		{
+			static atomic_t<u32> s_logged{0};
+
+			if (s_logged++ < 16)
+			{
+				rsx_log.warning("Blit %s region (%d,%d)-(%d,%d) ran past its %ux%u image; it was fitted to (%d,%d)-(%d,%d).", what,
+					asked.x1, asked.y1, asked.x2, asked.y2, image->width(), image->height(), area.x1, area.y1, area.x2, area.y2);
+			}
+		}
+
+		return true;
+	}
+
 	void blitter::scale_image(vk::command_buffer& cmd, vk::image* src, vk::image* dst, areai src_area, areai dst_area, bool interpolate, const rsx::typeless_xfer& xfer_info)
 	{
 		vk::image* real_src = src;
@@ -1589,6 +1626,11 @@ namespace vk
 			// Watch out for lazy init
 			ensure(src != dst);
 			dst->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+		}
+
+		if (!fit_blit_area(src_area, src, "source") || !fit_blit_area(dst_area, dst, "destination"))
+		{
+			return;
 		}
 
 		// Optimization pass; check for pass-through data transfer
