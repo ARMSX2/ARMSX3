@@ -82,6 +82,18 @@ namespace armsx3::bridge
 			}
 		}
 
+		// The iOS core is built without frame generation, but the renderer still reads the setting to pick FIFO presentation and two extra swapchain images.
+		void turn_off_frame_generation()
+		{
+			if (g_cfg.video.frame_generation == frame_generation_mode::off)
+			{
+				return;
+			}
+
+			bridge_log.warning("Frame generation is set to %s but is not running: the iOS build has no frame generation, so it is turned off for this boot.", g_cfg.video.frame_generation.to_string());
+			g_cfg.video.frame_generation.set(frame_generation_mode::off);
+		}
+
 		// The core's own PS3-style pop-up; it logs nothing because a trophy name is game text.
 		class ios_trophy_notification final : public TrophyNotificationBase
 		{
@@ -176,6 +188,7 @@ namespace armsx3::bridge
 			.on_ready = ARMSX3_OWNED(6, on_ready, []
 			{
 				g_ready_observations.fetch_add(1, std::memory_order_relaxed);
+				turn_off_frame_generation();
 			}),
 			.on_missing_fw = ARMSX3_OWNED(7, on_missing_fw, []
 			{
