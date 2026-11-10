@@ -74,6 +74,10 @@ typedef NS_ENUM(NSInteger, Rpcs3LiveSetting) {
 // The built-in helper's fine outcome word for this launch, or "" when it never ran. Any thread.
 + (NSString*)jitHelperOutcome;
 
+// The pre-main pairing lookup's words for this launch under the keys used, format, result, rejected, documents and tried;
+// empty when the lookup never ran; never a path or the file's contents.
++ (NSDictionary<NSString*, NSString*>*)jitPairingReport;
+
 // Off the emulator's queue. Results: ready, unreachable, download, pairing, mount or other, with a path-free reason.
 + (void)mountDiskImageWithStage:(void (^)(NSString* stage))stage
 	completion:(void (^)(NSString* result, NSString* reason))completion;

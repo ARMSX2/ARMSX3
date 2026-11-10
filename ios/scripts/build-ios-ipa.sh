@@ -232,9 +232,9 @@ adhoc_entitlements() {
 [[ -d "${APP}/PlugIns/JITEnabler.appex" ]] || verify_fail "PlugIns/JITEnabler.appex is absent; the IPA would ship without the JIT helper."
 
 EXPORTS="$(xcrun dyld_info -exports "${APP}/${SCHEME}" | grep -c armsx3_jit_enabler || true)"
-# Four names, resolved by dlsym from the dual map: prepare, prepare_ranges, last_result and ddi; armsx3_jit_launch_plan is checked separately.
-if [[ "${EXPORTS}" != 4 ]]; then
-	verify_fail "the binary exports ${EXPORTS} armsx3_jit_enabler_* names, expected 4. They are resolved by dlsym, so stripping removes them silently; check STRIP_STYLE in ios/project.yml."
+# Five names, resolved by dlsym from the dual map: prepare, prepare_ranges, last_result, ddi and pairing_report; armsx3_jit_launch_plan is checked separately.
+if [[ "${EXPORTS}" != 5 ]]; then
+	verify_fail "the binary exports ${EXPORTS} armsx3_jit_enabler_* names, expected 5. They are resolved by dlsym, so stripping removes them silently; check STRIP_STYLE in ios/project.yml."
 fi
 if [[ "$(xcrun dyld_info -exports "${APP}/${SCHEME}" | grep -c armsx3_jit_launch_plan || true)" != 1 ]]; then
 	verify_fail "the binary does not export armsx3_jit_launch_plan, which the dual map resolves by dlsym before main(); check STRIP_STYLE in ios/project.yml."

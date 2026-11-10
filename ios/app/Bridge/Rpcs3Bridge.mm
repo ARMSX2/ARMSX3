@@ -180,6 +180,38 @@ void append_settings_text(void* context, const char* text, uint32_t size)
 	return @(result.helper_outcome);
 }
 
+// A report field as a word: it stops at the first NUL or the field's end and keeps only [a-z-].
+static NSString* rpcs3_report_word(const char* field, size_t size)
+{
+	NSMutableString* word = [NSMutableString string];
+	for (size_t i = 0; i < size && field[i] != '\0'; i++)
+	{
+		const char c = field[i];
+		if ((c >= 'a' && c <= 'z') || c == '-')
+		{
+			[word appendFormat:@"%c", c];
+		}
+	}
+	return word;
+}
+
++ (NSDictionary<NSString*, NSString*>*)jitPairingReport
+{
+	armsx3_jit_pairing_report report;
+	if (armsx3_jit_enabler_pairing_report(&report) != 0)
+	{
+		return @{};
+	}
+	return @{
+		@"used": rpcs3_report_word(report.used, sizeof report.used),
+		@"format": rpcs3_report_word(report.format, sizeof report.format),
+		@"result": rpcs3_report_word(report.result, sizeof report.result),
+		@"rejected": rpcs3_report_word(report.rejected, sizeof report.rejected),
+		@"documents": rpcs3_report_word(report.documents, sizeof report.documents),
+		@"tried": [NSString stringWithFormat:@"%d", (int)report.tried],
+	};
+}
+
 + (void)mountDiskImageWithStage:(void (^)(NSString* stage))stage
 	completion:(void (^)(NSString* result, NSString* reason))completion
 {
