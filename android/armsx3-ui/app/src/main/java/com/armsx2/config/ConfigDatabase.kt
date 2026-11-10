@@ -384,33 +384,35 @@ object ConfigDatabase {
         "NPEA00457" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
         "NPUA80908" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
 
-        // The Last of Us: Pause Game During SPU Compilation, Stub PPU Traps at 1, and SPU Cache off.
+        // The Last of Us: Stub PPU Traps at 1 and SPU Cache off; Pause Game During SPU Compilation off.
         //
-        // Its loading screen reaches thousands of SPU functions the first time, and each one compiled
-        // on the spot stalls its SPU while the game keeps waiting on it. Both failures on the Odin 3
+        // Its loading screen reaches thousands of SPU functions the first time. When each one compiled
+        // on the spot, its SPU stalled while the game kept waiting on it, and both failures on the Odin 3
         // (11-09) came in such a burst. First boot, about 1,650 compiled in the 25 s before: a SPURS
         // job wrote to address 0 and the main and sound threads crashed on overwritten pointers. Next
         // boot, about 2,600 in 20 s: the main thread's countdown at 0x990abc (01.11) ran out and hit
-        // the game's assert trap. The pause holds the game while an SPU compiles, so a compile does
-        // not use up its waits; the picture freezes for that moment instead, and the SPU cache keeps
-        // it to the first time. Stub Traps 1 is RPCS3's own answer to that assert on ARM (its wiki,
-        // for macOS): if a wait runs out anyway the game carries on, and the log says "PPU Trap:
-        // Stubbing".
+        // the game's assert trap. Pause Game During SPU Compilation held the whole game for every
+        // compile (11-09 to 11-10), which stopped both but froze the picture for seconds at a time.
+        // Since 11-10 new SPU code compiles in the background and runs in the interpreter meanwhile,
+        // which only works with the pause off, so it is written off here: "false" also outvotes the
+        // "true" an earlier build appended to this title's file, as the last occurrence wins. Stub
+        // Traps 1 is RPCS3's own answer to that assert on ARM (its wiki, for macOS): if a wait runs out
+        // anyway the game carries on, and the log says "PPU Trap: Stubbing".
         //
         // SPU Cache off, as for Blades of Time: every boot that built the saved SPU list first (14,116
         // functions) stalled on a loading screen, file reads stopped, the SPUs idle and the main
         // thread spinning, while boots that compiled as the game ran loaded through every time (Odin
         // 3, 11-10, four boots each way, with and without the pause). Compiled code still comes from
         // the SPU object cache as each function is first run, so later boots do not compile again.
-        "BCUS98174" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
-        "BCES01584" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
-        "BCES01585" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
-        "BCJS37010" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
-        "BCAS20270" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
-        "NPUA80960" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
-        "NPEA00435" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
-        "NPHA80243" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
-        "NPJA00096" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
+        "BCUS98174" to "Core:\n  Pause Game During SPU Compilation: false\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
+        "BCES01584" to "Core:\n  Pause Game During SPU Compilation: false\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
+        "BCES01585" to "Core:\n  Pause Game During SPU Compilation: false\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
+        "BCJS37010" to "Core:\n  Pause Game During SPU Compilation: false\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
+        "BCAS20270" to "Core:\n  Pause Game During SPU Compilation: false\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
+        "NPUA80960" to "Core:\n  Pause Game During SPU Compilation: false\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
+        "NPEA00435" to "Core:\n  Pause Game During SPU Compilation: false\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
+        "NPHA80243" to "Core:\n  Pause Game During SPU Compilation: false\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
+        "NPJA00096" to "Core:\n  Pause Game During SPU Compilation: false\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
     )
 
     /**
