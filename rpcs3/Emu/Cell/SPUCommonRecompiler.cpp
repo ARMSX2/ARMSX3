@@ -1239,6 +1239,28 @@ void spu_cache::add(const spu_program& func)
 	m_file.write_gather(gather, 3);
 }
 
+#ifdef __ANDROID__
+// "<cache>/cache/<title>/" for an executable's cache folder "<cache>/cache/<title>/ppu-<hash>-EBOOT.BIN/",
+// or empty for any other shape. A game update installs a new executable, which gets a folder of its
+// own beside the old version's.
+static std::string spu_title_cache_dir(std::string_view exec_cache)
+{
+	if (exec_cache.ends_with('/'))
+	{
+		exec_cache.remove_suffix(1);
+	}
+
+	const usz slash = exec_cache.find_last_of('/');
+
+	if (slash == umax || !exec_cache.substr(slash + 1).starts_with("ppu-"))
+	{
+		return {};
+	}
+
+	return std::string(exec_cache.substr(0, slash + 1));
+}
+#endif
+
 void spu_cache::initialize(bool build_existing_cache)
 {
 	jit_write_guard jit_guard;
@@ -1283,6 +1305,50 @@ void spu_cache::initialize(bool build_existing_cache)
 		spu_log.success("SPU Cache override applied!");
 		is_debug = true;
 	}
+
+#ifdef __ANDROID__
+	// A game update installs a new executable, which gets its own cache folder and so an empty SPU
+	// list, though most of its SPU programs are the ones the old version ran. Start the list from the
+	// largest one another executable of the same game left, so those programs are built at boot
+	// (mostly just loaded, as the objects are kept per game) instead of compiled one at a time in
+	// play. Drakengard 3 (11-10): 01.01 started from nothing after a whole session on 01.00.
+	if (fs::stat_t st{}; !is_debug && (!fs::get_stat(loc, st) || st.size == 0))
+	{
+		if (const std::string title_dir = spu_title_cache_dir(ppu_cache); !title_dir.empty())
+		{
+			std::string best;
+			u64 best_size = 0;
+
+			for (auto&& entry : fs::dir(title_dir))
+			{
+				if (!entry.is_directory || !entry.name.starts_with("ppu-") || title_dir + entry.name + "/" == ppu_cache)
+				{
+					continue;
+				}
+
+				if (fs::stat_t other{}; fs::get_stat(title_dir + entry.name + "/" + filename, other) && other.size > best_size)
+				{
+					best = title_dir + entry.name + "/" + filename;
+					best_size = other.size;
+				}
+			}
+
+			if (!best.empty())
+			{
+				const fs::file src(best);
+				const std::vector<u8> data = src ? src.to_vector<u8>() : std::vector<u8>{};
+
+				if (!data.empty())
+				{
+					if (fs::file dst(loc, fs::rewrite); dst && dst.write(data.data(), data.size()) == data.size())
+					{
+						spu_log.notice("SPU cache: this executable's list starts from another executable of the same game (%s, %u bytes).", best, data.size());
+					}
+				}
+			}
+		}
+	}
+#endif
 
 	spu_cache cache(is_debug ? loc_debug : loc);
 
@@ -1954,7 +2020,13 @@ static std::string spu_obj_cache_parent(const std::string& game_cache)
 
 	if (!data_cache.empty() && game_cache.starts_with(data_cache) && game_cache.size() > data_cache.size())
 	{
-		return g_android_private_cache_dir + "spuobj/" + game_cache.substr(data_cache.size());
+		// One folder per game, not per executable. An object is named after its SPU program's bytes,
+		// entry and start (SPULLVMRecompiler.cpp), and the key below holds everything else that
+		// shapes it, so nothing in it belongs to one executable: a game update's new executable reuses
+		// every object the old version built, and so does a game's second executable.
+		const std::string title_cache = spu_title_cache_dir(game_cache);
+		const std::string& base = title_cache.empty() ? game_cache : title_cache;
+		return g_android_private_cache_dir + "spuobj/" + base.substr(data_cache.size());
 	}
 
 	// Not under the data folder's cache: named after its whole path instead.
@@ -2318,6 +2390,28 @@ spu_runtime::spu_runtime()
 		};
 
 		drop_other_caches(obj_parent);
+
+		// Until 11-10 the objects were kept per executable, one folder further down. Those folders
+		// go too, each executable's folder with them once empty. Only this game's folder in the
+		// app's private cache is walked.
+		if (!g_android_private_cache_dir.empty() && obj_parent.starts_with(g_android_private_cache_dir))
+		{
+			std::vector<std::string> exec_dirs;
+
+			for (auto&& entry : fs::dir(obj_parent))
+			{
+				if (entry.is_directory && entry.name.starts_with("ppu-"))
+				{
+					exec_dirs.push_back(obj_parent + entry.name + "/");
+				}
+			}
+
+			for (const std::string& dir : exec_dirs)
+			{
+				drop_other_caches(dir);
+				fs::remove_dir(dir);
+			}
+		}
 
 		if (obj_parent != m_cache_path)
 		{
