@@ -2992,6 +2992,31 @@ bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t
 
 	if (Emu.IsStopped())
 	{
+#if defined(ARCH_ARM64) && defined(__ANDROID__)
+		// A PPU branch to an address that is not a multiple of 4 cannot be resumed. The JIT and the
+		// gateway find a branch target's code at twice its address in the executable table, eight
+		// bytes per instruction, so for such a target the read straddles two entries. Mapping the
+		// page below lets that read succeed, and it then returns half of one host pointer and half of
+		// the next, which the thread jumps to: the whole app dies on stopping a game that had only
+		// frozen. The Last of Us did exactly this (a branch to 0xffff on its loading screen, then
+		// SIGSEGV at 0x006ea33e01400000 when Close or Restart stopped it).
+		//
+		// Only JIT code and the gateway look entries up from a raw guest address; C++ always asks
+		// for an instruction's own, so an unaligned exec fault always comes from code with no host
+		// frames of its own. The thread leaves the way the far-jump stub does, through ppu_escape
+		// to the gateway's saved return, and its run loop sees cpu_flag::exit before dispatching
+		// again.
+		if (is_exec && (addr & 3) && context && cpu && cpu->get_class() == thread_class::ppu &&
+			g_cfg.core.ppu_decoder == ppu_decoder_type::llvm)
+		{
+			extern void (*const ppu_escape)(ppu_thread*);
+
+			GPR(context, 0) = reinterpret_cast<u64>(static_cast<ppu_thread*>(cpu));
+			RIP(context) = reinterpret_cast<u64>(ppu_escape);
+			return true;
+		}
+#endif
+
 		// Keep retrying until the page is mapped: the thread must be able to resume so it can observe cpu_flag::exit and terminate cleanly.
 		// Reporting the violation as unhandled here would escalate a guest crash into an unhandled host exception.
 		for (u32 try_count = 0; !hack_alloc(); try_count++)
