@@ -384,7 +384,7 @@ object ConfigDatabase {
         "NPEA00457" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
         "NPUA80908" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
 
-        // The Last of Us: Pause Game During SPU Compilation, and Stub PPU Traps at 1.
+        // The Last of Us: Pause Game During SPU Compilation, Stub PPU Traps at 1, and SPU Cache off.
         //
         // Its loading screen reaches thousands of SPU functions the first time, and each one compiled
         // on the spot stalls its SPU while the game keeps waiting on it. Both failures on the Odin 3
@@ -396,15 +396,21 @@ object ConfigDatabase {
         // it to the first time. Stub Traps 1 is RPCS3's own answer to that assert on ARM (its wiki,
         // for macOS): if a wait runs out anyway the game carries on, and the log says "PPU Trap:
         // Stubbing".
-        "BCUS98174" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n",
-        "BCES01584" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n",
-        "BCES01585" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n",
-        "BCJS37010" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n",
-        "BCAS20270" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n",
-        "NPUA80960" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n",
-        "NPEA00435" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n",
-        "NPHA80243" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n",
-        "NPJA00096" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n",
+        //
+        // SPU Cache off, as for Blades of Time: every boot that built the saved SPU list first (14,116
+        // functions) stalled on a loading screen, file reads stopped, the SPUs idle and the main
+        // thread spinning, while boots that compiled as the game ran loaded through every time (Odin
+        // 3, 11-10, four boots each way, with and without the pause). Compiled code still comes from
+        // the SPU object cache as each function is first run, so later boots do not compile again.
+        "BCUS98174" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
+        "BCES01584" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
+        "BCES01585" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
+        "BCJS37010" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
+        "BCAS20270" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
+        "NPUA80960" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
+        "NPEA00435" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
+        "NPHA80243" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
+        "NPJA00096" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
     )
 
     /**
