@@ -31,6 +31,13 @@ internal fun FrameGenCard(settings: Settings, viewModel: EmulationMenuViewModel)
             selected = settings.ps3.frameGeneration,
             onSelect = { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(frameGeneration = v)) } },
         )
+        // ZeroFG creates its device when the game starts; the app cannot tell from here whether it did.
+        Text(
+            str("perf.framegen.zero.note"),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+        )
 
         // The rest of frame generation, which until now only existed in the main settings
         // screen. Someone who opens this menu mid-game is here to change exactly these:
