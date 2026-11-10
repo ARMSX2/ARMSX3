@@ -6,6 +6,7 @@
 #include "instance.h"
 
 #include "Emu/system_config.h"
+#include "Emu/RSX/VK/ZeroFG/VKZeroFG.h"
 
 namespace vk
 {
@@ -141,12 +142,16 @@ namespace vk
 			}
 		}
 
-		app.apiVersion = std::min(loader_version, static_cast<u32>(VK_API_VERSION_1_2));
+		// 1.3 while ZeroFG is switched on: its own device is created from this instance, to present
+		// on this renderer's surface (ZeroFG/VKZeroFG.h). The renderer's device uses nothing past 1.2.
+		const u32 wanted_version = VKZeroFG::InstanceApiVersion(VK_API_VERSION_1_2);
+		app.apiVersion = std::min(loader_version, wanted_version);
 
-		if (app.apiVersion != VK_API_VERSION_1_2)
+		if (app.apiVersion != wanted_version)
 		{
-			rsx_log.warning("Vulkan: loader reports %u.%u, requesting that instead of 1.2.",
-				VK_VERSION_MAJOR(app.apiVersion), VK_VERSION_MINOR(app.apiVersion));
+			rsx_log.warning("Vulkan: loader reports %u.%u, requesting that instead of %u.%u.",
+				VK_VERSION_MAJOR(app.apiVersion), VK_VERSION_MINOR(app.apiVersion),
+				VK_VERSION_MAJOR(wanted_version), VK_VERSION_MINOR(wanted_version));
 		}
 
 		// Set up instance information

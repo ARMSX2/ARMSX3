@@ -110,6 +110,80 @@ add_dependencies(rpcs3_emu armsx3_spu_codegen_identity)
 # A per-source include directory, so no other translation unit's command line changes.
 set_property(SOURCE "${CMAKE_SOURCE_DIR}/rpcs3/Emu/Cell/SPUCommonRecompiler.cpp"
     TARGET_DIRECTORY rpcs3_emu APPEND PROPERTY INCLUDE_DIRECTORIES "${ARMSX3_SPU_IDENTITY_DIR}")
+# ---------------------------------------------------------------------------
+# ZeroFG: frame generation on its own Vulkan 1.3 device (rpcs3/Emu/RSX/VK/ZeroFG/)
+#
+# The engine is the ZeroFG library (https://github.com/hy300leosquizz-ctrl/ZeroFG,
+# Apache-2.0 OR GPL-2.0-or-later, taken here under the GPL). ZEROFG_SOURCE_DIR points at a local
+# checkout; without one the pinned commit is fetched. The presenter side is the same repository's
+# portable host kit (host/portable), which builds the ZeroFG Independent Presenter unchanged and
+# needs a {fmt} target for its logging. RPCS3 has its own fmt namespace (Utilities/StrFmt.h), so
+# {fmt} is header-only and only the kit's sources and the adapter see it, never the rest of the
+# core. The engine's shaders ship compiled: nothing beyond the NDK is needed.
+# ---------------------------------------------------------------------------
+option(ARMSX3_ENABLE_ZEROFG "Build ZeroFG frame generation" ON)
+# The adapter is always built: without ARMSX3_HAS_ZEROFG every entry point is a no-op, so the
+# renderer calls it with no #ifdef of its own. It needs nothing of stdafx.h.
+set(_zerofg_adapter "${CMAKE_SOURCE_DIR}/rpcs3/Emu/RSX/VK/ZeroFG/VKZeroFG.cpp")
+target_sources(rpcs3_emu PRIVATE "${_zerofg_adapter}"
+    "${CMAKE_SOURCE_DIR}/rpcs3/Emu/RSX/VK/ZeroFG/VKZeroFGLog.cpp")
+set_source_files_properties("${_zerofg_adapter}"
+    DIRECTORY "${CMAKE_SOURCE_DIR}/rpcs3/Emu"
+    PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+if(ARMSX3_ENABLE_ZEROFG AND CMAKE_ANDROID_ARCH_ABI STREQUAL "arm64-v8a")
+    include(FetchContent)
+
+    # The NDK's Vulkan headers, which the core builds with too (VulkanAPI.h), staged alone: an
+    # include path on the whole sysroot would put libc's headers ahead of libc++'s wrappers.
+    set(_zerofg_ndk_include "${CMAKE_SYSROOT}/usr/include")
+    if(NOT EXISTS "${_zerofg_ndk_include}/vulkan/vulkan_core.h")
+        message(FATAL_ERROR "ZeroFG: no Vulkan headers in the NDK sysroot (${_zerofg_ndk_include})")
+    endif()
+    set(_zerofg_vulkan_headers "${CMAKE_BINARY_DIR}/zerofg_vulkan_headers")
+    file(COPY "${_zerofg_ndk_include}/vulkan" "${_zerofg_ndk_include}/vk_video"
+        DESTINATION "${_zerofg_vulkan_headers}")
+    set(ZEROFG_VULKAN_HEADERS_DIR "${_zerofg_vulkan_headers}" CACHE PATH "" FORCE)
+    set(ZEROFG_HOST_VULKAN_HEADERS_DIR "${_zerofg_vulkan_headers}" CACHE PATH "" FORCE)
+
+    # The SPIR-V the release ships, not whatever glslang this machine happens to have.
+    set(ZEROFG_PREBUILT_SHADERS ON CACHE STRING "" FORCE)
+    set(ZEROFG_SOURCE_DIR "" CACHE PATH "Local ZeroFG checkout (empty: fetch the pinned commit)")
+    if(ZEROFG_SOURCE_DIR)
+        add_subdirectory("${ZEROFG_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/zerofg")
+        set(_zerofg_root "${ZEROFG_SOURCE_DIR}")
+    else()
+        FetchContent_Declare(zerofg
+            GIT_REPOSITORY https://github.com/hy300leosquizz-ctrl/ZeroFG.git
+            # main, 2026-11-09: ZeroFG 1.1.0 dual-licensed Apache-2.0 OR GPL-2.0-or-later.
+            GIT_TAG 10e68b6b7912f959f3ea026e0e5385e6f9ee2d2e)
+        FetchContent_MakeAvailable(zerofg)
+        set(_zerofg_root "${zerofg_SOURCE_DIR}")
+    endif()
+
+    FetchContent_Declare(zerofg_fmt
+        GIT_REPOSITORY https://github.com/fmtlib/fmt.git
+        GIT_TAG 11.1.4
+        GIT_SHALLOW TRUE)
+    set(FMT_INSTALL OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(zerofg_fmt)
+    set(ZEROFG_HOST_FMT_TARGET "fmt::fmt-header-only" CACHE STRING "" FORCE)
+    add_subdirectory("${_zerofg_root}/host/portable" "${CMAKE_BINARY_DIR}/zerofg_host")
+
+    # Only the adapter sees the kit's and the engine's headers, and only it is told ZeroFG is in.
+    # Link only, so none of their usage requirements reach the rest of rpcs3_emu (whose objects
+    # then keep their command lines and are not rebuilt). rpcs3_emu is static: they land after it
+    # on the core's link line.
+    set_source_files_properties("${_zerofg_adapter}"
+        DIRECTORY "${CMAKE_SOURCE_DIR}/rpcs3/Emu"
+        PROPERTIES
+            INCLUDE_DIRECTORIES "$<TARGET_PROPERTY:zerofg_host,INTERFACE_INCLUDE_DIRECTORIES>;$<TARGET_PROPERTY:zerofg,INTERFACE_INCLUDE_DIRECTORIES>;$<TARGET_PROPERTY:fmt-header-only,INTERFACE_INCLUDE_DIRECTORIES>"
+            COMPILE_DEFINITIONS "ARMSX3_HAS_ZEROFG=1;FMT_HEADER_ONLY=1"
+            # Written to ZeroFG's and Xenia's conventions, and through the Vulkan headers' own
+            # macros (C casts) included here as ordinary headers: RPCS3's -Werror set stays
+            # warnings for this one file.
+            COMPILE_OPTIONS "-Wno-error;-Wno-old-style-cast")
+    target_link_libraries(rpcs3_emu PRIVATE "$<LINK_ONLY:zerofg>" "$<LINK_ONLY:zerofg_host>")
+endif()
 
 target_include_directories(armsx3-core PRIVATE
     ${CMAKE_SOURCE_DIR}

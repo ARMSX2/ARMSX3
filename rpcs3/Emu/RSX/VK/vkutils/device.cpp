@@ -11,6 +11,7 @@
 #include "instance.h"
 #include "util/logs.hpp"
 #include "Emu/system_config.h"
+#include "Emu/RSX/VK/ZeroFG/VKZeroFG.h"
 #include <vulkan/vulkan_core.h>
 #ifdef __ANDROID__
 #include "Emu/RSX/VK/vk_android_loader.h"
@@ -249,6 +250,7 @@ namespace vk
 		// true -- see the note there.
 		optional_features_support.external_memory_ahb      = device_extensions.is_supported(VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME) &&
 			device_extensions.is_supported(VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME);
+		optional_features_support.external_semaphore_fd    = device_extensions.is_supported(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
 		optional_features_support.vulkan_memory_model      = !!vk12_info.vulkanMemoryModel;
 		optional_features_support.null_descriptor          = !!robustness2_info.nullDescriptor;
 
@@ -971,6 +973,21 @@ namespace vk
 		{
 			requested_extensions.push_back(VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME);
 			requested_extensions.push_back(VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME);
+		}
+
+		// ZeroFG's handoff (ZeroFG/VKZeroFG.h): frames go to ZeroFG's own device as
+		// AHardwareBuffers with sync files, recorded with synchronization2. Asked for only while
+		// ZeroFG is switched on, and only as a whole set, so with ZeroFG off the device is exactly
+		// what it was.
+		{
+			const auto& support = pgpu->optional_features_support;
+			const bool handoff = VKZeroFG::WantsSourceHandoff() && support.external_memory_ahb &&
+				support.synchronization_2 && support.external_semaphore_fd;
+			if (handoff)
+			{
+				requested_extensions.push_back(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
+			}
+			VKZeroFG::NoteSourceHandoff(handoff);
 		}
 #endif
 
