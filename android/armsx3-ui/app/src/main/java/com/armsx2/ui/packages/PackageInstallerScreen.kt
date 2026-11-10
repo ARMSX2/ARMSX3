@@ -262,9 +262,14 @@ internal fun isInstalledContent(dir: java.io.File): Boolean {
  * rpcs3::utils::get_cache_dir() appends Emu.GetTitleID() to <root>/cache/cache/, and a PKG
  * installs into a directory named for the same id. Measured at 7-58 MB per title, which is
  * why uninstalling without it leaves the bulk of the disk usage behind.
+ *
+ * Under recompilerCacheRoot, not ARMSX3.rootDirectory: that stays empty until a game has been
+ * booted, and an uninstall straight after opening the app found no cache to offer or remove.
+ * Its compiled SPU objects are not in here at all (see GameCaches.kt), so the size and the
+ * delete below take those separately.
  */
-private fun cacheDirFor(titleId: String): java.io.File =
-    java.io.File(ARMSX3.rootDirectory, "cache/cache/$titleId")
+private fun cacheDirFor(context: android.content.Context, titleId: String): java.io.File =
+    java.io.File(com.armsx2.cache.recompilerCacheRoot(context), titleId)
 
 private fun dirSize(dir: java.io.File): Long =
     if (!dir.isDirectory) 0L else dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
@@ -281,12 +286,13 @@ private fun formatSize(bytes: Long): String = when {
  * separator or a dot-dot in it would resolve outside the per-title folder and take the whole
  * cache — or more — with it. Anything but a single plain segment is refused.
  */
-private fun removeCacheFor(titleId: String): Boolean = runCatching {
+private fun removeCacheFor(context: android.content.Context, titleId: String): Boolean = runCatching {
     if (titleId.isBlank() || titleId == "." || titleId == ".." ||
         titleId.contains('/') || titleId.contains('\\')
     ) return false
-    val dir = cacheDirFor(titleId)
-    if (!dir.isDirectory) return false
+    val dir = cacheDirFor(context, titleId)
+    val objects = com.armsx2.cache.clearPrivateSpuObjects(dir).first > 0
+    if (!dir.isDirectory) return objects
     dir.deleteRecursively()
 }.getOrDefault(false)
 
@@ -726,7 +732,7 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
             // Only after the game itself is gone: dropping the cache for a title that
             // is still installed would just cost the user a recompile.
             if (ok && removeCache) {
-                withContext(Dispatchers.IO) { removeCacheFor(titleId) }
+                withContext(Dispatchers.IO) { removeCacheFor(context, titleId) }
             }
             installed = readInstalled()
             licences = readLicences()
@@ -770,7 +776,9 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
         // Off the main thread: a cache directory holds hundreds of files and this runs while the
         // dialog is opening.
         val cacheBytes by androidx.compose.runtime.produceState(0L, target) {
-            value = withContext(Dispatchers.IO) { dirSize(cacheDirFor(target.id)) }
+            value = withContext(Dispatchers.IO) {
+                cacheDirFor(context, target.id).let { dirSize(it) + com.armsx2.cache.privateSpuObjBytes(it) }
+            }
         }
         AlertDialog(
             onDismissRequest = { confirmRemove = null },

@@ -77,6 +77,33 @@ private fun privateSpuObjDir(root: File): File? = runCatching {
 }.getOrNull()
 
 /**
+ * Delete the compiled SPU objects of the caches under [root] from the app's private cache folder
+ * (privateSpuObjDir). Every cache delete needs this as well as its own: the objects are not in
+ * [root]. Returns how many object folders went and their size.
+ */
+internal fun clearPrivateSpuObjects(root: File): Pair<Int, Long> {
+    var count = 0
+    var bytes = 0L
+
+    privateSpuObjDir(root)?.walkTopDown()
+        ?.filter { it.isDirectory && it.name.startsWith("spuobj-") }
+        ?.toList() // materialise before deleting, so the walk is not mutated under itself
+        ?.forEach { dir ->
+            val size = dir.sizeRecursive()
+            if (runCatching { dir.deleteRecursively() }.getOrDefault(false)) {
+                count++
+                bytes += size
+            }
+        }
+
+    return count to bytes
+}
+
+/** The size of the compiled SPU objects clearPrivateSpuObjects would delete for [root]. */
+internal fun privateSpuObjBytes(root: File): Long =
+    privateSpuObjDir(root)?.takeIf { it.isDirectory }?.sizeRecursive() ?: 0L
+
+/**
  * Delete the SPU cache only, or the whole PPU cache.
  *
  * SPU-only leaves the compiled PPU modules in place, so booting stays as fast as it was and
@@ -91,17 +118,9 @@ internal fun clearRecompilerCache(root: File, spuOnly: Boolean): Pair<Int, Long>
     // in the app's private cache folder (see privateSpuObjDir), so the walks below stopped reaching
     // them and both buttons left them behind. A cleared game still got its old SPU code back, and its
     // next boot was no first boot.
-    privateSpuObjDir(root)?.let { private ->
-        private.walkTopDown()
-            .filter { it.isDirectory && it.name.startsWith("spuobj-") }
-            .toList() // materialise before deleting, as below
-            .forEach { dir ->
-                val size = dir.sizeRecursive()
-                if (runCatching { dir.deleteRecursively() }.getOrDefault(false)) {
-                    count++
-                    bytes += size
-                }
-            }
+    clearPrivateSpuObjects(root).let { (n, size) ->
+        count += n
+        bytes += size
     }
 
     if (spuOnly) {
