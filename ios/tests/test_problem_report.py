@@ -1311,7 +1311,12 @@ def swift_literal(piece):
 
 
 PROCESS_NAMES = ("Rpcs3Bridge.stderrWitnessDropped()", "Rpcs3Bridge.deviceChecks()", "DiagnosticsSession.shared.current",
-                 "Rpcs3Bridge.jitPairingReport()", "PairingSource.reportLine(", "PairingSource.ladderLine(")
+                 "Rpcs3Bridge.jitPairingReport()", "PairingSource.reportLine(", "PairingSource.ladderLine(",
+                 "JitFallback.decide(", "running ? jitRoute() : nil", '"built-in helper (other install)"', '"built-in helper"',
+                 '"Wait for Debugger"', '"opened through StikDebug"', '"StikDebug fallback (', '"none (',
+                 "LiveContainerProbe.current", "running ? liveContainerDetail() : nil", "Helper Process Support \\(hooks)",
+                 '"version unknown"', 'guard probe.insideLiveContainer else { return "no" }',
+                 "running ? JitDeviceModel.shared.testResult?.reportWord : nil")
 
 
 def process_problems(sheet, facade):
@@ -1328,6 +1333,8 @@ def process_problems(sheet, facade):
     for name in PROCESS_NAMES:
         if name not in sheet:
             problems.append("process: ProblemReportView.swift never names {0}".format(name))
+    if "bundleID" in sheet or "bundlePath" in sheet:
+        problems.append("process: ProblemReportView.swift reads a bundle id or path, which no report line may carry")
     body = body_of(facade, r"\+\s*\(uint64_t\)\s*stderrWitnessDropped\b") or ""
     if "armsx3_stderr_witness_dropped()" not in body:
         problems.append("process: Rpcs3Bridge.mm's +stderrWitnessDropped does not call armsx3_stderr_witness_dropped()")
@@ -1831,7 +1838,7 @@ do {
                               process: ReportProcess(liveContainer: true, stderrDropped: 42), now: now)
     let zipped = lines(r.summary).contains("LiveContainer: yes") && lines(r.summary).contains("Console lines dropped, approximate (RPCS3.log is complete): 42")
     let order = consecutive(summary("u4", process: ReportProcess(liveContainer: true, stderrDropped: 42)),
-                            ["JIT helper:", "Pairing file:", "LiveContainer:", "Console lines dropped, approximate (RPCS3.log is complete):", "Last FPS:"])
+                            ["JIT helper:", "Pairing file:", "JIT test:", "LiveContainer:", "Console lines dropped, approximate (RPCS3.log is complete):", "Last FPS:"])
     print("U4 lcyes=\(flag(yes.contains("LiveContainer: yes"))) lcno=\(flag(no.contains("LiveContainer: no")))"
         + " lcunknown=\(flag(unknown.contains("LiveContainer: unknown")))"
         + " dropped=\(flag(yes.contains("Console lines dropped, approximate (RPCS3.log is complete): 42")))"
@@ -1848,11 +1855,11 @@ do {
     let none = lines(summary("u4", process: ReportProcess(pairingFile: "none")))
     let unknown = lines(summary("u4"))
     let order = consecutive(summary("u4", process: ReportProcess(pairingFile: line)),
-                            ["JIT helper:", "Pairing file:", "LiveContainer:"])
+                            ["JIT helper:", "Pairing file:", "JIT test:", "LiveContainer:"])
     let tried = "imported rejected, SideStore's (LiveContainer) accepted"
     let ladder = lines(summary("u4", process: ReportProcess(pairingFile: line, pairingLadder: tried)))
     let ladderOrder = consecutive(summary("u4", process: ReportProcess(pairingFile: line, pairingLadder: tried)),
-                                  ["JIT helper:", "Pairing file:", "Pairing ladder:", "LiveContainer:"])
+                                  ["JIT helper:", "Pairing file:", "Pairing ladder:", "JIT test:", "LiveContainer:"])
     let words = (known + none + unknown + ladder).filter { $0.hasPrefix("Pairing") }
     let clean = !words.isEmpty && words.allSatisfy { !$0.contains("/") && !$0.contains(".plist") }
     print("U5 line=\(flag(known.contains("Pairing file: " + line))) none=\(flag(none.contains("Pairing file: none")))"
@@ -1902,8 +1909,48 @@ print("U2 real=\(flag(lastError("u2real") == "Last error: " + @@U2REAL@@))"
 
 // U3: the JIT route from launch.json.
 func route(_ name: String) -> String { lines(summary(name)).first { $0.hasPrefix("JIT route: ") } ?? "<none>" }
-let u3order = consecutive(summary("u3builtin"), ["Device:", "JIT route:", "JIT helper:", "Pairing file:", "LiveContainer:",
+let u3order = consecutive(summary("u3builtin"), ["Device:", "JIT route:", "JIT helper:", "Pairing file:", "JIT test:", "LiveContainer:",
                                                 "Console lines dropped, approximate (RPCS3.log is complete):", "Last FPS:"])
+// U7: the running session's LiveContainer detail wins over the yes/no/unknown line; an earlier session keeps that line.
+do {
+    let details = ["yes, 3.8.13, Helper Process Support on", "yes, 3.8.13, Helper Process Support off",
+                   "yes, 3.8.13, Helper Process Support unknown", "yes, version unknown, Helper Process Support on", "no"]
+    let named = details.allSatisfy { detail in
+        let out = summary("u4", process: ReportProcess(liveContainer: true, liveContainerDetail: detail))
+        return lines(out).contains("LiveContainer: " + detail) && consecutive(out, ["Pairing file:", "JIT test:", "LiveContainer:", "Console lines dropped"])
+    }
+    let earlier = lines(summary("u4", process: ReportProcess(liveContainer: true))).contains("LiveContainer: yes")
+        && lines(summary("u4", process: ReportProcess(liveContainer: false))).contains("LiveContainer: no")
+        && lines(summary("u4")).contains("LiveContainer: unknown")
+    print("U7 details=\(flag(named)) earlier=\(flag(earlier))")
+}
+
+// U8: the running session's JIT test word, or "not run" for an earlier session or no test.
+do {
+    let words = ["passed", "stopped at helper (start-failed)", "stopped at LocalDevVPN (connect-failed)", "stopped at pairing (rejected)",
+                 "stopped at disk image"]
+    let named = words.allSatisfy { word in
+        let out = summary("u4", process: ReportProcess(pairingFile: "none", jitTest: word))
+        return lines(out).contains("JIT test: " + word) && consecutive(out, ["Pairing file:", "JIT test:", "LiveContainer:"])
+    }
+    let ladder = consecutive(summary("u4", process: ReportProcess(pairingFile: "none", pairingLadder: "a rejected, b accepted", jitTest: "passed")),
+                             ["Pairing file:", "Pairing ladder:", "JIT test:", "LiveContainer:"])
+    let notRun = lines(summary("u4")).contains("JIT test: not run")
+        && lines(summary("u4", process: ReportProcess(liveContainer: true))).contains("JIT test: not run")
+    print("U8 words=\(flag(named)) ladder=\(flag(ladder)) notrun=\(flag(notRun))")
+}
+
+// U6: the running session's route words win over the launch record's; an earlier session keeps the record's.
+do {
+    let words = ["built-in helper", "built-in helper (other install)", "StikDebug fallback (helper-setting-off)",
+                 "opened through StikDebug", "Wait for Debugger", "none (no-dual-map)"]
+    let named = words.allSatisfy { word in
+        let out = summary("u3stikdebug", process: ReportProcess(jitRoute: word))
+        return lines(out).contains("JIT route: " + word) && consecutive(out, ["Device:", "JIT route:", "JIT helper:"])
+    }
+    let earlier = route("u3stikdebug") == "JIT route: StikDebug" && route("u3builtin") == "JIT route: built-in helper"
+    print("U6 words=\(flag(named)) earlier=\(flag(earlier))")
+}
 print("U3 builtin=\(flag(route("u3builtin") == "JIT route: built-in helper"))"
     + " stikdebug=\(flag(route("u3stikdebug") == "JIT route: StikDebug"))"
     + " off=\(flag(route("u3off") == "JIT route: none (no-dual-map)"))"
@@ -1918,6 +1965,9 @@ EXPECTED_MEANING = {
     "U3": "U3 builtin=1 stikdebug=1 off=1 other=1 missing=1 order=1",
     "U4": "U4 lcyes=1 lcno=1 lcunknown=1 dropped=1 unknown=1 zip=1 order=1",
     "U5": "U5 line=1 none=1 unknown=1 order=1 clean=1 ladder=1 ladderorder=1 noladder=1",
+    "U6": "U6 words=1 earlier=1",
+    "U7": "U7 details=1 earlier=1",
+    "U8": "U8 words=1 ladder=1 notrun=1",
 }
 
 
@@ -2231,6 +2281,32 @@ class Mutations(unittest.TestCase):
 
     def test_mutation_process_drops_the_pairing_line(self):
         self.assertFlagged(self.edited("ProblemReportView.swift", "PairingSource.reportLine(", "PairingSource.other("), "process")
+
+    def test_mutation_process_drops_the_other_install_route(self):
+        self.assertFlagged(self.edited("ProblemReportView.swift", '"built-in helper (other install)"', '"built-in helper (other)"'),
+                           "process")
+
+    def test_mutation_process_drops_the_fallback_route(self):
+        self.assertFlagged(self.edited("ProblemReportView.swift", '"StikDebug fallback (', '"StikDebug (fallback '), "process")
+
+    def test_mutation_process_gives_an_earlier_session_the_route(self):
+        self.assertFlagged(self.edited("ProblemReportView.swift", "running ? jitRoute() : nil", "jitRoute()"), "process")
+
+    def test_mutation_process_drops_the_hooks_state(self):
+        self.assertFlagged(self.edited("ProblemReportView.swift", "Helper Process Support \\(hooks)", "Helper Processes \\(hooks)"),
+                           "process")
+
+    def test_mutation_process_gives_an_earlier_session_the_detail(self):
+        self.assertFlagged(self.edited("ProblemReportView.swift", "running ? liveContainerDetail() : nil",
+                                       "liveContainerDetail()"), "process")
+
+    def test_mutation_process_names_the_bundle_id(self):
+        self.assertFlagged(self.edited("ProblemReportView.swift", '"yes, \\(probe.version ?? "version unknown"), ',
+                                       '"yes, \\(probe.bundleID ?? ""), '), "process")
+
+    def test_mutation_process_gives_an_earlier_session_the_test(self):
+        self.assertFlagged(self.edited("ProblemReportView.swift", "running ? JitDeviceModel.shared.testResult?.reportWord : nil",
+                                       "JitDeviceModel.shared.testResult?.reportWord"), "process")
 
     # The sheet's build drops the process facts.
     def test_mutation_process_build_without_process(self):
