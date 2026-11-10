@@ -66,7 +66,8 @@ KILLZONE = "BCUS98234"
 IOS_ONLY_ROW = "Video:\\n  Emulate Extended Depth Range: true\\n"
 
 IOS_ONLY_REQUIRED = ("BLUS30591", "BLES01031", "NPUB30558", "BLUS30837", "BLES01613",
-                     "BLUS30405", "BLES00713", "BLES00714", "BLES00158", "BLUS30089")
+                     "BLUS30405", "BLES00713", "BLES00714", "BLES00158", "BLUS30089",
+                     "BLUS30065", "BLES00142")
 
 IOS_ONLY_NO_INTERPRETER = "Video:\\n  Shader Mode: Async Recompiler (multi-threaded)\\n"
 
@@ -78,6 +79,8 @@ IOS_ONLY_STUB_TRAPS = "Core:\\n  Stub PPU Traps: 1\\n"
 
 IOS_ONLY_APPROXIMATE_ZCULL = "Video:\\n  Accurate ZCULL stats: false\\n  Relaxed ZCULL Sync: false\\n"
 
+IOS_ONLY_HIGH_PRECISION = "Video:\\n  Shader Precision: High\\n"
+
 IOS_ONLY_OTHER_ROWS = {
     "NPUB30558": "Core:\\n  SPU loop detection: true\\n",
     "BLUS30837": IOS_ONLY_NO_INTERPRETER,
@@ -87,6 +90,8 @@ IOS_ONLY_OTHER_ROWS = {
     "BLES00714": IOS_ONLY_SPU_COMPILE_PAUSE,
     "BLES00158": IOS_ONLY_APPROXIMATE_ZCULL,
     "BLUS30089": IOS_ONLY_APPROXIMATE_ZCULL,
+    "BLUS30065": IOS_ONLY_HIGH_PRECISION,
+    "BLES00142": IOS_ONLY_HIGH_PRECISION,
     "BCES01176": IOS_ONLY_STUB_TRAPS,
     "BCJS37004": IOS_ONLY_STUB_TRAPS,
     "BCAS25009": IOS_ONLY_STUB_TRAPS,
@@ -547,6 +552,10 @@ class Mutations(unittest.TestCase):
 
     def test_assassins_creed_row_keeps_accurate_zcull(self):
         h = self.edited(self.header, '{"BLUS30089", "Video:\\n  Accurate ZCULL stats: false', '{"BLUS30089", "Video:\\n  Accurate ZCULL stats: true')
+        self.caught(behaviour_problems(h, self.product, self.kotlin), "iosonly")
+
+    def test_simpsons_row_takes_the_database_precision(self):
+        h = self.edited(self.header, '{"BLUS30065", "Video:\\n  Shader Precision: High', '{"BLUS30065", "Video:\\n  Shader Precision: Low')
         self.caught(behaviour_problems(h, self.product, self.kotlin), "iosonly")
 
     def test_redirect_merge_turns_case_sensitive(self):

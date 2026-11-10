@@ -695,6 +695,10 @@ namespace armsx3::bridge::title_config
 		{"BLES00158", "Video:\n  Accurate ZCULL stats: false\n  Relaxed ZCULL Sync: false\n"},
 		{"BLUS30089", "Video:\n  Accurate ZCULL stats: false\n  Relaxed ZCULL Sync: false\n"},
 
+		// The database sets Low precision for AMD cards, which turns this game's textures black on iPhone.
+		{"BLUS30065", "Video:\n  Shader Precision: High\n"},
+		{"BLES00142", "Video:\n  Shader Precision: High\n"},
+
 		// At 0 a PPU trap stops the game; at 1 the trapping instruction is skipped.
 		{"BCES01176", "Core:\n  Stub PPU Traps: 1\n"},
 		{"BCJS37004", "Core:\n  Stub PPU Traps: 1\n"},
