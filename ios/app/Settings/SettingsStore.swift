@@ -160,10 +160,6 @@ import SwiftUI
         didSet { defaults.set(stikdebugRequestedAt, forKey: Self.key("stikdebugRequestedAt")) }
     }
 
-    var forceJitScript: Bool {
-        didSet { defaults.set(forceJitScript, forKey: Self.key("forceJitScript")) }
-    }
-
     // MARK: - First-run setup
 
     /// Setup never opens by itself once this is set; Run Setup Again does not clear it.
@@ -297,7 +293,6 @@ import SwiftUI
         jitMethodAtLaunch = method
         jitMethod = method
         stikdebugRequestedAt = double("stikdebugRequestedAt", 0)
-        forceJitScript = bool("forceJitScript", false)
         setupFinished = bool("setupFinished", false)
         setupStep = defaults.object(forKey: Self.key("setupStep")) as? Int ?? 0
         controllerMacroBindings = defaults.dictionary(forKey: Self.key("controllerMacroBindings")) as? [String: String] ?? [:]

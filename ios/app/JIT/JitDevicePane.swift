@@ -44,6 +44,7 @@ import SwiftUI
     /// This process opened StikDebug, so a return to the foreground is that hand-off coming back.
     private(set) var openedThisProcess = false
     @ObservationIgnored private var launchVerified = false
+    @ObservationIgnored private var stikDebugRefused = false
 
     /// The verify window, and how long a StikDebug request counts as recent.
     static let verifyWindowNanoseconds: UInt64 = 3_000_000_000
@@ -52,27 +53,48 @@ import SwiftUI
     /// On the model, so a smoke scene can raise it without a tap.
     var confirmingReset = false
 
-    var mounting: Bool {
+    /// Test JIT Setup, kept on the model so it runs on while the player leaves the pane.
+    private(set) var testRunning = false
+    private(set) var testStage: String?
+    private(set) var testResult: JitTestResult?
+
+    var diskImageBusy: Bool {
         if case .busy = diskImage { return true }
         return false
     }
+
+    /// The helper has a request in flight, a mount or a test, so every control that would send another waits.
+    var mounting: Bool { diskImageBusy || testRunning }
+
+    /// The test needs the helper, which inside LiveContainer runs only while the hooks are active.
+    var canTest: Bool { method == .builtin && toolsAvailable }
 
     var liveContainer: Bool { report?.liveContainer ?? false }
 
     /// Read with the pre-main reader's whitelist.
     var stored: JitMethod { JitMethod.stored(SettingsStore.shared.jitMethod) }
 
-    /// Nil reads "Not set": Built-in stored under LiveContainer.
-    var method: JitMethod? { JitMethod.effective(stored: stored, liveContainer: liveContainer) }
+    var method: JitMethod { Self.route(stored) }
 
-    /// Built-in is hidden under LiveContainer.
-    var choices: [JitMethod] { JitMethod.allCases.filter { !(liveContainer && $0 == .builtin) } }
+    private static func route(_ method: JitMethod) -> JitMethod { method == .stikdebug ? .builtin : method }
+
+    var choices: [JitMethod] { SettingsStore.shared.showAdvancedSettings ? [.builtin, .wait] : [.builtin] }
+
+    /// A player who stored Wait can always get back to Built-in.
+    var showsMethodRow: Bool { SettingsStore.shared.showAdvancedSettings || stored == .wait }
 
     /// A launch-time method that differs from the one this launch read.
     var appliesOnReopen: Bool {
-        guard let method, method != .stikdebug else { return false }
-        return method != JitMethod.stored(SettingsStore.shared.jitMethodAtLaunch)
+        method != Self.route(JitMethod.stored(SettingsStore.shared.jitMethodAtLaunch))
     }
+
+    var probe: JitFallback.Probe { LiveContainerProbe.current }
+
+    /// Inside LiveContainer the helper runs only while LiveContainer's hooks are active.
+    var toolsAvailable: Bool { !liveContainer || probe.hooksActive == true }
+
+    /// The launch helper turned JIT on, as opposed to a debugger that was already attached.
+    var jitOnThroughBuiltin: Bool { jitOn && EmulatorSession.shared.jitReason == "helper-ok" }
 
     /// This process's own launch verdict, and nothing else.
     var jitOn: Bool { EmulatorSession.shared.jitAvailable == true }
@@ -84,10 +106,30 @@ import SwiftUI
                      stikDebugReturnedOff: stikDebugReturnedOff, txm: report?.txm ?? .unknown, liveContainer: liveContainer,
                      mountResult: mountResult, actedThisLaunch: actedThisLaunch, importRefusal: importRefusal,
                      sideStoreAvailable: sideStoreAvailable, isPad: UIDevice.current.userInterfaceIdiom == .pad,
-                     sideStoreSentNothing: sideStoreSentNothing, sideStoreLockdown: sideStoreLockdown)
+                     sideStoreSentNothing: sideStoreSentNothing, sideStoreLockdown: sideStoreLockdown,
+                     checklistFails: !checklist.isEmpty, liveProcessMissing: liveContainer && probe.liveProcessPresent == false,
+                     fallbackAdvice: fallbackAdvice, testResult: testResult)
     }
 
     var step: JitStep { JitNextStep.decide(situation) }
+
+    /// The LiveContainer rows, only for a player who relies on built-in JIT.
+    var checklist: [JitFallback.ChecklistRow] {
+        method == .builtin ? JitFallback.checklist(probe: probe, jitOnThroughBuiltin: jitOnThroughBuiltin) : []
+    }
+
+    /// With JIT on through StikDebug or an already traced launch, the notice body for the cause that holds.
+    var fallbackAdvice: String? {
+        guard jitOn else { return nil }
+        let session = EmulatorSession.shared
+        let verdict = JitFallback.decide(jitOn: jitOn, jitReason: session.jitReason, helperWord: session.jitHelperOutcome,
+                                         methodAtLaunch: SettingsStore.shared.jitMethodAtLaunch,
+                                         storedCause: JitFallback.storedCause(in: .standard)?.rawValue, probe: probe)
+        return verdict.cause.map {
+            JitFallback.noticeBody(cause: $0, insideLiveContainer: probe.insideLiveContainer, version: probe.version,
+                                   supportEnds: JitFallback.supportEndsAnnounced)
+        }
+    }
 
     var codeLine: String {
         JitNextStep.codeLine(reason: EmulatorSession.shared.jitReason, helperWord: EmulatorSession.shared.jitHelperOutcome,
@@ -100,11 +142,18 @@ import SwiftUI
 
     func refresh() {
         report = DeviceReport(Rpcs3Bridge.deviceChecks())
+        // These read report, so they are computed before report is modified.
+        let version = liveContainer ? probe.version : nil
+        let fromOtherInstall = liveContainer && jitOnThroughBuiltin && probe.hooksActive == false
+        report?.liveContainerVersion = version
+        report?.helperFromOtherInstall = fromOtherInstall
         refreshPairing()
-        if !actedThisLaunch {
+        // A test result is newer than the launch helper's word.
+        if !actedThisLaunch && testResult == nil {
             diskImage = DiskImageState.fromHelperOutcome(EmulatorSession.shared.jitHelperOutcome)
         }
-        stikDebugInstalled = URL(string: "stikdebug://").map { UIApplication.shared.canOpenURL($0) } ?? false
+        // LiveContainer may not pass the query on, so inside it StikDebug counts as installed until iOS refuses a link.
+        stikDebugInstalled = liveContainer ? !stikDebugRefused : URL(string: "stikdebug://").map { UIApplication.shared.canOpenURL($0) } ?? false
         sideStoreAvailable = !liveContainer && (URL(string: "sidestore://").map { UIApplication.shared.canOpenURL($0) } ?? false)
         // Once per process, after the launch verdict is known.
         if !launchVerified, EmulatorSession.shared.jitAvailable != nil {
@@ -112,6 +161,9 @@ import SwiftUI
             launchVerify()
         }
     }
+
+    /// The test found the device turned the file down, and no import has replaced it since.
+    private var testStoppedAtPairing: Bool { testResult?.stoppedStage == .pairing && !actedThisLaunch }
 
     /// Reads only existence, the origin word and file dates; SideStore's file is opened in memory for its shape.
     private func refreshPairing() {
@@ -125,8 +177,10 @@ import SwiftUI
         awaitingSideStore = PairingLink.isAwaiting(at: Date(), in: .standard)
         pairingImported = ownFound || sideStore != nil
         pairingValue = PairingSource.paneValue(ownFileFound: ownFound, sideStoreInPlace: sideStore != nil, origin: origin,
-                                               awaitingSideStore: awaitingSideStore, report: launch)
-        pairingRejected = PairingSource.paneRejected(report: launch, fileFound: pairingImported)
+                                               awaitingSideStore: awaitingSideStore, report: launch,
+                                               testStoppedAtPairing: testStoppedAtPairing)
+        pairingRejected = PairingSource.paneRejected(report: launch, fileFound: pairingImported,
+                                                     testStoppedAtPairing: testStoppedAtPairing)
         let used = launch["used"] ?? ""
         let inUse = used.hasPrefix("sidestore") || (used.isEmpty && !ownFound) ? sideStore : own
         let attributes = inUse.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path) }
@@ -180,14 +234,18 @@ import SwiftUI
     }
 
     /// The request time is stored first, because StikDebug kills this process and the new launch reads it.
+    /// Inside LiveContainer the link names LiveContainer and its selection is written first, so the relaunch lands in ARMSX3.
     func openStikDebug() {
-        guard !checking, let url = StikDebugLink.url(bundleID: Bundle.main.bundleIdentifier ?? "", txm: report?.txm ?? .unknown,
-                                                     forceScript: SettingsStore.shared.forceJitScript) else { return }
+        guard !checking, let url = StikDebugLink.url(bundleID: LiveContainerProbe.stikDebugBundleID, txm: report?.txm ?? .unknown) else { return }
+        if liveContainer { LiveContainerProbe.selectForRelaunch() }
         SettingsStore.shared.stikdebugRequestedAt = Date().timeIntervalSince1970
         openedThisProcess = true
         UIApplication.shared.open(url) { accepted in
             Task { @MainActor in
-                if !accepted { self.stikDebugInstalled = false }
+                if !accepted {
+                    self.stikDebugRefused = true
+                    self.stikDebugInstalled = false
+                }
             }
         }
     }
@@ -248,7 +306,7 @@ import SwiftUI
     /// This process cannot turn JIT on, so the Checking… window only keeps the answer from flashing.
     func sceneBecameActive() {
         sideStoreReturned()
-        guard method == .stikdebug, !jitOn, openedThisProcess, requestIsRecent, !checking else { return }
+        guard !jitOn, openedThisProcess, requestIsRecent, !checking else { return }
         checking = true
         Task {
             try? await Task.sleep(nanoseconds: Self.verifyWindowNanoseconds)
@@ -257,9 +315,9 @@ import SwiftUI
         }
     }
 
-    /// A launch with StikDebug chosen and a recent request is the hand-off's answer.
+    /// A launch with a recent StikDebug request is the hand-off's answer.
     private func launchVerify() {
-        guard method == .stikdebug, requestIsRecent else { return }
+        guard requestIsRecent else { return }
         if jitOn {
             SettingsStore.shared.stikdebugRequestedAt = 0
         } else {
@@ -292,6 +350,31 @@ import SwiftUI
             AccessibilityNotification.Announcement(sentence).post()
         }
         return result
+    }
+
+    /// Check only: it never downloads or mounts. The stage words move the row; VoiceOver hears the result once.
+    func runTest() async {
+        guard canTest, !mounting else { return }
+        testRunning = true
+        testStage = nil
+        let (result, reason) = await withCheckedContinuation { (continuation: CheckedContinuation<(String, String), Never>) in
+            Rpcs3Bridge.testJitSetup(stage: { stage in
+                // The façade calls both blocks on the main queue.
+                MainActor.assumeIsolated { if stage == "connecting" || stage == "pairing" { self.testStage = stage } }
+            }, completion: { result, reason in
+                continuation.resume(returning: (result, reason))
+            })
+        }
+        let found = JitTestResult(result: result, reason: reason)
+        testResult = found
+        testRunning = false
+        refreshPairing()
+        // The check read the image, so the disk image row can say so.
+        if found == .passed { diskImage = .mounted } else if found.stoppedStage == .diskImage { diskImage = .notMounted }
+        let sentence = found == .passed && !jitOn
+            ? String(localized: "Built-in JIT is ready. Close ARMSX3 and open it again.")
+            : found.passedDetail ?? [found.value, found.fix(liveContainer: liveContainer)].compactMap { $0 }.joined(separator: ". ")
+        AccessibilityNotification.Announcement(sentence).post()
     }
 
     /// Deletes only the downloaded copy; the row keeps its value because a mounted image stays mounted until a restart.
@@ -389,6 +472,18 @@ struct StatusRow: View {
     }
 }
 
+// A problem value in the warm colour, on a row whose trailing value the row itself draws.
+private struct WarmValue: ViewModifier {
+    let isOn: Bool
+    @Environment(\.controllerTextAppearance) private var appearance
+
+    func body(content: Content) -> some View {
+        var warm = appearance
+        if isOn { warm.secondaryColor = OverlayTheme.warm }
+        return content.environment(\.controllerTextAppearance, warm)
+    }
+}
+
 // The symbol's shape repeats the colour's state for anyone who cannot tell green from red.
 enum StatusMark {
     case ok, problem, unknown
@@ -411,7 +506,7 @@ enum StatusMark {
 }
 
 // `setup` hosts only the JIT card, never the whole pane.
-enum JitDeviceHost { case settings, jitOff, setup }
+enum JitDeviceHost { case settings, jitOff, setup, inGame }
 
 // No Settings tab around it, because the library cannot start with JIT off.
 struct JitOffScreen: View {
@@ -441,7 +536,6 @@ struct JitDevicePane: View {
     var controller = SettingsControllerContext()
     let onBack: @MainActor () -> Bool
     @State private var model = JitDeviceModel.shared
-    @State private var store = SettingsStore.shared
     @State private var showingPicker = false
     @State private var pairingRequest: PairingImportRequest?
     @Environment(\.scenePhase) private var scenePhase
@@ -457,21 +551,20 @@ struct JitDevicePane: View {
             }
             if model.report != nil {
                 JitCard(model: model, host: host, showingPicker: $showingPicker, pairingRequest: $pairingRequest)
-                // An edge-case switch for advanced users; it only adds the script to the StikDebug link.
-                if SettingsStore.shared.showAdvancedSettings {
-                    OverlaySectionCard {
-                        OverlayToggleRow(controllerNavigationID: "settings.jit.forcescript", label: "Force JIT Script",
-                                         systemImage: "doc.text", isOn: $store.forceJitScript)
-                    }
-                }
                 if let primary {
                     // The label takes the width, so the fill spans the content column like the cards.
                     Button { act(primary) } label: { Text(primary.title).frame(maxWidth: .infinity) }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
-                        .disabled(model.mounting || model.checking)
+                        .disabled(model.mounting || model.checking || mountBlockedInGame)
                         .accessibilityHint(Text(Self.hint(primary)))
                         .controllerAccessibilityActionTarget(id: "settings.jit.next", label: primary.title, action: { act(primary) })
+                    if mountBlockedInGame {
+                        Text("Stop the game first.")
+                            .font(.subheadline)
+                            .foregroundStyle(OverlayTheme.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                     if !model.pairingImported, primary == .getFromSideStore || primary == .importPairingFile {
                         otherWays(primary)
                     }
@@ -483,7 +576,7 @@ struct JitDevicePane: View {
                         NotificationCenter.default.post(name: SetupFlow.runAgainNotification, object: nil)
                     }
                 }
-                // Not tied to the reset card, which only Built-in outside LiveContainer shows.
+                // Not tied to the reset card, which only Built-in with its tools available shows.
                 if model.canDeleteRejected {
                     OverlaySectionCard {
                         OverlayActionRow(controllerNavigationID: "settings.jit.deletepairing", label: "Delete Rejected Pairing File",
@@ -493,8 +586,8 @@ struct JitDevicePane: View {
                     }
                     .padding(.top, 16)
                 }
-                // Built-in only: the cache is the helper's, and under LiveContainer the helper never runs.
-                if model.method == .builtin && !model.liveContainer {
+                // Built-in only: the cache is the helper's, and under LiveContainer it exists once the hooks are active.
+                if model.method == .builtin && model.toolsAvailable {
                     OverlaySectionCard {
                         OverlayActionRow(controllerNavigationID: "settings.jit.resetddi", label: "Reset Developer Disk Image",
                                          systemImage: nil, isDestructive: true) {
@@ -532,10 +625,10 @@ struct JitDevicePane: View {
             Text("ARMSX3 deletes its downloaded copy. The next mount downloads it again, about 16 MB. A disk image that is mounted now stays mounted until this device restarts.")
         }
         .controllerAccessibilityNavigation(controllerInput: controller.input,
-                                           scopeKey: host == .settings ? "settings.pane." + SettingsPane.jitDevice.navigationKey : "jitoff.pane",
+                                           scopeKey: host == .settings ? "settings.pane." + SettingsPane.jitDevice.navigationKey : host == .inGame ? "game.jitdevice" : "jitoff.pane",
                                            onBack: onBack, onPreviousTab: controller.onPreviousTab,
                                            onNextTab: controller.onNextTab, onBoundary: controller.onBoundary,
-                                           preferredInitialFocusLabel: primary?.title ?? JitCard.methodID)
+                                           preferredInitialFocusLabel: primary?.title ?? (model.showsMethodRow ? JitCard.methodID : nil))
         .onAppear { model.refresh() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
@@ -546,6 +639,8 @@ struct JitDevicePane: View {
     }
 
     private var primary: JitPrimary? { model.step.primary }
+
+    private var mountBlockedInGame: Bool { host == .inGame && primary == .mountDiskImage }
 
     // The sources less likely to work, in one quiet card; with SideStore the picker moves down here from the primary.
     private func otherWays(_ primary: JitPrimary) -> some View {
@@ -567,6 +662,7 @@ struct JitDevicePane: View {
     }
 
     private func act(_ primary: JitPrimary) {
+        guard !mountBlockedInGame else { return }
         Self.perform(primary, model: model, showingPicker: $showingPicker, pairingRequest: $pairingRequest)
     }
 
@@ -574,7 +670,9 @@ struct JitDevicePane: View {
     static func perform(_ primary: JitPrimary, model: JitDeviceModel, showingPicker: Binding<Bool>,
                         pairingRequest: Binding<PairingImportRequest?>) {
         switch primary {
-        case .chooseMethod: showingPicker.wrappedValue = true
+        case .tryAgain:
+            model.refresh()
+            if model.canTest { Task { await model.runTest() } }
         case .importPairingFile: pairingRequest.wrappedValue = PairingImportRequest()
         case .getFromSideStore: model.getFromSideStore()
         case .mountDiskImage: Task { await model.mount() }
@@ -587,7 +685,8 @@ struct JitDevicePane: View {
         case .mountDiskImage: return String(localized: "Downloads and mounts the disk image.")
         case .openStikDebug: return String(localized: "Opens StikDebug, which turns on JIT and returns you here.")
         case .getFromSideStore: return String(localized: "Opens SideStore, which sends the pairing file back.")
-        case .chooseMethod, .importPairingFile: return ""
+        case .tryAgain: return String(localized: "Checks the setup again.")
+        case .importPairingFile: return ""
         }
     }
 
@@ -612,6 +711,16 @@ struct JitCard: View {
     static let methodID = "settings.jit.method"
     /// Rows whose next step is a reopen: in setup the advice says setup continues here.
     static let reopenRows: Set<Int> = [6, 7, 11]
+    /// JIT is on through the StikDebug fallback or an already traced launch.
+    static let fallbackRow = 12
+
+    private static func checklistValue(_ presence: Presence) -> String {
+        switch presence {
+        case .present: return String(localized: "Yes")
+        case .missing: return String(localized: "No")
+        case .unknown: return String(localized: "Unknown")
+        }
+    }
 
     private func adviceText(_ advice: String) -> String {
         if host == .setup && Self.reopenRows.contains(model.step.row) { return advice + " " + JitNextStep.setupSuffix }
@@ -622,7 +731,11 @@ struct JitCard: View {
         OverlaySectionCard(title: String(localized: "JIT")) {
             StatusRow(label: String(localized: "JIT"), value: jitValue, isProblem: !model.jitOn && !model.checking, busy: model.checking,
                       mark: model.checking ? nil : model.jitOn ? .ok : .problem)
-            methodRow
+            if model.showsMethodRow { methodRow }
+            ForEach(model.checklist, id: \.label) { row in
+                StatusRow(label: row.label, value: Self.checklistValue(row.presence), isProblem: row.presence == .missing,
+                          fix: row.fix, mark: StatusMark(row.presence))
+            }
             if model.method == .builtin {
                 pairingRow
                 if let caption = model.pairingCaption {
@@ -632,14 +745,13 @@ struct JitCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                StatusRow(label: String(localized: "Developer Disk Image"), value: diskImageValue,
-                          isProblem: model.diskImage == .notMounted && !model.jitOn, busy: model.mounting,
-                          mark: diskImageMark)
-            }
-            if model.method == .stikdebug {
-                StatusRow(label: String(localized: "StikDebug"),
-                          value: model.stikDebugInstalled ? String(localized: "Installed") : String(localized: "Not installed"),
-                          isProblem: !model.stikDebugInstalled, mark: model.stikDebugInstalled ? .ok : .problem)
+                if model.toolsAvailable {
+                    StatusRow(label: String(localized: "Developer Disk Image"), value: diskImageValue,
+                              isProblem: model.diskImage == .notMounted && !model.jitOn,
+                              fix: JitNextStep.diskImageFix(jitOn: model.jitOn, diskImage: model.diskImage, testRowShown: testRowShown),
+                              busy: model.diskImageBusy, mark: diskImageMark)
+                }
+                if testRowShown { testRow }
             }
             if let advice = model.step.advice {
                 Text(adviceText(advice))
@@ -648,7 +760,7 @@ struct JitCard: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            if !model.jitOn {
+            if !model.jitOn || model.step.row == Self.fallbackRow {
                 Text(model.codeLine)
                     .font(.caption.monospaced())
                     .foregroundStyle(OverlayTheme.textSecondary)
@@ -666,14 +778,13 @@ struct JitCard: View {
         return model.jitOn ? String(localized: "On") : String(localized: "Off")
     }
 
-    private var methodValue: String { model.method?.title ?? String(localized: "Not set") }
+    private var methodValue: String { model.method.title }
 
     @ViewBuilder private var methodRow: some View {
         OverlayActionRow(controllerNavigationID: Self.methodID, label: "Method", systemImage: nil,
                          trailingValue: methodValue, keepsTrailingValue: true, showsChevron: true) {
             showingPicker = true
         }
-        .transformEnvironment(\.controllerTextAppearance) { if model.method == nil { $0.secondaryColor = OverlayTheme.warm } }
         .accessibilityLabel(Text("JIT Method"))
         .accessibilityValue(Text(methodValue))
         .accessibilityHint(Text("Opens the list of JIT methods."))
@@ -708,6 +819,70 @@ struct JitCard: View {
         .accessibilityLabel(Text("Pairing File"))
         .accessibilityValue(Text(model.pairingValue))
         .accessibilityHint(Text("Imports a pairing file from Files."))
+    }
+
+    private var testValue: String? {
+        if model.testRunning { return JitNextStep.testStageValue(model.testStage) }
+        return model.testResult?.value
+    }
+
+    /// The JIT-off screen and setup start the test from Try Again, so their row only reports it, and only once it has run.
+    private var testRowReadOnly: Bool { host == .jitOff || host == .setup }
+
+    private var testRowShown: Bool {
+        model.method == .builtin && model.canTest && (!testRowReadOnly || model.testRunning || model.testResult != nil)
+    }
+
+    private var testDetail: String? {
+        guard !model.testRunning, let result = model.testResult else { return nil }
+        return result.fix(liveContainer: model.liveContainer) ?? result.passedDetail
+    }
+
+    @ViewBuilder private var testRow: some View {
+        if testRowReadOnly {
+            StatusRow(label: String(localized: "Test JIT Setup"), value: testValue ?? "",
+                      isProblem: !model.testRunning && model.testResult?.stoppedStage != nil, fix: testDetail, busy: model.testRunning,
+                      mark: model.testResult == .passed ? .ok : nil)
+        } else {
+            actionTestRow
+        }
+    }
+
+    @ViewBuilder private var actionTestRow: some View {
+        OverlayActionRow(controllerNavigationID: "settings.jit.test", label: "Test JIT Setup", systemImage: nil,
+                         trailingValue: model.testResult == .passed && !model.testRunning ? nil : testValue, keepsTrailingValue: true) {
+            Task { await model.runTest() }
+        }
+        .modifier(WarmValue(isOn: !model.testRunning && model.testResult?.stoppedStage != nil))
+        .disabled(model.mounting || host == .inGame)
+        // A tick stands in for the word Passed; the column is kept free so a value does not sit under it.
+        .padding(.trailing, 32)
+        .overlay(alignment: .trailing) {
+            Group {
+                if model.testRunning {
+                    ProgressView().controlSize(.small)
+                } else if model.testResult == .passed {
+                    StatusMark.ok.image.font(.title3)
+                }
+            }
+            .accessibilityHidden(true)
+        }
+        .accessibilityLabel(Text("Test JIT Setup"))
+        .accessibilityValue(Text(testValue ?? ""))
+        .accessibilityHint(Text("Checks the helper, LocalDevVPN, the pairing file and the disk image."))
+        if host == .inGame {
+            Text("Stop the game first.")
+                .font(.subheadline)
+                .foregroundStyle(OverlayTheme.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        if let detail = testDetail {
+            Text(detail)
+                .font(.subheadline)
+                .foregroundStyle(OverlayTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private var diskImageMark: StatusMark? {

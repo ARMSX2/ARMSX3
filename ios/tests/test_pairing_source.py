@@ -65,6 +65,15 @@ PANES = {
                              "Rejected"),
 }
 
+# name: (ownFileFound, sideStoreInPlace, awaiting, launch report, value and whether it is rejected, when a test stopped at pairing)
+AFTER_TEST = {
+    "accepted-file": (True, False, False, {"used": "own", "result": "accepted"}, "Rejected|true"),
+    "no-report": (True, False, False, {}, "Rejected|true"),
+    "sidestore-file": (False, True, False, {"used": "sidestore-lc-rp", "result": "accepted"}, "Rejected|true"),
+    "no-file": (False, False, False, {}, "Missing|false"),
+    "while-waiting": (True, False, True, {}, "Waiting for SideStore…|true"),
+}
+
 REPORTS = {
     "side-accepted": ({"used": "sidestore-lc-rp", "format": "rp", "result": "accepted"}, True, "imported", "2026-10-12",
                       "SideStore's (LiveContainer), Remote Pairing, created 12 Oct, accepted"),
@@ -135,6 +144,9 @@ def driver():
             flag(own), flag(side), origin_case(origin), flag(waiting), dictionary(report))))
         lines.append(show("pane-rejected " + name, '"\\(PairingSource.paneRejected(report: {0}, fileFound: {1}))"'.format(
             dictionary(report), flag(own or side))))
+    for name, (own, side, waiting, report, _) in AFTER_TEST.items():
+        lines.append(show("pane-test " + name, 'PairingSource.paneValue(ownFileFound: {0}, sideStoreInPlace: {1}, origin: .imported, awaitingSideStore: {2}, report: {3}, testStoppedAtPairing: true) + "|" + "\\(PairingSource.paneRejected(report: {3}, fileFound: {4}, testStoppedAtPairing: true))"'.format(
+            flag(own), flag(side), flag(waiting), dictionary(report), flag(own or side))))
     for name, (report, own, origin, day, _) in REPORTS.items():
         lines.append(show("report " + name, "PairingSource.reportLine(report: {0}, ownFileFound: {1}, origin: {2}, fileDate: {3}, now: now, calendar: calendar)".format(
             dictionary(report), flag(own), origin_case(origin), date(day))))
@@ -157,6 +169,8 @@ def expected():
     for name, entry in PANES.items():
         want["pane " + name] = entry[-1]
         want["pane-rejected " + name] = "true" if entry[4].get("result") == "rejected" and (entry[0] or entry[1]) else "false"
+    for name, entry in AFTER_TEST.items():
+        want["pane-test " + name] = entry[-1]
     for name, entry in REPORTS.items():
         want["report " + name] = entry[-1]
     for name, entry in LADDERS.items():
@@ -202,8 +216,16 @@ def pane_problems(text):
         problems.append("model: pairingRejected is not taken from this launch's report")
     if not re.search(r"model\.pairingImported\s*&&\s*!model\.pairingRejected\s*\?\s*StatusMark\.ok\s*:\s*StatusMark\.problem", code):
         problems.append("view: the Pairing File mark ignores a rejected file")
-    if "awaitingSideStore: awaitingSideStore, report: launch)" not in code:
+    if "awaitingSideStore: awaitingSideStore, report: launch," not in code:
         problems.append("model: the row value ignores this launch's report")
+    if not re.search(r"paneValue\([^)]*testStoppedAtPairing:\s*testStoppedAtPairing\)", code):
+        problems.append("model: the row value ignores a test that stopped at pairing")
+    if not re.search(r"paneRejected\(report:\s*launch,[^)]*testStoppedAtPairing:\s*testStoppedAtPairing\)", code):
+        problems.append("model: the row mark ignores a test that stopped at pairing")
+    if not re.search(r"var testStoppedAtPairing: Bool \{ testResult\?\.stoppedStage == \.pairing && !actedThisLaunch \}", code):
+        problems.append("model: a pairing stop is not tied to the test result and to no import since")
+    if not re.search(r"testRunning = false\s+refreshPairing\(\)", code):
+        problems.append("model: the pairing row is not re-read when the test result arrives")
     return problems
 
 
@@ -316,16 +338,70 @@ class ThePaneRowSaysRejected(unittest.TestCase):
         self.assertTrue(any(p.startswith("view:") for p in pane_problems(text)))
 
     def test_mutation_a_row_value_without_the_report_is_caught(self):
-        text = read(PANE).replace("awaitingSideStore: awaitingSideStore, report: launch)", "awaitingSideStore: awaitingSideStore)", 1)
+        text = read(PANE).replace("awaitingSideStore: awaitingSideStore, report: launch,", "awaitingSideStore: awaitingSideStore,", 1)
         self.assertTrue(any(p.startswith("model:") for p in pane_problems(text)))
 
     def test_mutation_a_rejected_flag_that_never_trips_is_caught(self):
-        anchor = 'fileFound && report["result"] == "rejected"'
+        anchor = 'fileFound && (report["result"] == "rejected" || testStoppedAtPairing)'
         text = read(SOURCE)
         self.assertIn(anchor, text)
         got = run(text.replace(anchor, "false", 1))
         self.assertNotEqual(expected()["pane-rejected rejected-own"], got["pane-rejected rejected-own"])
         self.assertNotEqual(expected()["pane rejected-own"], got["pane rejected-own"])
+
+    def test_a_test_that_stopped_at_pairing_rejects_the_file(self):
+        got = run()
+        for key, want in expected().items():
+            if key.startswith("pane-test "):
+                self.assertEqual(want, got.get(key), key)
+
+    def test_mutation_a_pairing_stop_that_never_trips_is_caught(self):
+        anchor = "|| testStoppedAtPairing)"
+        text = read(SOURCE)
+        self.assertIn(anchor, text)
+        got = run(text.replace(anchor, "|| false)", 1))
+        self.assertNotEqual(expected()["pane-test accepted-file"], got["pane-test accepted-file"])
+        self.assertNotEqual(expected()["pane-test no-report"], got["pane-test no-report"])
+
+    def test_mutation_a_pairing_stop_beats_a_missing_file_is_caught(self):
+        anchor = 'fileFound && (report["result"]'
+        text = read(SOURCE)
+        self.assertIn(anchor, text)
+        got = run(text.replace(anchor, '(report["result"]', 1))
+        self.assertNotEqual(expected()["pane-test no-file"], got["pane-test no-file"])
+
+    def test_mutation_a_pairing_stop_beats_waiting_for_sidestore_is_caught(self):
+        anchor = 'if awaitingSideStore { return String(localized: "Waiting for SideStore…") }'
+        text = read(SOURCE)
+        self.assertIn(anchor, text)
+        got = run(text.replace(anchor, "", 1))
+        self.assertNotEqual(expected()["pane-test while-waiting"], got["pane-test while-waiting"])
+
+    def test_mutation_the_row_value_ignores_a_pairing_stop_is_caught(self):
+        old = "report: launch,\n                                               testStoppedAtPairing: testStoppedAtPairing)"
+        text = read(PANE)
+        self.assertIn(old, text)
+        text = text.replace(old, "report: launch,\n                                               testStoppedAtPairing: false)", 1)
+        self.assertTrue(any(p.startswith("model:") for p in pane_problems(text)))
+
+    def test_mutation_the_row_mark_ignores_a_pairing_stop_is_caught(self):
+        old = "fileFound: pairingImported,\n                                                     testStoppedAtPairing: testStoppedAtPairing)"
+        text = read(PANE)
+        self.assertIn(old, text)
+        text = text.replace(old, "fileFound: pairingImported)", 1)
+        self.assertTrue(any(p.startswith("model:") for p in pane_problems(text)))
+
+    def test_mutation_a_pairing_stop_outlives_a_new_import_is_caught(self):
+        old = "== .pairing && !actedThisLaunch }"
+        text = read(PANE)
+        self.assertIn(old, text)
+        self.assertTrue(any(p.startswith("model:") for p in pane_problems(text.replace(old, "== .pairing }", 1))))
+
+    def test_mutation_the_row_is_not_re_read_after_the_test_is_caught(self):
+        old = "testRunning = false\n        refreshPairing()\n"
+        text = read(PANE)
+        self.assertIn(old, text)
+        self.assertTrue(any(p.startswith("model:") for p in pane_problems(text.replace(old, "testRunning = false\n", 1))))
 
     def test_mutation_the_ladder_still_saying_imported_is_caught(self):
         anchor = 'report["rejected"] == "own", inSideStore(report["used"] ?? "")'

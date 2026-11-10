@@ -950,6 +950,10 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: DeepLink.openTabNotification)) { note in
             if let tab = note.object as? Int { selectedMenuTab = tab }
         }
+        .onReceive(NotificationCenter.default.publisher(for: JitNoticeModel.openJitDeviceNotification)) { _ in
+            selectedMenuTab = 2
+            settingsMenuNavigationPath = [.jitDevice]
+        }
         .onChange(of: activeControllerAlertKind, initial: true) { previous, kind in
             rootControllerAlertSelection = 0
             updateRootAlertNavigationCapture(isPresented: kind != nil)

@@ -10,12 +10,13 @@ An iPhone or iPad with an A14 chip or newer, on iOS 17.4 or later. Older chips a
 
 A way to sideload apps, such as AltStore or SideStore. ARMSX3 is not on the App Store.
 
-JIT. ARMSX3 cannot run games without it. There are two ways to get it:
-
-- StikDebug: launch ARMSX3 from StikDebug's app list.
-- The built-in enabler: install LocalDevVPN, give ARMSX3 a pairing file made for your device on a computer, turn LocalDevVPN on, then open ARMSX3 from the home screen.
+JIT. ARMSX3 cannot run games without it, so it turns JIT on itself each time it opens. For that, install LocalDevVPN, give ARMSX3 a pairing file made for your device on a computer, turn LocalDevVPN on, then open ARMSX3 from the home screen.
 
 ARMSX3 takes the pairing file in any of four ways. In Settings › JIT and Device, tap Import Pairing File, or Get from SideStore if SideStore is installed. You can also share the file to ARMSX3 or open it in ARMSX3 from Files or another app. Or put a file named pairingFile.plist in ARMSX3's folder in Files. ARMSX3 moves that file out of the folder the next time it opens.
+
+Built-in JIT also works inside LiveContainer. You need LiveContainer 3.8.13 or later and Helper Process Support turned on for ARMSX3 in LiveContainer's app settings. Open ARMSX3 full screen from LiveContainer's app list, because a LiveContainer window cannot start it.
+
+StikDebug is used only when built-in JIT cannot start. ARMSX3 then says why, and you can launch ARMSX3 from StikDebug's app list to turn on JIT that way.
 
 You also need the PS3 system software file and your own games. Neither is included.
 
@@ -29,7 +30,7 @@ This version has a new bundle ID, com.armsx3.ARMSX3, so iOS treats it as a diffe
 
 Before you switch, open the old app and go to Settings › Backup & Restore, then tap Back Up Now. The zip goes to the old app's Backups folder in the Files app, so copy it somewhere else, such as iCloud Drive, before you delete anything.
 
-Then install the new IPA, open the same screen and use Restore from Backup to bring your saves and settings back. Games and firmware are not in the backup, so install them again. Last, enable JIT for the new app: pick ARMSX3 again in StikDebug, or import your pairing file again for the built-in enabler.
+Then install the new IPA, open the same screen and use Restore from Backup to bring your saves and settings back. Games and firmware are not in the backup, so install them again. Last, set up JIT for the new app: import your pairing file again for built-in JIT. If built-in JIT cannot start, pick ARMSX3 again in StikDebug.
 
 ## Reporting problems
 
