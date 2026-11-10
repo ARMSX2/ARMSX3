@@ -358,7 +358,7 @@ typedef struct {
 }
 @end
 
-// Forwards only the four stage words the UI knows to the caller's block, on the XPC queue they arrive on.
+// Forwards only the five stage words the UI knows to the caller's block, on the XPC queue they arrive on.
 @interface Armsx3DDIHost : Armsx3LauncherHost
 - (instancetype)initWithStage:(void (^ _Nullable)(const char* word))stage;
 @end
@@ -372,7 +372,7 @@ typedef struct {
 }
 - (void)helperStage:(NSString*)word {
     if (_stage == nil || ![word isKindOfClass:[NSString class]]) return;
-    if (![@[@"connecting", @"downloading", @"mounting", @"checking"] containsObject:word]) return;
+    if (![@[@"connecting", @"pairing", @"downloading", @"mounting", @"checking"] containsObject:word]) return;
     _stage(word.UTF8String);
 }
 @end
@@ -553,6 +553,17 @@ static const void* const kArmsx3CoordinatorQueueKey = &kArmsx3CoordinatorQueueKe
             ((void (*)(id, SEL, id))objc_msgSend)(s->_extension, interruptSel, onInterrupt);
         }
 
+        SEL cancelSel = NSSelectorFromString(@"setRequestCancellationBlock:");
+        if ([s->_extension respondsToSelector:cancelSel]) {
+            // LiveContainer reports a guest extension that fails to load only through cancellation.
+            void (^onCancel)(NSUUID*, NSError*) = ^(NSUUID* __unused req, NSError* __unused error) {
+                Armsx3LauncherCoordinator* coordinator = weakSelf;
+                if (!coordinator) return;
+                [coordinator dispatchInterruptionFrom:@"request-cancelled"];
+            };
+            ((void (*)(id, SEL, id))objc_msgSend)(s->_extension, cancelSel, onCancel);
+        }
+
         NSExtensionItem* input = [NSExtensionItem new];
         input.userInfo = @{ kArmsx3ListenerEndpointKey: s->_listener.endpoint };
 
@@ -620,6 +631,11 @@ static const void* const kArmsx3CoordinatorQueueKey = &kArmsx3CoordinatorQueueKe
         // And the Mount reply.
         [runnerIface setClasses:replyClasses
                     forSelector:@selector(mountDDIWithPairing:withReply:)
+                  argumentIndex:0
+                        ofReply:YES];
+        // And the Check reply.
+        [runnerIface setClasses:replyClasses
+                    forSelector:@selector(checkSetupWithPairing:withReply:)
                   argumentIndex:0
                         ofReply:YES];
         c.remoteObjectInterface = runnerIface;
@@ -838,8 +854,11 @@ static armsx3_jit_enabler_result Armsx3PrepareAttempt(NSData* ranges, NSData* pa
         // The stored blocks capture the launcher weakly; this frame keeps it alive for the whole wait.
         __weak StikJITExtensionLauncher* weakLauncher = launcher;
         dispatch_semaphore_t done = [launcher completionSemaphore];
+        dispatch_semaphore_t started = dispatch_semaphore_create(0);
+        const dispatch_time_t attemptStart = dispatch_time(DISPATCH_TIME_NOW, 0);
 
         [launcher launchWithCompletion:^(int32_t childPID, id<Armsx3JITEnablerRunner> runner, NSError* error) {
+            dispatch_semaphore_signal(started);
             StikJITExtensionLauncher* l = weakLauncher;
             if (!l) return;
             if (error || !runner) {
@@ -887,6 +906,18 @@ static armsx3_jit_enabler_result Armsx3PrepareAttempt(NSData* ranges, NSData* pa
             }];
         }];
 
+        // The short wait applies only inside LiveContainer, where a hook problem can hang the request.
+        if (getenv("LC_HOME_PATH") != NULL) {
+            dispatch_time_t connectBy = dispatch_time(attemptStart, 5LL * NSEC_PER_SEC);
+            if (connectBy > deadline) connectBy = deadline;
+            if (dispatch_semaphore_wait(started, connectBy) != 0) {
+                armsx3_jit_enabler_result cand;
+                Armsx3InitResult(&cand);
+                Armsx3SetOutcomeWord(&cand, "connect-timeout");
+                cand.outcome = ARMSX3_JIT_ENABLER_LAUNCH_FAILED;
+                [launcher submitTerminal:&cand];
+            }
+        }
         BOOL timedOut = (dispatch_semaphore_wait(done, deadline) != 0);
 
         if (timedOut) {
@@ -1085,8 +1116,16 @@ static bool Armsx3IsDDIToken(id value) {
 static bool Armsx3IsDDIWord(int32_t op, const char* word) {
     static const char* const reset[] = {"deleted", "failed"};
     static const char* const mount[] = {"ready", "unreachable", "download", "pairing", "mount", "other"};
-    const char* const* words = (op == ARMSX3_JIT_DDI_OP_MOUNT) ? mount : reset;
-    const size_t n = (op == ARMSX3_JIT_DDI_OP_MOUNT) ? sizeof mount / sizeof *mount : sizeof reset / sizeof *reset;
+    static const char* const check[] = {"ready", "unreachable", "pairing", "unmounted", "other"};
+    const char* const* words = reset;
+    size_t n = sizeof reset / sizeof *reset;
+    if (op == ARMSX3_JIT_DDI_OP_MOUNT) {
+        words = mount;
+        n = sizeof mount / sizeof *mount;
+    } else if (op == ARMSX3_JIT_DDI_OP_CHECK) {
+        words = check;
+        n = sizeof check / sizeof *check;
+    }
     for (size_t i = 0; word != NULL && i < n; i++) {
         if (strcmp(word, words[i]) == 0) return true;
     }
@@ -1097,14 +1136,14 @@ __attribute__((used, visibility("default")))
 int armsx3_jit_enabler_ddi(int32_t op, void (^stage)(const char* word), armsx3_jit_enabler_ddi_result* out) {
     // The result starts as a failure; only a validated helper reply changes it.
     Armsx3SetDDIWords(out, "other", "none");
-    // Reset has no stages; Mount's reach `stage` through Armsx3DDIHost.
-    if (op != ARMSX3_JIT_DDI_OP_RESET && op != ARMSX3_JIT_DDI_OP_MOUNT) {
+    // Reset has no stages; the stages of Mount and Check reach `stage` through Armsx3DDIHost.
+    if (op != ARMSX3_JIT_DDI_OP_RESET && op != ARMSX3_JIT_DDI_OP_MOUNT && op != ARMSX3_JIT_DDI_OP_CHECK) {
         Armsx3SetDDIWords(out, "other", "invalid-request");
         return -1;
     }
-    // Mount sends the pairing bytes; a missing file starts no extension.
+    // Mount and Check send the pairing bytes; a missing file starts no extension.
     NSData* pairing = nil;
-    if (op == ARMSX3_JIT_DDI_OP_MOUNT) {
+    if (op != ARMSX3_JIT_DDI_OP_RESET) {
         pairing = Armsx3MountPairing(Armsx3PairingLookup(NO, NULL));
         if (pairing == nil) {
             Armsx3SetDDIWords(out, "pairing", "pairing-absent");
@@ -1123,7 +1162,7 @@ int armsx3_jit_enabler_ddi(int32_t op, void (^stage)(const char* word), armsx3_j
 
     int rc = -1;
     @autoreleasepool {
-        Armsx3DDIHost* host = [[Armsx3DDIHost alloc] initWithStage:(op == ARMSX3_JIT_DDI_OP_MOUNT) ? stage : nil];
+        Armsx3DDIHost* host = [[Armsx3DDIHost alloc] initWithStage:(op != ARMSX3_JIT_DDI_OP_RESET) ? stage : nil];
         StikJITExtensionLauncher* launcher = [[StikJITExtensionLauncher alloc] initWithHost:host];
         __weak StikJITExtensionLauncher* weakLauncher = launcher;
         dispatch_semaphore_t done = [launcher completionSemaphore];
@@ -1170,13 +1209,15 @@ int armsx3_jit_enabler_ddi(int32_t op, void (^stage)(const char* word), armsx3_j
             };
             if (op == ARMSX3_JIT_DDI_OP_MOUNT) {
                 [runner mountDDIWithPairing:pairing withReply:onReply];
+            } else if (op == ARMSX3_JIT_DDI_OP_CHECK) {
+                [runner checkSetupWithPairing:pairing withReply:onReply];
             } else {
                 [runner resetDDIWithReply:onReply];
             }
         }];
 
-        // Monotonic and off the main thread; Reset 30 s, Mount 900 s because it may download the image first.
-        const int64_t waitSeconds = (op == ARMSX3_JIT_DDI_OP_MOUNT) ? 900LL : 30LL;
+        // Monotonic and off the main thread; Reset 30 s, Check 60 s, Mount 900 s because it may download the image first.
+        const int64_t waitSeconds = (op == ARMSX3_JIT_DDI_OP_MOUNT) ? 900LL : (op == ARMSX3_JIT_DDI_OP_CHECK) ? 60LL : 30LL;
         dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, waitSeconds * (int64_t)NSEC_PER_SEC);
         if (dispatch_semaphore_wait(done, deadline) != 0) {
             armsx3_jit_enabler_result cand;

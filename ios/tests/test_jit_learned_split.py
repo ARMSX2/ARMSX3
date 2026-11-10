@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """The learned JIT pool split: a C driver over ios/core/ios_jit_split.h gives the same prepare sizes and walk shares as
 this file's model for every stored history, and the launcher, dual map and perf loop store, read and log the
-history and budget as pinned. Rows measured over 10 s run at STORED_10S; it says nothing about a device."""
+history and budget as pinned. The built-in pool sizes do not depend on the walk budget. Rows measured over 10 s run at STORED_10S; it says nothing about a device."""
 
 import re
 import shutil
@@ -253,6 +253,12 @@ static void row(const char* name, const struct armsx3_jit_pool_history* h, int l
     printf("%%s %%llu %%llu %%llu %%llu %%llu %%llu %%u %%llu\n", name, s.size2, s.size3, s.share2, s.share3, s.need2, s.need3,
            s.sessions, s.budget_pages);
     printf("walk %%s %%llu\n", name, armsx3_jit_walk_budget_ms(&s, h, %dull, budget));
+    {
+        struct armsx3_jit_split none, most;
+        armsx3_jit_split_compute(h, low, t2, t3, p2max, %dull, %dull, 0ull, &none);
+        armsx3_jit_split_compute(h, low, t2, t3, p2max, %dull, %dull, ARMSX3_JIT_BUDGET_MAX_MS, &most);
+        printf("sizes_%%s %%llu %%llu %%llu %%llu\n", name, none.size2, none.size3, most.size2, most.size3);
+    }
 }
 
 int main(void)
@@ -298,7 +304,7 @@ int main(void)
     }
     return 0;
 }
-""" % (POOL3_MAX, FIXED_PAGES, FIXED_PAGES, "\n".join(rows), ", ".join("%dLL" % v for v in BUDGET_CASES),
+""" % (POOL3_MAX, FIXED_PAGES, FIXED_PAGES, POOL3_MAX, FIXED_PAGES, POOL3_MAX, FIXED_PAGES, "\n".join(rows), ", ".join("%dLL" % v for v in BUDGET_CASES),
        BUDGET_MS)
 
 
@@ -425,6 +431,9 @@ def problems(texts):
                 out.append("rule: {0}: the driver gives {1}, the model {2}".format(name, rows.get(name), want))
             elif name in PINNED and in_mib(want) != PINNED[name]:
                 out.append("rule: {0}: {1} MiB, pinned {2}".format(name, in_mib(want), PINNED[name]))
+            sizes = rows.get("sizes_" + name)
+            if sizes is None or sizes[0] != sizes[2] or sizes[1] != sizes[3]:
+                out.append("sizes: {0}: the prepare sizes {1} differ between walk budget 0 and the largest budget".format(name, sizes))
             grown = model_walk(want, h, FIXED_PAGES, budget_of(name))
             if walk.get(name) != grown:
                 out.append("walk: {0}: the driver gives {1} ms, the model {2}".format(name, walk.get(name), grown))
@@ -616,6 +625,8 @@ def perf_problems(diag):
         out.append("line: the jit prepare line is not a notice inside if (!prepare_told), which sets prepare_told = true;")
     if told is None or not re.search(r'diag_log\.notice\("jit prepare route=[^;]*, jit\.script_budget_ms\);', told):
         out.append("line: the jit prepare notice's last argument is not jit.script_budget_ms")
+    if told is None or not re.search(r'diag_log\.notice\("jit prepare route=[^"]*",\s*jit_route_word\(reason\),', told):
+        out.append("line: the jit prepare notice's first argument is not jit_route_word(reason)")
     return out
 
 
@@ -656,6 +667,31 @@ class TheSplitHolds(unittest.TestCase):
             h, low = next((h, low) for n, h, low in SCENARIOS if n == name)
             self.assertEqual(pinned, in_mib(model_for(name, h, low)), name)
 
+
+    def test_route_word_names_the_route_that_ran(self):
+        diag = without_comments(read(DIAG))
+        at = diag.index("const char* jit_route_word(const char* reason)")
+        function = brace_block(diag, at)[0]
+        source = ("#include <stdio.h>\n#include <string.h>\n#define nullptr NULL\n"
+                  "static const char* jit_route_word(const char* reason)\n" + function.replace("std::strcmp", "strcmp") +
+                  "\nint main(void)\n{\n"
+                  "    const char* reasons[] = {NULL, \"helper-ok\", \"already-traced\", \"debugger-attached\", \"no-debugger\","
+                  " \"helper-absent\", \"helper-failed\", \"pairing-absent\", \"anything-else\"};\n"
+                  "    for (unsigned i = 0; i < sizeof reasons / sizeof reasons[0]; i++)\n"
+                  "        printf(\"%s\\n\", jit_route_word(reasons[i]));\n    return 0;\n}\n")
+        compiler = shutil.which("cc")
+        if compiler is None:
+            self.skipTest("no `cc` on PATH; a skip is not a pass")
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "route.c").write_text(source, encoding="utf-8")
+            built = subprocess.run([compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", str(Path(tmp) / "route.c"),
+                                    "-o", str(Path(tmp) / "route")], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   timeout=COMPILE_TIMEOUT_SECONDS, universal_newlines=True)
+            self.assertEqual(0, built.returncode, built.stdout)
+            ran = subprocess.run([str(Path(tmp) / "route")], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 timeout=RUN_TIMEOUT_SECONDS, universal_newlines=True)
+        self.assertEqual(["none", "builtin", "pre-traced", "wait", "wait", "none", "stikdebug-fallback",
+                          "stikdebug-fallback", "stikdebug-fallback"], ran.stdout.split())
 
     def test_walk_proves_the_mk_peaks_on_a_slow_walk(self):
         # Host simulation of the real script_walk for one MK session; mk_ipad runs at STORED_10S, its measured budget.
@@ -743,6 +779,14 @@ class TheGuardCanFail(unittest.TestCase):
 
     def test_budget_out_of_range_saturates(self):
         self.mutated("split", ": fallback;", ": ARMSX3_JIT_BUDGET_MAX_MS;", "rule")
+
+    def test_sizes_follow_the_walk_budget(self):
+        self.mutated("split", "out->size2 = low_memory || out->need2 > tier2 ? out->need2 : tier2;",
+                     "out->size2 = (low_memory || out->need2 > tier2 ? out->need2 : tier2) + (budget_ms == 0 ? 0 : ARMSX3_JIT_SPLIT_ROUND);",
+                     "sizes")
+
+    def test_line_route_word_bypassed(self):
+        self.mutated("diag", "\t\t\t\t\tjit_route_word(reason),", '\t\t\t\t\treason == nullptr ? "none" : "builtin",', "line")
 
     def test_budget_not_taken(self):
         self.mutated("dual", "\t\t\t" + BUDGET_TAKEN + "\n", "", "reader")

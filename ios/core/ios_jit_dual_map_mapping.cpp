@@ -321,18 +321,6 @@ namespace jit_dual_map_internal
 			void* const plan_entry = ::dlsym(RTLD_DEFAULT, "armsx3_jit_launch_plan");
 			const int plan = plan_entry != nullptr ? reinterpret_cast<launch_plan_fn>(plan_entry)() : 0;
 
-			if ((plan & k_jit_plan_livecontainer) != 0 && (plan & k_jit_plan_method_mask) == 0)
-			{
-				enabler_reason = "livecontainer";
-				return false;
-			}
-
-			if ((plan & k_jit_plan_method_mask) == k_jit_plan_stikdebug)
-			{
-				enabler_reason = "stikdebug-not-attached";
-				return false;
-			}
-
 			if ((plan & k_jit_plan_method_mask) == k_jit_plan_wait)
 			{
 				enabler_reason = wait_for_debugger(k_wait_for_debugger_ms) ? "debugger-attached" : "no-debugger";
