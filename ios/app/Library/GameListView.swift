@@ -251,7 +251,9 @@ struct GameListView: View {
 
     // Never more columns than games, so a short library sits centred instead of hugging the left edge.
     private var gridColumns: [GridItem] {
-        let item = GridItem(.flexible(minimum: 150, maximum: 240), spacing: 16)
+        // No minimum: one is the grid's own width, which the scroll view then reports back as gridWidth, and a column count
+        // worked out in landscape would never shrink in portrait. `fit` already keeps each card at least 150 wide.
+        let item = GridItem(.flexible(minimum: 0, maximum: 240), spacing: 16)
         // In book pose each leaf gets its own columns and the gutter is as wide as the fold plus a margin, so no card crosses it.
         if let fold = gridFold {
             // A leaf less the outer padding and the gutter's margin (16 each), plus one spacing.
