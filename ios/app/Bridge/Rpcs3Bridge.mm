@@ -225,6 +225,19 @@ static NSString* rpcs3_report_word(const char* field, size_t size)
 	});
 }
 
++ (void)testJitSetupWithStage:(void (^)(NSString* stage))stage
+	completion:(void (^)(NSString* result, NSString* reason))completion
+{
+	dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+		NSString* result = nil;
+		NSString* reason = nil;
+		rpcs3_bridge_ddi(ARMSX3_JIT_DDI_OP_CHECK, stage, &result, &reason);
+		dispatch_async(dispatch_get_main_queue(), ^{
+			completion(result, reason);
+		});
+	});
+}
+
 + (void)resetDiskImageWithCompletion:(void (^)(NSString* result, NSString* reason))completion
 {
 	dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{

@@ -991,6 +991,32 @@ namespace
 		}
 	}
 
+	// The reason alone says which route ran, since pre-main cannot tell a StikDebug relaunch from a player who opened ARMSX3 through StikDebug.
+	const char* jit_route_word(const char* reason)
+	{
+		if (reason == nullptr || std::strcmp(reason, "helper-absent") == 0)
+		{
+			return "none";
+		}
+
+		if (std::strcmp(reason, "helper-ok") == 0)
+		{
+			return "builtin";
+		}
+
+		if (std::strcmp(reason, "already-traced") == 0)
+		{
+			return "pre-traced";
+		}
+
+		if (std::strcmp(reason, "debugger-attached") == 0 || std::strcmp(reason, "no-debugger") == 0)
+		{
+			return "wait";
+		}
+
+		return "stikdebug-fallback";
+	}
+
 	// Notice and never error: the log ring keeps every error-level line, and this one would push the errors out.
 	void perf_loop()
 	{
@@ -1093,7 +1119,7 @@ namespace
 				prepare_told = true;
 				const char* const reason = jit.enabler_reason;
 				diag_log.notice("jit prepare route=%s reason=%s script=%s pool2_mib=%u pool3_mib=%u pages_ok=%d elapsed_ms=%d budget_hit=%d first_refused_off=%d sessions=%u budget_pages=%u need2_mib=%u need3_mib=%u share2_mib=%u share3_mib=%u budget_ms=%d",
-					reason == nullptr ? "none" : std::strcmp(reason, "helper-ok") == 0 ? "builtin" : "stikdebug",
+					jit_route_word(reason),
 					reason == nullptr ? "none" : reason, jit.script_outcome == nullptr ? "none" : jit.script_outcome,
 					jit.pool2_limit_bytes >> 20, jit.pool3_limit_bytes >> 20, jit.script_pages_ok, jit.script_elapsed_ms,
 					jit.script_budget_hit, jit.script_first_refused_off, jit.split_sessions, jit.split_budget_pages,

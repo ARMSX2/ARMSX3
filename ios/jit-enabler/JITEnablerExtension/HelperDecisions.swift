@@ -55,7 +55,8 @@ enum MountStep: String {
     case checking, downloading, mounting, verifying
 }
 
-/// The JIT pane's result classes for a mount attempt.
+/// The JIT pane's result classes for a mount attempt; unmounted is only the check-only request's answer.
 enum MountResult: String {
     case ready, unreachable, download, pairing, mount, other
+    case unmounted
 }

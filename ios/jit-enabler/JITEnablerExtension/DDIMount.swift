@@ -46,6 +46,25 @@ enum DDIMount {
         }
     }
 
+    /// Asks only whether the image is mounted; never downloads or mounts. It blocks, so run it on the DDI queue.
+    static func check(pairingPath: String, stage: (String) -> Void) -> (result: MountResult, reason: String) {
+        let configuration = StikJIT.Configuration()
+        stage("connecting")
+        if EndpointProbe.failureReason(address: configuration.deviceAddress, port: configuration.rsdPort,
+                                       timeout: configuration.connectionTimeout) != nil {
+            return (.unreachable, HelperDecisions.reasonToken(step: nil, kind: "probe", code: nil, subCode: nil))
+        }
+        stage("pairing")
+        do {
+            let mounted = try DDISession(pairingFilePath: pairingPath, configuration: configuration).isMounted()
+            return (mounted ? .ready : .unmounted, "none")
+        } catch {
+            let failure = kind(of: error)
+            return (HelperDecisions.mountResult(probeFailed: false, failedStep: .checking, errorKind: failure.kind),
+                    HelperDecisions.reasonToken(step: .checking, kind: failure.kind, code: failure.code, subCode: failure.subCode))
+        }
+    }
+
     /// This port's word for a StikJIT error case; only the case and its two numbers are read, never its text.
     private static func kind(of error: Error) -> (kind: String, code: Int32?, subCode: Int32?) {
         guard let error = error as? StikJITError else { return ("other", nil, nil) }

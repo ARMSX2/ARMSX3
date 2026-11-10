@@ -82,6 +82,10 @@ typedef NS_ENUM(NSInteger, Rpcs3LiveSetting) {
 + (void)mountDiskImageWithStage:(void (^)(NSString* stage))stage
 	completion:(void (^)(NSString* result, NSString* reason))completion;
 
+// Off the emulator's queue, check only, never downloads or mounts. Results: ready, unreachable, pairing, unmounted or other, with a path-free reason.
++ (void)testJitSetupWithStage:(void (^)(NSString* stage))stage
+	completion:(void (^)(NSString* result, NSString* reason))completion;
+
 // The helper deletes only its own cached image files. Result deleted or failed (other when it could not be asked).
 + (void)resetDiskImageWithCompletion:(void (^)(NSString* result, NSString* reason))completion;
 

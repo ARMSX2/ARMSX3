@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """HelperDecisions.swift, run alone on the Mac host, gives the DDI verdict, retry gate, mount-result class and short
 reason token as the tables here say; the vendored EndpointProbe.swift fails closed and unreachable ports within its
-bound, and the request handler probes, retries and mounts nothing in its pre-main pass."""
+bound, the request handler probes, retries and mounts nothing in its pre-main pass, and the check-only request asks
+whether the image is mounted without downloading or mounting."""
 
 import hashlib
 import re
@@ -15,6 +16,7 @@ from swiftc_host import compile_and_run
 
 IOS = Path(__file__).resolve().parents[1]
 DECISIONS = IOS / "jit-enabler" / "JITEnablerExtension" / "HelperDecisions.swift"
+MOUNT = IOS / "jit-enabler" / "JITEnablerExtension" / "DDIMount.swift"
 HANDLER = IOS / "jit-enabler" / "JITEnablerExtension" / "JITEnablerRequestHandler.swift"
 PROBE = IOS / "jit-enabler" / "engine" / "EndpointProbe.swift"
 PROBE_BLOB = "13f50b7c202f994c62db778d9431588db9995a4b"  # VENDOR.md's audited blob SHA at StikJIT 3623e725
@@ -73,6 +75,46 @@ def handler_problems(handler):
     for forbidden in ("image_mounter_mount", "cryptexd_install_ddi", "cryptex1_assets_load", "idevice_init_logger"):
         if forbidden in code:
             problems.append("r7: the handler calls {0}".format(forbidden))
+    return problems
+
+
+def function_body(code, header):
+    """The text from `header` to the first line that is a lone four-space closing brace, or None."""
+    match = re.search(re.escape(header) + r".*?\n    \}\n", code, flags=re.DOTALL)
+    return match.group(0) if match else None
+
+
+def check_problems(mount):
+    """The check-only request probes, asks isMounted once and never downloads or mounts."""
+    body = function_body(without_comments(mount), "static func check(")
+    if body is None:
+        return ["check: DDIMount has no static func check("]
+    problems = []
+    probe, asked = body.find("EndpointProbe.failureReason("), body.find("isMounted()")
+    if probe < 0 or asked < 0 or probe > asked:
+        problems.append("check: the body does not probe before isMounted()")
+    if body.count("isMounted()") != 1:
+        problems.append("check: the body does not ask isMounted() exactly once")
+    for forbidden in ("SynchronousDDIDownloader", "mountDDI("):
+        if forbidden in body:
+            problems.append("check: the body calls {0}".format(forbidden))
+    return problems
+
+
+def check_handler_problems(handler):
+    code = without_comments(handler)
+    selector = "@objc(checkSetupWithPairing:withReply:)"
+    if selector not in code:
+        return ["checksel: the handler does not export checkSetupWithPairing:withReply:"]
+    entry = function_body(code, selector)
+    worker = function_body(code, "private func performCheck(")
+    problems = []
+    if entry is None or "ddiQueue.async" not in entry or "performCheck(" not in entry:
+        problems.append("checkq: checkSetup does not run performCheck inside ddiQueue.async")
+    if worker is None or "DDIMount.check(" not in worker:
+        problems.append("checkq: performCheck does not call DDIMount.check")
+    elif "DDIMount.run(" in worker:
+        problems.append("checkq: performCheck calls DDIMount.run")
     return problems
 
 
@@ -195,6 +237,14 @@ class MountTable(unittest.TestCase):
         self.assertEqual([], mount_table_problems(out))
         type(self).measured = sum(1 for l in out.splitlines() if l.startswith("mount "))
 
+    def test_the_classifier_never_yields_unmounted(self):
+        out = compile_decisions(read(DECISIONS), MOUNT_DRIVER)
+        self.assertEqual([], [l for l in out.splitlines() if l.endswith(" unmounted")])
+
+    def test_mutation_the_classifier_yields_unmounted(self):
+        text = edited(read(DECISIONS), "        return .other\n    }\n", "        return .unmounted\n    }\n")
+        self.assertNotEqual([], mount_table_problems(compile_decisions(text, MOUNT_DRIVER)))
+
     def test_mutation_rule_4_after_rule_6(self):
         text = read(DECISIONS)
         moved = edited(edited(text, RULE4, ""), RULE6, RULE6 + RULE4)
@@ -274,6 +324,34 @@ class Wired(unittest.TestCase):
     def test_mutation_install_ddi(self):
         mutated = read(HANDLER) + "\nlet _ = cryptexd_install_ddi(a, b)\n"
         self.assertTrue(any(p.startswith("r7:") for p in handler_problems(mutated)))
+
+
+class CheckOnly(unittest.TestCase):
+    def test_check_probes_asks_once_and_changes_nothing(self):
+        self.assertEqual([], check_problems(read(MOUNT)))
+
+    def test_mutation_check_downloads(self):
+        text = edited(read(MOUNT), "return (mounted ? .ready", "try SynchronousDDIDownloader.download(to: paths) { _, _ in }\n            return (mounted ? .ready")
+        self.assertTrue(any("SynchronousDDIDownloader" in p for p in check_problems(text)))
+
+    def test_mutation_check_mounts(self):
+        text = edited(read(MOUNT), "return (mounted ? .ready", "try DDISession(pairingFilePath: pairingPath, configuration: configuration).mountDDI(paths: paths) { _ in }\n            return (mounted ? .ready")
+        self.assertTrue(any("mountDDI(" in p for p in check_problems(text)))
+
+    def test_mutation_check_asks_before_probing(self):
+        text = edited(read(MOUNT), "stage(\"pairing\")\n        do {", "stage(\"pairing\")\n        _ = try? DDISession(pairingFilePath: pairingPath, configuration: configuration).isMounted()\n        do {")
+        self.assertNotEqual([], check_problems(text))
+
+    def test_handler_exports_the_check_on_the_ddi_queue(self):
+        self.assertEqual([], check_handler_problems(read(HANDLER)))
+
+    def test_mutation_selector_renamed(self):
+        text = edited(read(HANDLER), "@objc(checkSetupWithPairing:withReply:)", "@objc(checkWithPairing:withReply:)")
+        self.assertTrue(any(p.startswith("checksel:") for p in check_handler_problems(text)))
+
+    def test_mutation_check_off_the_queue(self):
+        text = edited(read(HANDLER), "        ddiQueue.async {\n            let result = self.performCheck", "        do {\n            let result = self.performCheck")
+        self.assertTrue(any(p.startswith("checkq:") for p in check_handler_problems(text)))
 
 
 if __name__ == "__main__":

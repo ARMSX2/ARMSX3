@@ -17,6 +17,8 @@ protocol Armsx3JITEnablerRunner {
     func resetDDI(withReply reply: @escaping ([String: Any]) -> Void)
     // mountDDIWithPairing:withReply:, matching the header.
     func mountDDI(withPairing pairing: Data, withReply reply: @escaping ([String: Any]) -> Void)
+    // checkSetupWithPairing:withReply:, a check-only request that never mounts.
+    func checkSetup(withPairing pairing: Data, withReply reply: @escaping ([String: Any]) -> Void)
 }
 
 @objc(Armsx3JITEnablerHost)
@@ -112,6 +114,32 @@ final class JITEnablerRequestHandler: NSObject, NSExtensionRequestHandling, Arms
             self.host?.helperLog("ddi mount \((result[DDIReplyKey.result] as? String) ?? "other")")
             reply(result)
         }
+    }
+
+    /// One check-only request on the DDI queue: probe, then ask whether the image is mounted; it never downloads or mounts.
+    @objc(checkSetupWithPairing:withReply:)
+    func checkSetup(withPairing pairing: Data, withReply reply: @escaping ([String: Any]) -> Void) {
+        ddiQueue.async {
+            let result = self.performCheck(pairing: pairing)
+            self.host?.helperLog("ddi check \((result[DDIReplyKey.result] as? String) ?? "other")")
+            reply(result)
+        }
+    }
+
+    private func performCheck(pairing: Data) -> [String: Any] {
+        if pairing.isEmpty || pairing.count > 65536 {
+            return [DDIReplyKey.result: "pairing", DDIReplyKey.reason: "invalid-request"]
+        }
+        let tempPath = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("armsx3-pairing-\(UUID().uuidString).plist")
+        defer { try? FileManager.default.removeItem(atPath: tempPath) }
+        do {
+            try pairing.write(to: URL(fileURLWithPath: tempPath), options: .atomic)
+        } catch {
+            return [DDIReplyKey.result: "other", DDIReplyKey.reason: "stage-failed"]
+        }
+        let r = DDIMount.check(pairingPath: tempPath, stage: { self.host?.helperStage($0) })
+        return [DDIReplyKey.result: r.result.rawValue, DDIReplyKey.reason: r.reason]
     }
 
     private func performMount(pairing: Data) -> [String: Any] {
