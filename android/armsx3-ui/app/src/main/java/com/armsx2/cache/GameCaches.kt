@@ -43,6 +43,40 @@ internal fun formatBytes(bytes: Long): String = when {
 }
 
 /**
+ * Where the core keeps the compiled SPU objects of the caches under [root]: the app's private cache
+ * folder, at the place [root] has under the data folder's cache (spu_obj_cache_parent in
+ * SPUCommonRecompiler.cpp). For the root of every game's caches it is the whole private folder,
+ * which also takes the hashed folders the core gives a cache that was not under the data folder.
+ * Null when [root] is not under the data folder's cache.
+ *
+ * Not ARMSX3.rootDirectory: that stays empty until a game has been booted, and a clear pressed
+ * straight after opening the app would have missed the folder again.
+ */
+private fun privateSpuObjDir(root: File): File? = runCatching {
+    val context = com.armsx2.Pasx2Application.appContext
+    val objects = File(context.cacheDir, "spuobj")
+    val target = root.canonicalFile
+
+    // The folder the core was started with first, then the one [root] was made from
+    // (recompilerCacheRoot); the same folder unless the data folder was moved this session.
+    val dataRoots = listOfNotNull(
+        MainActivityRuntime.currentInitDataRoot()?.takeIf { it.isNotBlank() },
+        MainActivityRuntime.assetCopyRoot(context),
+    )
+
+    dataRoots.firstNotNullOfOrNull { dataRoot ->
+        val dataCache = File(dataRoot, "cache").canonicalFile
+        val allGames = File(dataCache, "cache")
+
+        when {
+            allGames.path == target.path || allGames.path.startsWith(target.path + File.separator) -> objects
+            target.path.startsWith(dataCache.path + File.separator) -> File(objects, target.relativeTo(dataCache).path)
+            else -> null
+        }
+    }
+}.getOrNull()
+
+/**
  * Delete the SPU cache only, or the whole PPU cache.
  *
  * SPU-only leaves the compiled PPU modules in place, so booting stays as fast as it was and
@@ -52,6 +86,23 @@ internal fun formatBytes(bytes: Long): String = when {
 internal fun clearRecompilerCache(root: File, spuOnly: Boolean): Pair<Int, Long> {
     var count = 0
     var bytes = 0L
+
+    // Since 1.6.7 the compiled SPU objects are not under the data folder at all: the core keeps them
+    // in the app's private cache folder (see privateSpuObjDir), so the walks below stopped reaching
+    // them and both buttons left them behind. A cleared game still got its old SPU code back, and its
+    // next boot was no first boot.
+    privateSpuObjDir(root)?.let { private ->
+        private.walkTopDown()
+            .filter { it.isDirectory && it.name.startsWith("spuobj-") }
+            .toList() // materialise before deleting, as below
+            .forEach { dir ->
+                val size = dir.sizeRecursive()
+                if (runCatching { dir.deleteRecursively() }.getOrDefault(false)) {
+                    count++
+                    bytes += size
+                }
+            }
+    }
 
     if (spuOnly) {
         // Two things live here, not one. `spu-*.dat` is the original SPU cache; the persistent SPU
