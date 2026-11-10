@@ -17,6 +17,7 @@ from source_helpers import without_comments
 
 IOS = Path(__file__).resolve().parents[1]
 SOURCE = IOS / "app" / "JIT" / "PairingSource.swift"
+PANE = IOS / "app" / "JIT" / "JitDevicePane.swift"
 SOURCES = [SOURCE, IOS / "app" / "JIT" / "PairingFileCheck.swift", IOS / "app" / "JIT" / "DeviceChecks.swift"]
 
 IMPORT = re.compile(r"^\s*import\s+(\w+)", re.M)
@@ -194,6 +195,18 @@ def source_problems(text):
     return problems
 
 
+def pane_problems(text):
+    code = without_comments(text)
+    problems = []
+    if not re.search(r"pairingRejected\s*=\s*PairingSource\.paneRejected\(report:\s*launch", code):
+        problems.append("model: pairingRejected is not taken from this launch's report")
+    if not re.search(r"model\.pairingImported\s*&&\s*!model\.pairingRejected\s*\?\s*StatusMark\.ok\s*:\s*StatusMark\.problem", code):
+        problems.append("view: the Pairing File mark ignores a rejected file")
+    if "awaitingSideStore: awaitingSideStore, report: launch)" not in code:
+        problems.append("model: the row value ignores this launch's report")
+    return problems
+
+
 def read(path):
     text = path.read_text(encoding="utf-8")
     if not text.strip():
@@ -295,6 +308,17 @@ class TheFileIsClean(unittest.TestCase):
 
 
 class ThePaneRowSaysRejected(unittest.TestCase):
+    def test_the_real_pane_is_wired(self):
+        self.assertEqual([], pane_problems(read(PANE)))
+
+    def test_mutation_a_tick_for_a_rejected_file_is_caught(self):
+        text = read(PANE).replace("model.pairingImported && !model.pairingRejected ?", "model.pairingImported ?", 1)
+        self.assertTrue(any(p.startswith("view:") for p in pane_problems(text)))
+
+    def test_mutation_a_row_value_without_the_report_is_caught(self):
+        text = read(PANE).replace("awaitingSideStore: awaitingSideStore, report: launch)", "awaitingSideStore: awaitingSideStore)", 1)
+        self.assertTrue(any(p.startswith("model:") for p in pane_problems(text)))
+
     def test_mutation_a_rejected_flag_that_never_trips_is_caught(self):
         anchor = 'fileFound && report["result"] == "rejected"'
         text = read(SOURCE)

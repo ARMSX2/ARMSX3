@@ -92,7 +92,7 @@ FRIEND_LOG_SHAPES = (
 IMPORT = re.compile(r"^\s*import\s+(\w+)", re.M)
 LOGGING = re.compile(r"\b(print|NSLog|os_log|debugPrint)\s*\(|\bLogger\b")
 NETWORK = ("URLSession", "http://", "https://")
-PAIRING = ("StikJIT", "pairingFile")
+PAIRING = ("StikJIT", "pairingFile.plist", "pairingFile.origin")
 COPIES = re.compile(r"\bcopyItem\s*\(")
 IDENTITY = re.compile(r"\b(identifierForVendor|UIDevice)\b")
 SPDX_LINE = "// SPDX-License-Identifier: GPL-2.0-only"
@@ -1310,11 +1310,12 @@ def swift_literal(piece):
     return '"' + piece.replace('"', '\\"') + '"'
 
 
-PROCESS_NAMES = ("Rpcs3Bridge.stderrWitnessDropped()", "Rpcs3Bridge.deviceChecks()", "DiagnosticsSession.shared.current")
+PROCESS_NAMES = ("Rpcs3Bridge.stderrWitnessDropped()", "Rpcs3Bridge.deviceChecks()", "DiagnosticsSession.shared.current",
+                 "Rpcs3Bridge.jitPairingReport()", "PairingSource.reportLine(", "PairingSource.ladderLine(")
 
 
 def process_problems(sheet, facade):
-    """`process`: every store.buildReport( and store.summary( line passes `process:`, the sheet reads its three facts, and
+    """`process`: every store.buildReport( and store.summary( line passes `process:`, the sheet reads its facts, and
     the façade's +stderrWitnessDropped calls the witness's own counter."""
     problems = []
     for call in ("store.buildReport(", "store.summary("):
@@ -1830,7 +1831,7 @@ do {
                               process: ReportProcess(liveContainer: true, stderrDropped: 42), now: now)
     let zipped = lines(r.summary).contains("LiveContainer: yes") && lines(r.summary).contains("Console lines dropped, approximate (RPCS3.log is complete): 42")
     let order = consecutive(summary("u4", process: ReportProcess(liveContainer: true, stderrDropped: 42)),
-                            ["JIT helper:", "LiveContainer:", "Console lines dropped, approximate (RPCS3.log is complete):", "Last FPS:"])
+                            ["JIT helper:", "Pairing file:", "LiveContainer:", "Console lines dropped, approximate (RPCS3.log is complete):", "Last FPS:"])
     print("U4 lcyes=\(flag(yes.contains("LiveContainer: yes"))) lcno=\(flag(no.contains("LiveContainer: no")))"
         + " lcunknown=\(flag(unknown.contains("LiveContainer: unknown")))"
         + " dropped=\(flag(yes.contains("Console lines dropped, approximate (RPCS3.log is complete): 42")))"
@@ -1838,6 +1839,27 @@ do {
         + " zip=\(flag(zipped)) order=\(flag(order))")
 } catch {
     print("U4 error")
+}
+
+// U5: the pairing file's words, for the running session only.
+do {
+    let line = "SideStore's (LiveContainer), Remote Pairing, created 12 Oct, accepted"
+    let known = lines(summary("u4", process: ReportProcess(pairingFile: line)))
+    let none = lines(summary("u4", process: ReportProcess(pairingFile: "none")))
+    let unknown = lines(summary("u4"))
+    let order = consecutive(summary("u4", process: ReportProcess(pairingFile: line)),
+                            ["JIT helper:", "Pairing file:", "LiveContainer:"])
+    let tried = "imported rejected, SideStore's (LiveContainer) accepted"
+    let ladder = lines(summary("u4", process: ReportProcess(pairingFile: line, pairingLadder: tried)))
+    let ladderOrder = consecutive(summary("u4", process: ReportProcess(pairingFile: line, pairingLadder: tried)),
+                                  ["JIT helper:", "Pairing file:", "Pairing ladder:", "LiveContainer:"])
+    let words = (known + none + unknown + ladder).filter { $0.hasPrefix("Pairing") }
+    let clean = !words.isEmpty && words.allSatisfy { !$0.contains("/") && !$0.contains(".plist") }
+    print("U5 line=\(flag(known.contains("Pairing file: " + line))) none=\(flag(none.contains("Pairing file: none")))"
+        + " unknown=\(flag(unknown.contains("Pairing file: unknown (an earlier launch)")))"
+        + " order=\(flag(order)) clean=\(flag(clean))"
+        + " ladder=\(flag(ladder.contains("Pairing ladder: " + tried))) ladderorder=\(flag(ladderOrder))"
+        + " noladder=\(flag(!(known + none + unknown).contains { $0.hasPrefix("Pairing ladder:") }))")
 }
 
 // The lines strictly between the line `from` and the line `to` (the end when nil), empty lines left out.
@@ -1880,7 +1902,7 @@ print("U2 real=\(flag(lastError("u2real") == "Last error: " + @@U2REAL@@))"
 
 // U3: the JIT route from launch.json.
 func route(_ name: String) -> String { lines(summary(name)).first { $0.hasPrefix("JIT route: ") } ?? "<none>" }
-let u3order = consecutive(summary("u3builtin"), ["Device:", "JIT route:", "JIT helper:", "LiveContainer:",
+let u3order = consecutive(summary("u3builtin"), ["Device:", "JIT route:", "JIT helper:", "Pairing file:", "LiveContainer:",
                                                 "Console lines dropped, approximate (RPCS3.log is complete):", "Last FPS:"])
 print("U3 builtin=\(flag(route("u3builtin") == "JIT route: built-in helper"))"
     + " stikdebug=\(flag(route("u3stikdebug") == "JIT route: StikDebug"))"
@@ -1895,6 +1917,7 @@ EXPECTED_MEANING = {
     "U2": "U2 real=1 harmless=1 hle=1 enomem=1 fatal=1 none=1",
     "U3": "U3 builtin=1 stikdebug=1 off=1 other=1 missing=1 order=1",
     "U4": "U4 lcyes=1 lcno=1 lcunknown=1 dropped=1 unknown=1 zip=1 order=1",
+    "U5": "U5 line=1 none=1 unknown=1 order=1 clean=1 ladder=1 ladderorder=1 noladder=1",
 }
 
 
@@ -2122,7 +2145,7 @@ class Mutations(unittest.TestCase):
 
     def test_mutation_pairing_crash_diagnostics_names_the_file(self):
         self.assertFlagged(self.edited("CrashDiagnostics.swift", "import MetricKit",
-                                       "import MetricKit\nlet probe = \"pairingFile\""), "pairing")
+                                       "import MetricKit\nlet probe = \"pairingFile.plist\""), "pairing")
 
     def test_mutation_walkthrough_settings_path_dropped(self):
         self.assertFlagged(self.edited("ProblemReportView.swift", "Analytics Data.", "Analytics."), "walkthrough")
@@ -2202,6 +2225,12 @@ class Mutations(unittest.TestCase):
     def test_mutation_harmless_core_reworded(self):
         self.assertFlagged(self.edited("overlay_controls.cpp", "could not be opened (%s)", "could not be loaded (%s)"),
                            "harmless")
+
+    def test_mutation_process_drops_the_ladder_line(self):
+        self.assertFlagged(self.edited("ProblemReportView.swift", "PairingSource.ladderLine(", "PairingSource.other("), "process")
+
+    def test_mutation_process_drops_the_pairing_line(self):
+        self.assertFlagged(self.edited("ProblemReportView.swift", "PairingSource.reportLine(", "PairingSource.other("), "process")
 
     # The sheet's build drops the process facts.
     def test_mutation_process_build_without_process(self):

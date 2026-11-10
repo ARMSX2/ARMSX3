@@ -22,6 +22,7 @@ EVERYTHING_WRONG = ('entitlementMissing: true, method: nil, pairingImported: fal
                     'liveContainer: true, mountResult: "mount", actedThisLaunch: true, importRefusal: "x"')
 BUILTIN = "method: .builtin, pairingImported: true"
 STIK = "method: .stikdebug"
+NOFILE = "method: .builtin, pairingImported: false"
 
 # name: (JitSituation arguments, row, primary, advice)
 CASES = {
@@ -32,6 +33,16 @@ CASES = {
     "refusal": (BUILTIN + ", importRefusal: JitNextStep.importRefusalSentence(2)", 4, "importPairingFile", C["refusal-legacy"]),
     "refusal-no-file": ("method: .builtin, pairingImported: false, importRefusal: JitNextStep.importRefusalSentence(3)",
                         4, "importPairingFile", C["refusal-invalid"]),
+    "pairing-sidestore": (NOFILE + ", sideStoreAvailable: true", 4, "getFromSideStore", C["row4-sidestore"]),
+    "pairing-lc-iphone": (NOFILE + ", liveContainer: true", 4, "importPairingFile", C["row4-lc-iphone"]),
+    "pairing-lc-ipad": (NOFILE + ", liveContainer: true, isPad: true", 4, "importPairingFile", C["row4-lc-ipad"]),
+    "pairing-lc-beats-sidestore": (NOFILE + ", liveContainer: true, sideStoreAvailable: true", 4, "importPairingFile", C["row4-lc-iphone"]),
+    "sidestore-nothing": (NOFILE + ", sideStoreAvailable: true, sideStoreSentNothing: true", 4, "getFromSideStore", C["sidestore-nothing"]),
+    "sidestore-lockdown": (NOFILE + ", sideStoreAvailable: true, sideStoreLockdown: true", 4, "getFromSideStore", C["sidestore-lockdown"]),
+    "sidestore-lockdown-beats-nothing": (NOFILE + ", sideStoreAvailable: true, sideStoreSentNothing: true, sideStoreLockdown: true",
+                                         4, "getFromSideStore", C["sidestore-lockdown"]),
+    "refusal-beats-sidestore": (NOFILE + ", importRefusal: JitNextStep.importRefusalSentence(3), sideStoreAvailable: true, sideStoreLockdown: true",
+                                4, "importPairingFile", C["refusal-invalid"]),
     "ddi": (BUILTIN + ", diskImage: .notMounted", 5, "mountDiskImage", C["row5"]),
     "ddi-download": (BUILTIN + ', diskImage: .notMounted, mountResult: "download", actedThisLaunch: true',
                      5, "mountDiskImage", C["mount-download"]),
@@ -74,6 +85,13 @@ CODE = {
         "Code: helper-failed · mounting:device:-8/0",
     'reason: "helper-failed", helperWord: "connect-failed", mountReason: ""': "Code: helper-failed · connect-failed",
 }
+# (liveContainer, sideStoreAvailable): the lines, in order. SideStore's Import row belongs to the pane, not the lines.
+OTHER_WAYS = {
+    (False, False): [C["other-share"], C["other-documents"], C["other-iloader"]],
+    (False, True): [C["other-share"], C["other-documents"], C["other-iloader"]],
+    (True, False): [C["other-iloader"]],
+    (True, True): [C["other-iloader"]],
+}
 CONSTANT = {"severity": C["severity"], "setupSuffix": C["setup-suffix"], "liveContainerSentence": C["livecontainer"]}
 
 
@@ -104,6 +122,9 @@ def driver():
         lines.append('emit("code", "{0}", JitNextStep.codeLine({1}))'.format(index, args))
     for name in sorted(CONSTANT):
         lines.append('emit("constant", "{0}", JitNextStep.{0})'.format(name))
+    for lc, store in sorted(OTHER_WAYS):
+        lines.append('emit("otherways", "{0}{1}", JitNextStep.otherWays(liveContainer: {0}, sideStoreAvailable: {1}).joined(separator: "|"))'
+                     .format(str(lc).lower(), str(store).lower()))
     return "\n".join(lines) + "\n"
 
 
@@ -141,6 +162,8 @@ def next_step_problems(out):
         check("code", str(index), CODE[args])
     for name, sentence in CONSTANT.items():
         check("constant", name, sentence)
+    for (lc, store), lines in OTHER_WAYS.items():
+        check("otherways", str(lc).lower() + str(store).lower(), "|".join(lines))
     return problems
 
 
@@ -190,7 +213,7 @@ class Mutations(unittest.TestCase):
 
     def test_mutation_row_4_checked_before_row_2(self):
         row2 = "        if s.entitlementMissing { return JitStep(row: 2, advice: row2, primary: nil) }\n"
-        row4 = "                return JitStep(row: 4, advice: s.importRefusal ?? row4, primary: .importPairingFile)\n            }\n"
+        row4 = "                return pairingStep(s)\n            }\n"
         text = self.edited(self.edited(self.text, row2, ""), row4, row4 + "    " + row2)
         self.assert_caught(text, "decide:")
 
@@ -222,6 +245,25 @@ class Mutations(unittest.TestCase):
     def test_mutation_mount_reason_loses_to_the_helper_word(self):
         self.assert_caught(self.edited(self.text, "let detail = mountReason.flatMap { $0.isEmpty ? nil : $0 } ?? helperWord",
                                        "let detail = helperWord.isEmpty ? (mountReason ?? \"\") : helperWord"), "code:")
+
+    def test_mutation_sidestore_offered_inside_livecontainer(self):
+        self.assert_caught(self.edited(self.text, "        if s.liveContainer {\n            let place", "        if s.liveContainer && !s.sideStoreAvailable {\n            let place"), "decide:")
+
+    def test_mutation_refusal_not_answered_first(self):
+        line = "        if let refusal = s.importRefusal { return JitStep(row: 4, advice: refusal, primary: .importPairingFile) }\n"
+        self.assert_caught(self.edited(self.text, line, ""), "decide:")
+
+    def test_mutation_nothing_sent_outranks_lockdown(self):
+        lockdown = "        if s.sideStoreLockdown { return JitStep(row: 4, advice: row4Lockdown, primary: .getFromSideStore) }\n"
+        nothing = "        if s.sideStoreSentNothing { return JitStep(row: 4, advice: row4NoAnswer, primary: .getFromSideStore) }\n"
+        self.assert_caught(self.edited(self.text, lockdown + nothing, nothing + lockdown), "decide:")
+
+    def test_mutation_share_line_shown_inside_livecontainer(self):
+        self.assert_caught(self.edited(self.text, "if liveContainer { return [iLoader] }", "if false { return [iLoader] }"), "otherways:")
+
+    def test_mutation_mac_wording_restored(self):
+        self.assert_caught(self.edited(self.text, "couldn't be read. Make a new pairing file on a computer",
+                                       "couldn't be read. Make a new pairing file on your Mac"), "helper:")
 
     def test_mutation_setup_suffix_reworded(self):
         self.assert_caught(self.edited(self.text, '"Setup continues here."', '"Setup continues."'), "constant:")

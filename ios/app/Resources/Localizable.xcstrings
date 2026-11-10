@@ -901,6 +901,16 @@
         }
       }
     },
+    "Accepted" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Accepted"
+          }
+        }
+      }
+    },
     "ARMSX3" : {
       "localizations" : {
         "en" : {
@@ -947,6 +957,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "ARMSX3 couldn't use the Bind address set in Network. Set it back to 0.0.0.0, then try again."
+          }
+        }
+      }
+    },
+    "ARMSX3 didn't ask for that pairing file, so it was ignored." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ARMSX3 didn't ask for that pairing file, so it was ignored."
           }
         }
       }
@@ -1834,6 +1854,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Clear this game's cache?"
+          }
+        }
+      }
+    },
+    "Couldn't delete the file. Try again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't delete the file. Try again."
           }
         }
       }
@@ -3074,6 +3104,16 @@
         }
       }
     },
+    "created %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "created %@"
+          }
+        }
+      }
+    },
     "Cross" : {
       "localizations" : {
         "en" : {
@@ -3307,12 +3347,42 @@
         }
       }
     },
+    "Delete File" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete File"
+          }
+        }
+      }
+    },
+    "Delete Rejected Pairing File" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete Rejected Pairing File"
+          }
+        }
+      }
+    },
     "Delete Synced Trophies" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Delete Synced Trophies"
+          }
+        }
+      }
+    },
+    "Delete the rejected pairing file?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete the rejected pairing file?"
           }
         }
       }
@@ -3551,6 +3621,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Do Not Ask Again"
+          }
+        }
+      }
+    },
+    "Documents folder" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Documents folder"
           }
         }
       }
@@ -4545,6 +4625,16 @@
         }
       }
     },
+    "From SideStore" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "From SideStore"
+          }
+        }
+      }
+    },
     "Frosted Pearl" : {
       "localizations" : {
         "en" : {
@@ -4571,6 +4661,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Game cache cleared. It is built again the next time the game boots."
+          }
+        }
+      }
+    },
+    "Get from SideStore" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Get from SideStore"
+          }
+        }
+      }
+    },
+    "Get the pairing file from SideStore. ARMSX3 opens SideStore, which sends the file back." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Get the pairing file from SideStore. ARMSX3 opens SideStore, which sends the file back."
           }
         }
       }
@@ -4923,6 +5033,16 @@
         }
       }
     },
+    "If SideStore is installed, it keeps one in Files under %@ › SideStore." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "If SideStore is installed, it keeps one in Files under %@ › SideStore."
+          }
+        }
+      }
+    },
     "Import" : {
       "localizations" : {
         "en" : {
@@ -4953,6 +5073,16 @@
         }
       }
     },
+    "Import Pairing File" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import Pairing File"
+          }
+        }
+      }
+    },
     "Import patch file…" : {
       "localizations" : {
         "en" : {
@@ -4979,6 +5109,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Import your pairing file."
+          }
+        }
+      }
+    },
+    "Imported" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Imported"
           }
         }
       }
@@ -5039,6 +5179,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Imports a PS3 theme file for the Primary background."
+          }
+        }
+      }
+    },
+    "In SideStore, open Pairing File Management, long-press Remote Pairing File and choose Set as Preferred, then try again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In SideStore, open Pairing File Management, long-press Remote Pairing File and choose Set as Preferred, then try again."
           }
         }
       }
@@ -5619,6 +5769,16 @@
         }
       }
     },
+    "LocalDevVPN is on, but this device didn't accept the pairing. Make a new pairing file on a computer, import it here, then reopen ARMSX3." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LocalDevVPN is on, but this device didn't accept the pairing. Make a new pairing file on a computer, import it here, then reopen ARMSX3."
+          }
+        }
+      }
+    },
     "Locked. The iOS version needs this value." : {
       "localizations" : {
         "en" : {
@@ -5760,6 +5920,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Menu"
+          }
+        }
+      }
+    },
+    "Missing" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Missing"
           }
         }
       }
@@ -6259,6 +6429,16 @@
         }
       }
     },
+    "Not tried yet" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not tried yet"
+          }
+        }
+      }
+    },
     "Nothing downloads until you tap Browse." : {
       "localizations" : {
         "en" : {
@@ -6432,6 +6612,36 @@
         }
       }
     },
+    "On a computer, iLoader can make a pairing file for this device. Save it to Files, then import it here." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On a computer, iLoader can make a pairing file for this device. Save it to Files, then import it here."
+          }
+        }
+      }
+    },
+    "On My iPad" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On My iPad"
+          }
+        }
+      }
+    },
+    "On My iPhone" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On My iPhone"
+          }
+        }
+      }
+    },
     "One of the skin's images couldn't be read." : {
       "localizations" : {
         "en" : {
@@ -6574,6 +6784,16 @@
         }
       }
     },
+    "Opens SideStore, which sends the pairing file back." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opens SideStore, which sends the pairing file back."
+          }
+        }
+      }
+    },
     "Opens Updates." : {
       "localizations" : {
         "en" : {
@@ -6590,6 +6810,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Opens the avatar list."
+          }
+        }
+      }
+    },
+    "Or put a file named pairingFile.plist in ARMSX3's folder in Files, then open ARMSX3 again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Or put a file named pairingFile.plist in ARMSX3's folder in Files, then open ARMSX3 again."
           }
         }
       }
@@ -6657,6 +6887,16 @@
         }
       }
     },
+    "Other Ways" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Other Ways"
+          }
+        }
+      }
+    },
     "Outer top/bottom dispersion" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -6664,6 +6904,56 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Outer top/bottom dispersion"
+          }
+        }
+      }
+    },
+    "Pairing File" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pairing File"
+          }
+        }
+      }
+    },
+    "Pairing file added." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pairing file added."
+          }
+        }
+      }
+    },
+    "Pairing file added. ARMSX3 uses it the next time it opens." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pairing file added. ARMSX3 uses it the next time it opens."
+          }
+        }
+      }
+    },
+    "Pairing file replaced." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pairing file replaced."
+          }
+        }
+      }
+    },
+    "Pairing file replaced. ARMSX3 uses the new one the next time it opens." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pairing file replaced. ARMSX3 uses the new one the next time it opens."
           }
         }
       }
@@ -7473,6 +7763,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Quick Save"
+          }
+        }
+      }
+    },
+    "Rejected" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rejected"
+          }
+        }
+      }
+    },
+    "Remote Pairing" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remote Pairing"
+          }
+        }
+      }
+    },
+    "Remote Pairing with lockdown keys" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remote Pairing with lockdown keys"
+          }
+        }
+      }
+    },
+    "Replaced. ARMSX3 uses the new file the next time it opens." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Replaced. ARMSX3 uses the new file the next time it opens."
           }
         }
       }
@@ -9004,6 +9334,16 @@
         }
       }
     },
+    "Share the file to ARMSX3 from Files or another app." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Share the file to ARMSX3 from Files or another app."
+          }
+        }
+      }
+    },
     "Share Zip" : {
       "localizations" : {
         "en" : {
@@ -9030,6 +9370,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Shared Themes + Ribbons"
+          }
+        }
+      }
+    },
+    "Shared to ARMSX3" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shared to ARMSX3"
           }
         }
       }
@@ -9264,6 +9614,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Shows the versions."
+          }
+        }
+      }
+    },
+    "SideStore didn't send a pairing file. Update SideStore and try again, or import the file from Files." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SideStore didn't send a pairing file. Update SideStore and try again, or import the file from Files."
+          }
+        }
+      }
+    },
+    "SideStore sent an older lockdown pairing file." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SideStore sent an older lockdown pairing file."
+          }
+        }
+      }
+    },
+    "SideStore's" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SideStore's"
+          }
+        }
+      }
+    },
+    "SideStore's (LiveContainer)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SideStore's (LiveContainer)"
           }
         }
       }
@@ -10415,6 +10805,16 @@
         }
       }
     },
+    "The pairingFile.plist in ARMSX3's Documents folder isn't a Remote Pairing file, so ARMSX3 didn't use it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The pairingFile.plist in ARMSX3's Documents folder isn't a Remote Pairing file, so ARMSX3 didn't use it."
+          }
+        }
+      }
+    },
     "The patch server sent something unexpected; nothing changed." : {
       "localizations" : {
         "en" : {
@@ -10671,6 +11071,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Third-party notices"
+          }
+        }
+      }
+    },
+    "This device didn't accept the pairing file. Make a new pairing file on a computer and import it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device didn't accept the pairing file. Make a new pairing file on a computer and import it."
+          }
+        }
+      }
+    },
+    "This device no longer accepts it. ARMSX3 keeps using %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device no longer accepts it. ARMSX3 keeps using %@."
+          }
+        }
+      }
+    },
+    "This device rejected it. Make a new pairing file on a computer and add it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device rejected it. Make a new pairing file on a computer and add it."
           }
         }
       }
@@ -11664,6 +12094,16 @@
         }
       }
     },
+    "Waiting for SideStore…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting for SideStore…"
+          }
+        }
+      }
+    },
     "Waiting to download" : {
       "localizations" : {
         "en" : {
@@ -12036,6 +12476,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "You're on mobile data."
+          }
+        }
+      }
+    },
+    "Your imported file was rejected, so this one was used." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your imported file was rejected, so this one was used."
+          }
+        }
+      }
+    },
+    "Your pairing file couldn't be read. Make a new pairing file on a computer and import it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your pairing file couldn't be read. Make a new pairing file on a computer and import it."
           }
         }
       }

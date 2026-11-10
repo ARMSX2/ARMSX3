@@ -59,6 +59,8 @@ struct ReportProcess {
     var liveContainer: Bool? = nil
     var stderrDropped: UInt64? = nil
     var appBuild: String? = nil
+    var pairingFile: String? = nil
+    var pairingLadder: String? = nil
 }
 
 enum DiagnosticsError: Error {
@@ -578,6 +580,8 @@ struct DiagnosticsStore {
                      image.map { "Image: \($0)" },
                      "JIT route: \(route)",
                      "JIT helper: \(part("helper_outcome"))",
+                     "Pairing file: \(process.pairingFile ?? "unknown (an earlier launch)")",
+                     process.pairingLadder.map { "Pairing ladder: \($0)" },
                      // Inferred: LiveContainer runs the app with a HOME of its own, so every session here ran the way this process runs.
                      "LiveContainer: \(process.liveContainer.map { $0 ? "yes" : "no" } ?? "unknown")",
                      // Approximate: unread, each `dropped <n>` notice is itself dropped and counted, so it runs up to about twice the loss.
