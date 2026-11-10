@@ -921,7 +921,46 @@ object Ps3PatchRepo {
             appVersion = "All",
             sinceRevision = 27,
         ),
-    )
+    ) + tlouBundled()
+
+    /**
+     * THE LAST OF US -- RPCS3's own patches, the ones its wiki marks highly recommended: they
+     * improve performance, let resolution scaling work, and fix two game bugs (a crash on an
+     * infected's severed head, and a softlock at the University nail bomb).
+     *
+     * Two executables carry them and nothing in between, so a dump on any other update gets none:
+     * the disc's 01.00 has five (the nail bomb fix exists only for 01.11), the final update 01.11
+     * has all six. Too many serials to list one block each, so they are made here. Names, hashes
+     * and serials as in RPCS3's database downloaded 11-09 (patches pulled in through its
+     * tlou100_title / tlou111_title anchors):
+     *
+     *   PPU-9df60dc1aa5005a0c80e9066e4951dc0471553e6, 01.00: BCAS20270 BCES01584 BCES01585 BCJS37010
+     *     BCUS98174 NPEA00435 NPUA80960
+     *   PPU-120fb71f7352d62521c639b0e99f960018c10a56, 01.11: the same seven, NPHA80243, NPJA00096
+     *
+     * "Disable Mesh Trimming" was "Disable Mesh trimming" in older copies of the database; a copy
+     * that old leaves that one in the retry set until the database is downloaded again.
+     */
+    private fun tlouBundled(): List<Bundled> {
+        val patches = listOf(
+            "Bug Fix: Infected Severed Head Crash",
+            "Depth border fix",
+            "Disable in-built MLAA",
+            "Disable Mesh Trimming",
+            "Enable GPU Lighting",
+        )
+        val serials = listOf("BCAS20270", "BCES01584", "BCES01585", "BCJS37010", "BCUS98174", "NPEA00435", "NPUA80960")
+
+        val disc = serials.flatMap { serial ->
+            patches.map { Bundled("PPU-9df60dc1aa5005a0c80e9066e4951dc0471553e6", it, serial, "01.00", 29) }
+        }
+        val update = (serials + listOf("NPHA80243", "NPJA00096")).flatMap { serial ->
+            (patches + "Bug Fix: University Nailbomb Softlock Fix").map {
+                Bundled("PPU-120fb71f7352d62521c639b0e99f960018c10a56", it, serial, "01.11", 29)
+            }
+        }
+        return disc + update
+    }
 
     private const val BUNDLED_ASSET = "canary_patches.yml"
 
@@ -930,7 +969,7 @@ object Ps3PatchRepo {
      * install re-imports and enables the new ones. Not a timestamp: it has to be
      * something a diff of this file makes obvious.
      */
-    private const val BUNDLED_REVISION = 28
+    private const val BUNDLED_REVISION = 29
 
     private const val PREFS_NAME = "ARMSX2"
     private const val KEY_BUNDLED_REVISION = "ps3_bundled_patch_revision"
