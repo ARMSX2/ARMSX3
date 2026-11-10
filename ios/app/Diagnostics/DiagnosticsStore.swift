@@ -61,6 +61,9 @@ struct ReportProcess {
     var appBuild: String? = nil
     var pairingFile: String? = nil
     var pairingLadder: String? = nil
+    var jitRoute: String? = nil
+    var liveContainerDetail: String? = nil
+    var jitTest: String? = nil
 }
 
 enum DiagnosticsError: Error {
@@ -578,12 +581,13 @@ struct DiagnosticsStore {
                      "Memory: limit \(limit), headroom \(headroom.map { "\($0) MiB" } ?? "unknown") at the last sample",
                      "Device: \(part("machine")), iOS \(part("os_build")), JIT \(part("jit_state")), \(ram)",
                      image.map { "Image: \($0)" },
-                     "JIT route: \(route)",
+                     "JIT route: \(process.jitRoute ?? route)",
                      "JIT helper: \(part("helper_outcome"))",
                      "Pairing file: \(process.pairingFile ?? "unknown (an earlier launch)")",
                      process.pairingLadder.map { "Pairing ladder: \($0)" },
+                     "JIT test: \(process.jitTest ?? "not run")",
                      // Inferred: LiveContainer runs the app with a HOME of its own, so every session here ran the way this process runs.
-                     "LiveContainer: \(process.liveContainer.map { $0 ? "yes" : "no" } ?? "unknown")",
+                     "LiveContainer: \(process.liveContainerDetail ?? process.liveContainer.map { $0 ? "yes" : "no" } ?? "unknown")",
                      // Approximate: unread, each `dropped <n>` notice is itself dropped and counted, so it runs up to about twice the loss.
                      "Console lines dropped, approximate (RPCS3.log is complete): \(process.stderrDropped.map { String($0) } ?? "unknown (an earlier launch)")",
                      "Last FPS: \(fps)",
