@@ -1243,10 +1243,11 @@ iso_archive::iso_archive(const std::string& path)
 	}
 
 	// A CHD is usually made from a decrypted ISO, and a key file kept from the encrypted original,
-	// next to it or in the keys folder, would then "decrypt" plain data into garbage.
+	// next to it or in the keys folder, would then "decrypt" plain data into garbage. The same goes
+	// for an ISO decrypted in place that kept its key file beside it.
 	const auto enc_type = m_dec->get_enc_type();
 
-	if (m_chd && (enc_type == iso_encryption_type::REDUMP || enc_type == iso_encryption_type::ENC_3K3Y) && reads_decrypted())
+	if (!raw_device && (enc_type == iso_encryption_type::REDUMP || enc_type == iso_encryption_type::ENC_3K3Y) && reads_decrypted())
 	{
 		iso_log.warning("iso_archive: '%s' is already decrypted, so its disc key is not used", path);
 		m_dec = std::make_shared<iso_file_decryption>();
@@ -1267,7 +1268,8 @@ bool iso_archive::reads_decrypted()
 	{
 		if (const iso_fs_node* node = retrieve(std::string(file_path)))
 		{
-			iso_file file(chd::make_file(m_chd), *node);
+			// The bytes as stored, not through the key
+			iso_file file = m_chd ? iso_file(chd::make_file(m_chd), *node) : iso_file(m_path, fs::read, *node);
 			std::array<char, 8> head{};
 
 			return file.read(head.data(), magic.size()) == magic.size() && std::memcmp(head.data(), magic.data(), magic.size()) == 0;
@@ -1275,6 +1277,50 @@ bool iso_archive::reads_decrypted()
 	}
 
 	return false;
+}
+
+iso_content_state iso_archive::content_state()
+{
+	if (!m_dec)
+	{
+		return iso_content_state::unknown;
+	}
+
+	// The files retrieve_key() tests keys on, read through whatever decryption the disc was set up
+	// with, and what they start with in the clear. A disc's LIC.DAT always starts the same; its
+	// EBOOT.BIN is a SELF, or an ELF once someone has decrypted it. Only the first one on the disc
+	// decides, as in reads_decrypted().
+	static const std::pair<std::string_view, std::vector<std::string_view>> s_plain_starts[]
+	{
+		{"PS3_GAME/LICDIR/LIC.DAT", {"PS3LICDA"}},
+		{"PS3_GAME/USRDIR/EBOOT.BIN", {std::string_view("SCE\0", 4), "\x7F" "ELF"}},
+	};
+
+	for (const auto& [file_path, magics] : s_plain_starts)
+	{
+		const iso_fs_node* node = retrieve(std::string(file_path));
+
+		if (!node || node->metadata.is_directory)
+		{
+			continue;
+		}
+
+		fs::file file(get_iso_file(m_path, fs::read, *node));
+		std::array<char, 8> head{};
+		const u64 read = file ? file.read(head.data(), head.size()) : 0;
+
+		for (const std::string_view magic : magics)
+		{
+			if (read >= magic.size() && std::memcmp(head.data(), magic.data(), magic.size()) == 0)
+			{
+				return iso_content_state::readable;
+			}
+		}
+
+		return iso_content_state::unreadable;
+	}
+
+	return iso_content_state::unknown;
 }
 
 iso_fs_node* iso_archive::retrieve(const std::string& passed_path)

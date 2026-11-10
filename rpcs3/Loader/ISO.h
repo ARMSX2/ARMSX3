@@ -177,6 +177,14 @@ public:
 };
 
 // Represents the .iso file itself
+// Whether the files of an opened disc read as they should, through the decryption it was set up with
+enum class iso_content_state
+{
+	unknown,    // none of the files it is tested on is on the disc
+	readable,
+	unreadable, // encrypted, and its key is missing or is not this disc's
+};
+
 class iso_archive
 {
 private:
@@ -202,6 +210,10 @@ public:
 	// calls it, and it is the one piece of the refactor that is not implicated in the region
 	// read failing.
 	bool is_valid() const;
+
+	// A disc's directory tree is in the clear even when its files are encrypted, so an encrypted image
+	// opens and lists without its key. This reads the files themselves.
+	iso_content_state content_state();
 
 	bool exists(const std::string& path);
 	bool is_file(const std::string& path);
@@ -236,6 +248,9 @@ public:
 	// Whether the mounted image actually opened. load_iso() mounts the device regardless, so
 	// this is the only way a caller can tell a readable disc from one that produced nothing.
 	bool archive_valid() const { return m_archive.is_valid(); }
+
+	// Whether its files read as they should (see iso_archive::content_state)
+	iso_content_state content_state() { return m_archive.content_state(); }
 
 	bool stat(const std::string& path, fs::stat_t& info) override;
 	bool statfs(const std::string& path, fs::device_stat& info) override;

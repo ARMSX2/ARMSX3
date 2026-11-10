@@ -801,6 +801,15 @@ open class MainActivityRuntime : ComponentActivity() {
                         // action that fixes it, which a rescan will also surface as a badge.
                         // Name the fix, not just the fault. A bare enum name reads as a crash
                         // for a failure the user can act on in one step.
+                        // From a disc image a DecryptionError is the disc key, never a licence: an
+                        // encrypted (Redump) image whose .dkey is missing, misnamed or another disc's.
+                        // Said on its own rather than after "Game failed to start: <reason>",
+                        // because Android 12 and later cut a text toast at two lines, which lost
+                        // the instruction; the log says which of the three it was.
+                        val discKeyMessage =
+                            if (reason == "DecryptionError" && m_szGamefile.substringBefore('?').lowercase().let { it.endsWith(".iso") || it.endsWith(".chd") || it.endsWith(".m3u") })
+                                "This disc is encrypted and needs its own .dkey, named like the ISO."
+                            else null
                         val hint = when (reason) {
                             "DecryptionError" ->
                                 ". It needs a .rap licence. Long-press the game and choose Install licence."
@@ -815,7 +824,7 @@ open class MainActivityRuntime : ComponentActivity() {
                             act.runOnUiThread {
                                 android.widget.Toast.makeText(
                                     act,
-                                    "Game failed to start: $reason$hint",
+                                    discKeyMessage ?: "Game failed to start: $reason$hint",
                                     android.widget.Toast.LENGTH_LONG,
                                 ).show()
                             }

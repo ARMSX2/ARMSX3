@@ -2153,30 +2153,47 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 			// saying which of a dozen causes it was. Decide it here, while the reason is knowable.
 			{
 				const auto device = fs::get_virtual_device(iso_device::virtual_device_name + "/");
-				const auto iso_dev = dynamic_cast<const iso_device*>(device.get());
+				const auto iso_dev = dynamic_cast<iso_device*>(device.get());
 
+				// The directory tree is read as stored, before any key is involved, so a key is never
+				// why it did not parse.
 				if (!iso_dev || !iso_dev->archive_valid())
+				{
+					sys_log.error("Cannot read ISO '%s': the disc filesystem did not parse. The "
+						"image may be truncated or incomplete -- check that it copied whole, and "
+						"that the volume holding it can store a file that large.", m_path);
+					return game_boot_result::invalid_file_or_folder;
+				}
+
+				// An encrypted (Redump) disc keeps its directory tree in the clear, so without its key it
+				// opens and lists like any other, and only its files come back as ciphertext. The boot
+				// then failed later on whatever it read first, as a bare "invalid file or folder" with
+				// nothing about the key. Testers who had the keys could not tell what was wrong with them.
+				if (iso_dev->content_state() == iso_content_state::unreadable)
 				{
 					std::string key_path;
 
 					switch (iso_file_decryption::check_type(m_path, &key_path))
 					{
-					case iso_type_status::ERROR_OPENING_KEY:
-						sys_log.error("Cannot read ISO '%s'. If this is an encrypted (redump) disc "
-							"image, put its matching '.dkey' or '.key' file next to the ISO, or in '%s'.",
-							m_path, rpcs3::utils::get_redump_key_dir());
-						return game_boot_result::decryption_error;
+					case iso_type_status::REDUMP_ISO:
+						sys_log.error("Cannot read ISO '%s': it is an encrypted disc image, and its key "
+							"file '%s' does not decrypt it. That is the key of another disc, or of another "
+							"version of this one.", m_path, key_path);
+						break;
 
 					case iso_type_status::ERROR_PROCESSING_KEY:
-						sys_log.error("Cannot read ISO '%s': the disc key '%s' was rejected.", m_path, key_path);
-						return game_boot_result::decryption_error;
+						sys_log.error("Cannot read ISO '%s': it is an encrypted disc image, and its key "
+							"file '%s' is not a disc key (32 hexadecimal characters).", m_path, key_path);
+						break;
 
 					default:
-						sys_log.error("Cannot read ISO '%s': the disc filesystem did not parse. The "
-							"image may be truncated or incomplete -- check that it copied whole, and "
-							"that the volume holding it can store a file that large.", m_path);
-						return game_boot_result::invalid_file_or_folder;
+						sys_log.error("Cannot read ISO '%s': it is an encrypted disc image, and no key file "
+							"was found for it. Put its '.dkey' or '.key' file next to the ISO under the "
+							"same name, or in '%s'.", m_path, rpcs3::utils::get_redump_key_dir());
+						break;
 					}
+
+					return game_boot_result::decryption_error;
 				}
 			}
 
