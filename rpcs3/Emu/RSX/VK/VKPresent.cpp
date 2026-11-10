@@ -2740,15 +2740,20 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 	// less by the ratio of the two (720p on a 1080p screen: 2.25x fewer pixels to generate). Every
 	// other output mode renders through passes a generated frame would need a run of its own of,
 	// so those keep capturing the finished screen.
-	// ZeroFG owns the window: this image is not shown by this renderer, it is what ZeroFG takes. It is the
-	// composited screen -- the game with RPCS3's overlays (performance overlay, dialogs, trophies) drawn
-	// on it -- so the overlays reach every output frame, generated ones included, a little soft.
-	// Whole image in, whole image out: the Post puts it back where this present drew it.
-	if (m_swapchain->is_offscreen())
+	// ZeroFG takes this image: the composited screen -- the game with RPCS3's overlays (performance
+	// overlay, dialogs, trophies) drawn on it -- so the overlays reach every output frame, generated ones
+	// included, a little soft. Whole image in, whole image out: the Post puts it back where this present
+	// drew it.
+	//
+	// NOT only once it owns the window. ZeroFG counts the game's frames (NoteSourceFrame) and qualifies
+	// their cadence while this renderer still presents on a real swapchain; only then does it accept
+	// frames, take the window and have this renderer go offscreen. Gating this on is_offscreen() waited
+	// for a handoff that needs these very calls, and ZeroFG never armed.
 	{
 		VKZeroFG::NoteSourceFrame();
 
-		if (VKZeroFG::WantsFrames())
+		// A real swapchain's image can be read only if it was made with TRANSFER_SRC (swapchain.cpp).
+		if (VKZeroFG::WantsFrames() && (m_swapchain->is_offscreen() || vk::g_swapchain_transfer_src))
 		{
 			vk::change_image_layout(*m_current_command_buffer, target_image, target_layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, subresource_range);
 			target_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;

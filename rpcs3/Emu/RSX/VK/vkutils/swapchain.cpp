@@ -568,12 +568,18 @@ namespace vk
 		// Requested only where the surface offers it, since TRANSFER_SRC is not guaranteed on
 		// Android surfaces. Where it is missing, frame generation captures nothing valid, which
 		// is a better failure than an invalid one.
-		if (is_lsfg_mode(g_cfg.video.frame_generation) &&
+		//
+		// ZeroFG too: it takes the composited frame from this swapchain's image while the renderer still
+		// presents (it counts the game's frames and qualifies its cadence before it takes the window),
+		// and from the offscreen images after.
+		const bool wants_transfer_src = is_lsfg_mode(g_cfg.video.frame_generation) || is_zerofg_mode(g_cfg.video.frame_generation);
+
+		if (wants_transfer_src &&
 			(surface_descriptors.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT))
 		{
 			swap_info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 		}
-		else if (is_lsfg_mode(g_cfg.video.frame_generation))
+		else if (wants_transfer_src)
 		{
 			rsx_log.warning("Swapchain: surface does not support TRANSFER_SRC; frame generation"
 				" cannot read presented frames on this surface.");

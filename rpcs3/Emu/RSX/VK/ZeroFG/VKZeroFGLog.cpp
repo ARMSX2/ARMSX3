@@ -14,7 +14,9 @@ void vk_zerofg_log(int level, const char* text)
 	{
 	case 0: zerofg_log.error("%s", text); break;
 	case 1: zerofg_log.warning("%s", text); break;
-	case 2: zerofg_log.notice("%s", text); break;
+	// success, not notice: the Android build shows warnings, errors and successes in logcat but not
+	// notices, and the connection / handoff lines are what tells a ZeroFG that armed from one that did not.
+	case 2: zerofg_log.success("%s", text); break;
 	default: zerofg_log.trace("%s", text); break;
 	}
 }

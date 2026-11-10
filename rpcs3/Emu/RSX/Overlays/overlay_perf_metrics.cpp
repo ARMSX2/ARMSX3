@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "Emu/RSX/VK/VKFrameGen.h"
+#include "Emu/RSX/VK/ZeroFG/VKZeroFG.h"
 #include "overlay_manager.h"
 #include "overlay_perf_metrics.h"
 #include "Emu/RSX/RSXThread.h"
@@ -639,6 +640,14 @@ namespace rsx
 				if (const std::string lsfg = vk::frame_gen::status_text(); !lsfg.empty())
 				{
 					fmt::append(perf_text, "%s%s", perf_text.empty() ? "" : "\n", lsfg);
+				}
+
+				// ZeroFG's line, in the same place for the same reason: what reaches the screen, Real and
+				// generated. Empty unless ZeroFG is switched on and built in. The overlay is drawn into the
+				// frame ZeroFG captures, so it is interpolated like the rest of the picture.
+				if (const std::string zerofg = VKZeroFG::GetOverlayText(); !zerofg.empty())
+				{
+					fmt::append(perf_text, "%s%s", perf_text.empty() ? "" : "\n", zerofg);
 				}
 
 				// Device temperatures, for the same reason and in the same place: appended after
