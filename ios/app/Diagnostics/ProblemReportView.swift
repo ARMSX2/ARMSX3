@@ -154,13 +154,33 @@ struct ProblemReportView: View {
         return settings
     }
 
-    // The dropped-line count belongs to this launch only, so a report on an earlier session passes none.
+    // The pairing lookup ran in this launch, so words only; the file's name, path and contents stay out.
+    private func pairingFacts() -> (file: String, ladder: String?) {
+        let report = Rpcs3Bridge.jitPairingReport()
+        let own = PairingImport.destination
+        let ownFound = own.map(PairingImport.isNonEmptyRegularFile) ?? false
+        let sidecar = own?.deletingLastPathComponent().appendingPathComponent(PairingSource.originName, isDirectory: false)
+        let origin = PairingSource.origin(sidecar.flatMap { try? String(contentsOf: $0, encoding: .utf8) })
+        var inUse = own
+        if report["used"]?.hasPrefix("sidestore") == true {
+            let home = ProcessInfo.processInfo.environment["LC_HOME_PATH"]
+            inUse = PairingSource.sideStoreFile(liveContainerHome: home) { try? Data(contentsOf: $0) }
+        }
+        let attributes = inUse.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path) }
+        let date = (attributes?[.creationDate] ?? attributes?[.modificationDate]) as? Date
+        return (PairingSource.reportLine(report: report, ownFileFound: ownFound, origin: origin, fileDate: date),
+                PairingSource.ladderLine(report: report))
+    }
+
+    // The dropped-line count and the pairing lookup belong to this launch only, so a report on an earlier session passes none.
     private func processFacts() -> ReportProcess {
         let running = session.lastPathComponent == DiagnosticsSession.shared.current?.lastPathComponent
         let info = Bundle.main.infoDictionary
         let build = (info?["CFBundleShortVersionString"] as? String).map { "\($0) (\(info?["CFBundleVersion"] as? String ?? "?"))" }
+        let pairing = running ? pairingFacts() : nil
         return ReportProcess(liveContainer: Rpcs3Bridge.deviceChecks()["liveContainer"].map { $0.intValue == 1 },
-                             stderrDropped: running ? Rpcs3Bridge.stderrWitnessDropped() : nil, appBuild: build)
+                             stderrDropped: running ? Rpcs3Bridge.stderrWitnessDropped() : nil, appBuild: build,
+                             pairingFile: pairing?.file, pairingLadder: pairing?.ladder)
     }
 
     private func shareZip() async {

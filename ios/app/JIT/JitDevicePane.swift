@@ -8,13 +8,32 @@ import SwiftUI
 
     /// Nil when this device's checks could not be read.
     private(set) var report: DeviceReport?
+    /// A pairing file is found: ARMSX3's own, or SideStore's read in place.
     private(set) var pairingImported = false
+    private(set) var pairingValue = ""
+    /// The device turned down the file in use this launch, so the row shows a problem although a file exists.
+    private(set) var pairingRejected = false
+    private(set) var awaitingSideStore = false
+    private(set) var launch: [String: String] = [:]
+    private(set) var ownPairingFound = false
+    private(set) var replacedCaption: String?
+    private(set) var deletedCaption: String?
+    private(set) var documentsNote: String?
+    static let documentsNoteKey = "armsx3.jit.documentsNoteShown"
+    var confirmingDeletePairing = false
     private(set) var importRefusal: String?
     /// An action ran this launch, so the launch helper's word no longer describes the device.
     private(set) var actedThisLaunch = false
     private(set) var diskImage = DiskImageState.unknown
     /// Settable so a smoke scene can draw the installed rows in a Simulator that has no StikDebug.
     var stikDebugInstalled = false
+    /// Settable for the same reason. LiveContainer declares the scheme itself, so it never counts as SideStore.
+    var sideStoreAvailable = false
+    private(set) var sideStoreLockdown = false
+    private(set) var sideStoreSentNothing = false
+    @ObservationIgnored private var sideStoreRequested = false
+    @ObservationIgnored private var leftForSideStore: NSObjectProtocol?
+    @ObservationIgnored private var sideStoreLeft = false
     /// The last mount's result word and the helper's path-free reason token; nil until the player mounts.
     private(set) var mountResult: String?
     private(set) var mountReason: String?
@@ -63,7 +82,9 @@ import SwiftUI
                      pairingImported: pairingImported, diskImage: diskImage,
                      helperWord: EmulatorSession.shared.jitHelperOutcome, stikDebugInstalled: stikDebugInstalled,
                      stikDebugReturnedOff: stikDebugReturnedOff, txm: report?.txm ?? .unknown, liveContainer: liveContainer,
-                     mountResult: mountResult, actedThisLaunch: actedThisLaunch, importRefusal: importRefusal)
+                     mountResult: mountResult, actedThisLaunch: actedThisLaunch, importRefusal: importRefusal,
+                     sideStoreAvailable: sideStoreAvailable, isPad: UIDevice.current.userInterfaceIdiom == .pad,
+                     sideStoreSentNothing: sideStoreSentNothing, sideStoreLockdown: sideStoreLockdown)
     }
 
     var step: JitStep { JitNextStep.decide(situation) }
@@ -79,16 +100,77 @@ import SwiftUI
 
     func refresh() {
         report = DeviceReport(Rpcs3Bridge.deviceChecks())
-        pairingImported = PairingImport.destination.map(PairingImport.isNonEmptyRegularFile) ?? false
+        refreshPairing()
         if !actedThisLaunch {
             diskImage = DiskImageState.fromHelperOutcome(EmulatorSession.shared.jitHelperOutcome)
         }
         stikDebugInstalled = URL(string: "stikdebug://").map { UIApplication.shared.canOpenURL($0) } ?? false
+        sideStoreAvailable = !liveContainer && (URL(string: "sidestore://").map { UIApplication.shared.canOpenURL($0) } ?? false)
         // Once per process, after the launch verdict is known.
         if !launchVerified, EmulatorSession.shared.jitAvailable != nil {
             launchVerified = true
             launchVerify()
         }
+    }
+
+    /// Reads only existence, the origin word and file dates; SideStore's file is opened in memory for its shape.
+    private func refreshPairing() {
+        let own = PairingImport.destination
+        let ownFound = own.map(PairingImport.isNonEmptyRegularFile) ?? false
+        let sideStore = getenv("LC_HOME_PATH").flatMap { PairingSource.sideStoreFile(liveContainerHome: String(cString: $0)) { try? Data(contentsOf: $0) } }
+        let origin = PairingSource.origin(own.flatMap { try? String(contentsOf: $0.deletingLastPathComponent().appendingPathComponent(PairingSource.originName), encoding: .utf8) })
+        launch = Rpcs3Bridge.jitPairingReport()
+        ownPairingFound = ownFound
+        noteDocumentsFile(launch["documents"])
+        awaitingSideStore = PairingLink.isAwaiting(at: Date(), in: .standard)
+        pairingImported = ownFound || sideStore != nil
+        pairingValue = PairingSource.paneValue(ownFileFound: ownFound, sideStoreInPlace: sideStore != nil, origin: origin,
+                                               awaitingSideStore: awaitingSideStore, report: launch)
+        pairingRejected = PairingSource.paneRejected(report: launch, fileFound: pairingImported)
+        let used = launch["used"] ?? ""
+        let inUse = used.hasPrefix("sidestore") || (used.isEmpty && !ownFound) ? sideStore : own
+        let attributes = inUse.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path) }
+        let date = (attributes?[.creationDate] ?? attributes?[.modificationDate]) as? Date
+        report?.pairingRow = PairingSource.deviceRow(report: launch, ownFileFound: ownFound || sideStore != nil, origin: origin,
+                                                     fileDate: date, now: Date(), locale: .current, calendar: .current)
+    }
+
+    /// A Documents file that failed the check is said once; an empty folder lets a later bad file say it again.
+    private func noteDocumentsFile(_ word: String?) {
+        let defaults = UserDefaults.standard
+        switch word {
+        case "invalid"?, "lockdown"?:
+            guard !defaults.bool(forKey: Self.documentsNoteKey) else { return }
+            defaults.set(true, forKey: Self.documentsNoteKey)
+            documentsNote = String(localized: "The pairingFile.plist in ARMSX3's Documents folder isn't a Remote Pairing file, so ARMSX3 didn't use it.")
+        case ""?:
+            defaults.removeObject(forKey: Self.documentsNoteKey)
+        default:
+            break
+        }
+    }
+
+    var usedSourceWord: String {
+        PairingSource.sourceWord(used: launch["used"] ?? "", origin: .imported)
+    }
+
+    /// Only ARMSX3's own file, and only when another source worked, so the player is never left without one.
+    var canDeleteRejected: Bool {
+        ownPairingFound && launch["rejected"] == "own" && launch["result"] == "accepted"
+    }
+
+    func deleteRejectedPairing() {
+        guard canDeleteRejected, let file = PairingImport.destination else { return }
+        let origin = file.deletingLastPathComponent().appendingPathComponent(PairingSource.originName, isDirectory: false)
+        do {
+            try FileManager.default.removeItem(at: file)
+            try? FileManager.default.removeItem(at: origin)
+            deletedCaption = String(localized: "Deleted.")
+        } catch {
+            deletedCaption = String(localized: "Couldn't delete the file. Try again.")
+        }
+        replacedCaption = nil
+        refresh()
     }
 
     private var requestIsRecent: Bool {
@@ -110,8 +192,62 @@ import SwiftUI
         }
     }
 
+    /// The request time is stored first, so the root accepts SideStore's link only when ARMSX3 asked for it.
+    func getFromSideStore() {
+        sideStoreLockdown = false
+        sideStoreSentNothing = false
+        PairingLink.markRequested(at: Date(), in: .standard)
+        sideStoreRequested = true
+        // A system prompt can dismiss without ARMSX3 leaving, and that is not a return.
+        leftForSideStore.map(NotificationCenter.default.removeObserver)
+        leftForSideStore = NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil,
+                                                                  queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.sideStoreLeft = true }
+        }
+        sideStoreLeft = false
+        refresh()
+        UIApplication.shared.open(PairingLink.requestURL) { accepted in
+            Task { @MainActor in
+                if !accepted {
+                    self.sideStoreRequested = false
+                    UserDefaults.standard.removeObject(forKey: PairingLink.requestedAtKey)
+                    self.sideStoreAvailable = false
+                    self.refresh()
+                }
+            }
+        }
+    }
+
+    /// After a short settle, takes what the root made of SideStore's link; nothing at all means SideStore sent none.
+    private func sideStoreReturned() {
+        guard sideStoreRequested, sideStoreLeft else { return }
+        sideStoreRequested = false
+        leftForSideStore.map(NotificationCenter.default.removeObserver)
+        leftForSideStore = nil
+        Task {
+            try? await Task.sleep(nanoseconds: Self.verifyWindowNanoseconds)
+            let answer = PairingLink.lastAnswer
+            PairingLink.lastAnswer = nil
+            switch answer {
+            case .added?, .replaced?:
+                actedThisLaunch = true
+                AccessibilityNotification.Announcement(answer == .added ? String(localized: "Pairing file added.")
+                                                                         : String(localized: "Pairing file replaced.")).post()
+            case .lockdown?:
+                sideStoreLockdown = true
+            case nil:
+                sideStoreSentNothing = true
+                UserDefaults.standard.removeObject(forKey: PairingLink.requestedAtKey)
+            case .invalid?, .failed?, .ignored?:
+                break
+            }
+            refresh()
+        }
+    }
+
     /// This process cannot turn JIT on, so the Checking… window only keeps the answer from flashing.
     func sceneBecameActive() {
+        sideStoreReturned()
         guard method == .stikdebug, !jitOn, openedThisProcess, requestIsRecent, !checking else { return }
         checking = true
         Task {
@@ -173,12 +309,21 @@ import SwiftUI
     /// A refused import keeps the previous file and says why in the advice slot.
     func importFinished(_ outcome: PairingImport.Outcome) {
         if outcome == .imported {
+            let replaced = ownPairingFound
             importRefusal = nil
+            deletedCaption = nil
             actedThisLaunch = true
+            replacedCaption = replaced && jitOn ? String(localized: "Replaced. ARMSX3 uses the new file the next time it opens.") : nil
             refresh()
         } else {
+            replacedCaption = nil
             importRefusal = JitNextStep.importRefusalSentence(outcome.rawValue)
         }
+    }
+
+    /// Under the Pairing File row. With JIT on there is no advice line, so a refusal shows here.
+    var pairingCaption: String? {
+        deletedCaption ?? replacedCaption ?? (jitOn ? importRefusal : nil) ?? documentsNote
     }
 }
 
@@ -327,6 +472,9 @@ struct JitDevicePane: View {
                         .disabled(model.mounting || model.checking)
                         .accessibilityHint(Text(Self.hint(primary)))
                         .controllerAccessibilityActionTarget(id: "settings.jit.next", label: primary.title, action: { act(primary) })
+                    if !model.pairingImported, primary == .getFromSideStore || primary == .importPairingFile {
+                        otherWays(primary)
+                    }
                 }
                 DeviceCard(model: model)
                 // Not confirmed: it only asks the root to open setup and changes nothing itself.
@@ -334,6 +482,16 @@ struct JitDevicePane: View {
                     OverlayActionRow(controllerNavigationID: "settings.jit.setup", label: "Run Setup Again", systemImage: nil) {
                         NotificationCenter.default.post(name: SetupFlow.runAgainNotification, object: nil)
                     }
+                }
+                // Not tied to the reset card, which only Built-in outside LiveContainer shows.
+                if model.canDeleteRejected {
+                    OverlaySectionCard {
+                        OverlayActionRow(controllerNavigationID: "settings.jit.deletepairing", label: "Delete Rejected Pairing File",
+                                         systemImage: nil, isDestructive: true) {
+                            model.confirmingDeletePairing = true
+                        }
+                    }
+                    .padding(.top, 16)
                 }
                 // Built-in only: the cache is the helper's, and under LiveContainer the helper never runs.
                 if model.method == .builtin && !model.liveContainer {
@@ -361,6 +519,12 @@ struct JitDevicePane: View {
         .navigationTitle(SettingsPane.jitDevice.title)
         .navigationBarTitleDisplayMode(.inline)
         .jitActionPresenters(model: model, controller: controller, showingPicker: $showingPicker, pairingRequest: $pairingRequest)
+        .alert("Delete the rejected pairing file?", isPresented: $model.confirmingDeletePairing) {
+            Button("Delete File", role: .destructive) { model.deleteRejectedPairing() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This device no longer accepts it. ARMSX3 keeps using \(model.usedSourceWord).")
+        }
         .alert("Reset the Developer Disk Image?", isPresented: $model.confirmingReset) {
             Button("Reset Disk Image", role: .destructive) { Task { await model.reset() } }
             Button("Cancel", role: .cancel) {}
@@ -383,6 +547,25 @@ struct JitDevicePane: View {
 
     private var primary: JitPrimary? { model.step.primary }
 
+    // The sources less likely to work, in one quiet card; with SideStore the picker moves down here from the primary.
+    private func otherWays(_ primary: JitPrimary) -> some View {
+        OverlaySectionCard(title: String(localized: "Other Ways")) {
+            if primary == .getFromSideStore {
+                OverlayActionRow(controllerNavigationID: "settings.jit.other.import", label: "Import Pairing File", systemImage: nil) {
+                    pairingRequest = PairingImportRequest()
+                }
+            }
+            ForEach(JitNextStep.otherWays(liveContainer: model.liveContainer, sideStoreAvailable: model.sideStoreAvailable), id: \.self) { line in
+                Text(line)
+                    .font(.subheadline)
+                    .foregroundStyle(OverlayTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.top, 16)
+    }
+
     private func act(_ primary: JitPrimary) {
         Self.perform(primary, model: model, showingPicker: $showingPicker, pairingRequest: $pairingRequest)
     }
@@ -393,6 +576,7 @@ struct JitDevicePane: View {
         switch primary {
         case .chooseMethod: showingPicker.wrappedValue = true
         case .importPairingFile: pairingRequest.wrappedValue = PairingImportRequest()
+        case .getFromSideStore: model.getFromSideStore()
         case .mountDiskImage: Task { await model.mount() }
         case .openStikDebug: model.openStikDebug()
         }
@@ -402,6 +586,7 @@ struct JitDevicePane: View {
         switch primary {
         case .mountDiskImage: return String(localized: "Downloads and mounts the disk image.")
         case .openStikDebug: return String(localized: "Opens StikDebug, which turns on JIT and returns you here.")
+        case .getFromSideStore: return String(localized: "Opens SideStore, which sends the pairing file back.")
         case .chooseMethod, .importPairingFile: return ""
         }
     }
@@ -440,6 +625,13 @@ struct JitCard: View {
             methodRow
             if model.method == .builtin {
                 pairingRow
+                if let caption = model.pairingCaption {
+                    Text(caption)
+                        .font(.subheadline)
+                        .foregroundStyle(OverlayTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 StatusRow(label: String(localized: "Developer Disk Image"), value: diskImageValue,
                           isProblem: model.diskImage == .notMounted && !model.jitOn, busy: model.mounting,
                           mark: diskImageMark)
@@ -496,21 +688,25 @@ struct JitCard: View {
         }
     }
 
-    private var pairingValue: String {
-        model.pairingImported ? String(localized: "Imported") : String(localized: "Missing")
-    }
-
     private var pairingRow: some View {
-        OverlayActionRow(controllerNavigationID: "settings.jit.pairing", label: "Pairing File", systemImage: nil) {
+        OverlayActionRow(controllerNavigationID: "settings.jit.pairing", label: "Pairing File", systemImage: nil,
+                         trailingValue: model.pairingValue, keepsTrailingValue: true) {
             pairingRequest = PairingImportRequest()
         }
+        // Leaves the mark's column free so the value does not sit under it.
+        .padding(.trailing, 32)
         .overlay(alignment: .trailing) {
-            (model.pairingImported ? StatusMark.ok : StatusMark.problem).image
-                .font(.title3)
-                .accessibilityHidden(true)
+            Group {
+                if model.awaitingSideStore {
+                    ProgressView().controlSize(.small)
+                } else {
+                    (model.pairingImported && !model.pairingRejected ? StatusMark.ok : StatusMark.problem).image.font(.title3)
+                }
+            }
+            .accessibilityHidden(true)
         }
         .accessibilityLabel(Text("Pairing File"))
-        .accessibilityValue(Text(pairingValue))
+        .accessibilityValue(Text(model.pairingValue))
         .accessibilityHint(Text("Imports a pairing file from Files."))
     }
 

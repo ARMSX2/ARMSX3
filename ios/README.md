@@ -13,7 +13,9 @@ A way to sideload apps, such as AltStore or SideStore. ARMSX3 is not on the App 
 JIT. ARMSX3 cannot run games without it. There are two ways to get it:
 
 - StikDebug: launch ARMSX3 from StikDebug's app list.
-- The built-in enabler: install LocalDevVPN, import a pairing file made on a Mac for your device in Settings › JIT and Device, turn LocalDevVPN on, then open ARMSX3 from the home screen.
+- The built-in enabler: install LocalDevVPN, give ARMSX3 a pairing file made for your device on a computer, turn LocalDevVPN on, then open ARMSX3 from the home screen.
+
+ARMSX3 takes the pairing file in any of four ways. In Settings › JIT and Device, tap Import Pairing File, or Get from SideStore if SideStore is installed. You can also share the file to ARMSX3 or open it in ARMSX3 from Files or another app. Or put a file named pairingFile.plist in ARMSX3's folder in Files. ARMSX3 moves that file out of the folder the next time it opens.
 
 You also need the PS3 system software file and your own games. Neither is included.
 

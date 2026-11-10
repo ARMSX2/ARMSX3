@@ -64,11 +64,13 @@ enum DiskImageState: Equatable {
 
 enum JitPrimary: String {
     case chooseMethod, importPairingFile, mountDiskImage, openStikDebug
+    case getFromSideStore
 
     var title: String {
         switch self {
         case .chooseMethod: return String(localized: "Choose Method")
         case .importPairingFile: return String(localized: "Import Pairing File")
+        case .getFromSideStore: return String(localized: "Get from SideStore")
         case .mountDiskImage: return String(localized: "Mount Disk Image")
         case .openStikDebug: return String(localized: "Open StikDebug")
         }
@@ -90,6 +92,10 @@ struct JitSituation {
     var mountResult: String? = nil
     var actedThisLaunch = false
     var importRefusal: String? = nil
+    var sideStoreAvailable = false
+    var isPad = false
+    var sideStoreSentNothing = false
+    var sideStoreLockdown = false
 }
 
 struct JitStep {
@@ -107,6 +113,10 @@ enum JitNextStep {
     private static let row2 = String(localized: "Turn on get-task-allow when you sign ARMSX3. No JIT method works without it.")
     private static let row3 = String(localized: "Built-in JIT isn't available inside LiveContainer. Choose StikDebug or Wait for Debugger.")
     private static let row4 = String(localized: "Import the pairing file made for this device.")
+    private static let row4SideStore = String(localized: "Get the pairing file from SideStore. ARMSX3 opens SideStore, which sends the file back.")
+    private static let row4NoAnswer = String(localized: "SideStore didn't send a pairing file. Update SideStore and try again, or import the file from Files.")
+    private static let row4Lockdown = String(localized: "SideStore sent an older lockdown pairing file.") + " "
+        + String(localized: "In SideStore, open Pairing File Management, long-press Remote Pairing File and choose Set as Preferred, then try again.")
     private static let row5 = String(localized: "Mount the Developer Disk Image. The first mount downloads about 16 MB.")
     private static let row7 = String(localized: "Close ARMSX3 from the app switcher and open it again. JIT turns on as it opens.")
     private static let row8 = String(localized: "Install StikDebug, then come back here.")
@@ -124,7 +134,7 @@ enum JitNextStep {
         switch method {
         case .builtin:
             if !s.pairingImported || s.importRefusal != nil {
-                return JitStep(row: 4, advice: s.importRefusal ?? row4, primary: .importPairingFile)
+                return pairingStep(s)
             }
             switch s.diskImage {
             case .notMounted, .busy:
@@ -147,15 +157,38 @@ enum JitNextStep {
         }
     }
 
+    /// A refused import is answered first; after that the likeliest source for this install.
+    private static func pairingStep(_ s: JitSituation) -> JitStep {
+        if let refusal = s.importRefusal { return JitStep(row: 4, advice: refusal, primary: .importPairingFile) }
+        if s.sideStoreLockdown { return JitStep(row: 4, advice: row4Lockdown, primary: .getFromSideStore) }
+        if s.sideStoreSentNothing { return JitStep(row: 4, advice: row4NoAnswer, primary: .getFromSideStore) }
+        if s.liveContainer {
+            let place = s.isPad ? String(localized: "On My iPad") : String(localized: "On My iPhone")
+            return JitStep(row: 4, advice: row4 + " " + String(localized: "If SideStore is installed, it keeps one in Files under \(place) › SideStore."),
+                           primary: .importPairingFile)
+        }
+        if s.sideStoreAvailable { return JitStep(row: 4, advice: row4SideStore, primary: .getFromSideStore) }
+        return JitStep(row: 4, advice: row4, primary: .importPairingFile)
+    }
+
+    /// The share line is left out inside LiveContainer, where a shared file may not reach the guest.
+    static func otherWays(liveContainer: Bool, sideStoreAvailable: Bool) -> [String] {
+        let iLoader = String(localized: "On a computer, iLoader can make a pairing file for this device. Save it to Files, then import it here.")
+        if liveContainer { return [iLoader] }
+        return [String(localized: "Share the file to ARMSX3 from Files or another app."),
+                String(localized: "Or put a file named pairingFile.plist in ARMSX3's folder in Files, then open ARMSX3 again."),
+                iLoader]
+    }
+
     /// Nil when the helper's word adds nothing.
     static func helperSentence(_ word: String) -> String? {
         switch word {
         case "connect-failed":
             return String(localized: "ARMSX3 couldn't reach this device through LocalDevVPN. Turn LocalDevVPN on and stay on Wi-Fi, or turn on Airplane mode, then reopen ARMSX3.")
         case "tunnel-failed":
-            return String(localized: "LocalDevVPN is on, but this device didn't accept the pairing. Make a new pairing file on your Mac, import it here, then reopen ARMSX3.")
+            return String(localized: "LocalDevVPN is on, but this device didn't accept the pairing. Make a new pairing file on a computer, import it here, then reopen ARMSX3.")
         case "pairing-rejected":
-            return String(localized: "Your pairing file couldn't be read. Make a new pairing file on your Mac and import it.")
+            return String(localized: "Your pairing file couldn't be read. Make a new pairing file on a computer and import it.")
         case "ddi-not-mounted":
             return String(localized: "The Developer Disk Image isn't mounted. Mount it here, then reopen ARMSX3.")
         case "attach-failed", "prepare-incomplete", "detach-failed", "timeout", "interrupted", "start-failed", "invalid-request":
@@ -172,7 +205,7 @@ enum JitNextStep {
         case "unreachable":
             return String(localized: "Couldn't reach this device through LocalDevVPN. Turn LocalDevVPN on and stay on Wi-Fi, or turn on Airplane mode, then try again.")
         case "download": return String(localized: "The disk image didn't download. Check the internet connection, then try again.")
-        case "pairing": return String(localized: "This device didn't accept the pairing file. Make a new pairing file on your Mac and import it.")
+        case "pairing": return String(localized: "This device didn't accept the pairing file. Make a new pairing file on a computer and import it.")
         case "mount":
             return String(localized: "The disk image didn't mount. Restart this device, then try again. If it keeps failing, use Reset Developer Disk Image.")
         default: return mountOther
