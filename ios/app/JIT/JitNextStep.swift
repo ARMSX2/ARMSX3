@@ -12,36 +12,29 @@ extension JitMethod {
         JitMethod(rawValue: raw ?? "") ?? .builtin
     }
 
-    /// Nil reads "Not set": Built-in stored under LiveContainer, where it is hidden.
-    static func effective(stored: JitMethod, liveContainer: Bool) -> JitMethod? {
-        stored == .builtin && liveContainer ? nil : stored
-    }
-
     var title: String {
         switch self {
-        case .builtin: return String(localized: "Built-in")
-        case .stikdebug: return String(localized: "StikDebug")
+        case .builtin, .stikdebug: return String(localized: "Built-in")
         case .wait: return String(localized: "Wait for Debugger")
         }
     }
 
     var caption: String {
         switch self {
-        case .builtin: return String(localized: "ARMSX3 turns on JIT by itself each time it opens. Needs a pairing file and LocalDevVPN.")
-        case .stikdebug: return String(localized: "ARMSX3 asks the StikDebug app to turn on JIT. Needs StikDebug installed.")
-        case .wait: return String(localized: "ARMSX3 waits for a debugger you attach yourself, from StikDebug or a Mac.")
+        case .builtin, .stikdebug: return String(localized: "ARMSX3 turns on JIT by itself each time it opens. Needs a pairing file and LocalDevVPN.")
+        case .wait: return String(localized: "ARMSX3 waits for a debugger you attach yourself, from a Mac.")
         }
     }
 }
 
 // No pid is sent: StikDebug relaunches the app traced, and TXM unknown counts as present.
 enum StikDebugLink {
-    static func url(bundleID: String, txm: Presence, forceScript: Bool) -> URL? {
+    static func url(bundleID: String, txm: Presence) -> URL? {
         var components = URLComponents()
         components.scheme = "stikdebug"
         components.host = "enable-jit"
         var items = [URLQueryItem(name: "bundle-id", value: bundleID)]
-        if txm != .missing || forceScript {
+        if txm != .missing {
             items.append(URLQueryItem(name: "script-name", value: "universal.js"))
         }
         components.queryItems = items
@@ -63,12 +56,12 @@ enum DiskImageState: Equatable {
 }
 
 enum JitPrimary: String {
-    case chooseMethod, importPairingFile, mountDiskImage, openStikDebug
+    case tryAgain, importPairingFile, mountDiskImage, openStikDebug
     case getFromSideStore
 
     var title: String {
         switch self {
-        case .chooseMethod: return String(localized: "Choose Method")
+        case .tryAgain: return String(localized: "Try Again")
         case .importPairingFile: return String(localized: "Import Pairing File")
         case .getFromSideStore: return String(localized: "Get from SideStore")
         case .mountDiskImage: return String(localized: "Mount Disk Image")
@@ -81,7 +74,7 @@ enum JitPrimary: String {
 struct JitSituation {
     var jitOn = false
     var entitlementMissing = false
-    var method: JitMethod? = .builtin
+    var method = JitMethod.builtin
     var pairingImported = false
     var diskImage = DiskImageState.unknown
     var helperWord = ""
@@ -96,6 +89,70 @@ struct JitSituation {
     var isPad = false
     var sideStoreSentNothing = false
     var sideStoreLockdown = false
+    var checklistFails = false
+    var liveProcessMissing = false
+    var fallbackAdvice: String? = nil
+    var testResult: JitTestResult? = nil
+}
+
+// The first stage Test JIT Setup could not pass, from the helper's check-only result word.
+enum JitTestResult: Equatable {
+    enum Stage: String { case helper, localDevVPN = "LocalDevVPN", pairing, diskImage = "disk image" }
+
+    case passed
+    case stopped(Stage, reason: String)
+
+    /// Any word but the four stage words means the helper itself failed.
+    init(result: String, reason: String) {
+        switch result {
+        case "ready": self = .passed
+        case "unreachable": self = .stopped(.localDevVPN, reason: reason)
+        case "pairing": self = .stopped(.pairing, reason: reason)
+        case "unmounted": self = .stopped(.diskImage, reason: reason)
+        default: self = .stopped(.helper, reason: reason)
+        }
+    }
+
+    var stoppedStage: Stage? {
+        guard case .stopped(let stage, _) = self else { return nil }
+        return stage
+    }
+
+    var value: String {
+        switch self {
+        case .passed: return String(localized: "Passed")
+        case .stopped(.helper, _): return String(localized: "Stopped at helper")
+        case .stopped(.localDevVPN, _): return String(localized: "Stopped at LocalDevVPN")
+        case .stopped(.pairing, _): return String(localized: "Stopped at pairing")
+        case .stopped(.diskImage, _): return String(localized: "Stopped at disk image")
+        }
+    }
+
+    func fix(liveContainer: Bool) -> String? {
+        guard case .stopped(let stage, _) = self else { return nil }
+        switch stage {
+        case .helper:
+            return liveContainer
+                ? String(localized: "LiveContainer didn't start the JIT helper. Check that Helper Process Support is on for ARMSX3, then close ARMSX3 and open it again.")
+                : String(localized: "The JIT helper didn't start. Close ARMSX3 fully and open it again.")
+        case .localDevVPN: return JitNextStep.mountSentence("unreachable")
+        case .pairing: return JitNextStep.mountSentence("pairing")
+        case .diskImage: return String(localized: "The Developer Disk Image isn't mounted. Mount it, then test again.")
+        }
+    }
+
+    var passedDetail: String? {
+        guard self == .passed else { return nil }
+        return String(localized: "Helper started, device reached through LocalDevVPN, pairing accepted, disk image mounted.")
+    }
+
+    /// Stage words and the helper's path-free reason token only.
+    var reportWord: String {
+        switch self {
+        case .passed: return "passed"
+        case .stopped(let stage, let reason): return "stopped at \(stage.rawValue)" + (reason.isEmpty ? "" : " (\(reason))")
+        }
+    }
 }
 
 struct JitStep {
@@ -108,10 +165,8 @@ struct JitStep {
 enum JitNextStep {
     static let severity = String(localized: "ARMSX3 cannot run games without JIT. Without it, games do not start at all.")
     static let setupSuffix = String(localized: "Setup continues here.")
-    static let liveContainerSentence = String(localized: "In LiveContainer's settings, turn on Use LiveContainer's Bundle ID.")
 
     private static let row2 = String(localized: "Turn on get-task-allow when you sign ARMSX3. No JIT method works without it.")
-    private static let row3 = String(localized: "Built-in JIT isn't available inside LiveContainer. Choose StikDebug or Wait for Debugger.")
     private static let row4 = String(localized: "Import the pairing file made for this device.")
     private static let row4SideStore = String(localized: "Get the pairing file from SideStore. ARMSX3 opens SideStore, which sends the file back.")
     private static let row4NoAnswer = String(localized: "SideStore didn't send a pairing file. Update SideStore and try again, or import the file from Files.")
@@ -119,39 +174,76 @@ enum JitNextStep {
         + String(localized: "In SideStore, open Pairing File Management, long-press Remote Pairing File and choose Set as Preferred, then try again.")
     private static let row5 = String(localized: "Mount the Developer Disk Image. The first mount downloads about 16 MB.")
     private static let row7 = String(localized: "Close ARMSX3 from the app switcher and open it again. JIT turns on as it opens.")
-    private static let row8 = String(localized: "Install StikDebug, then come back here.")
     private static let row9 = String(localized: "StikDebug didn't turn JIT on. In StikDebug, check that LocalDevVPN is on and a pairing file is imported, then try again.")
-    private static let row10 = String(localized: "StikDebug turns on JIT for ARMSX3 and sends you back here.")
     // A plain Mac attach does not run the JIT script on a TXM device, so this clause needs TXM known absent.
     private static let row11Mac = String(localized: "ARMSX3 waits for a debugger as it opens. Close ARMSX3, then open it from StikDebug or attach a debugger from your Mac.")
     private static let row11TXM = String(localized: "ARMSX3 waits for a debugger as it opens. Close ARMSX3, then open it from StikDebug.")
     private static let mountOther = String(localized: "Mounting didn't finish. Try again. If it keeps failing, restart this device.")
 
+    private static let stikDebugReady = String(localized: "StikDebug can turn on JIT for ARMSX3 this time.")
+    private static let stikDebugInstead = String(localized: "If built-in JIT can't work here, StikDebug can turn it on instead.")
+
+    private static let diskImageUnknownFix = String(localized: "Test JIT Setup checks it.")
+
+    static func diskImageFix(jitOn: Bool, diskImage: DiskImageState, testRowShown: Bool) -> String? {
+        !jitOn && testRowShown && diskImage == .unknown ? diskImageUnknownFix : nil
+    }
+
+    /// The stage word shown while the test runs; a word the helper adds later keeps the first one.
+    static func testStageValue(_ stage: String?) -> String {
+        switch stage {
+        case "connecting"?: return String(localized: "Connecting…")
+        case "pairing"?: return String(localized: "Pairing…")
+        default: return String(localized: "Starting helper…")
+        }
+    }
+
+    /// Closes the advice of a step where built-in JIT cannot start now; the primary is StikDebug when it is installed.
+    private static func fallback(_ s: JitSituation, after sentence: String?) -> (advice: String, primary: JitPrimary) {
+        let line = s.stikDebugInstalled ? stikDebugReady : stikDebugInstead
+        return (sentence.map { $0 + " " + line } ?? line, s.stikDebugInstalled ? .openStikDebug : .tryAgain)
+    }
+
     static func decide(_ s: JitSituation) -> JitStep {
-        if s.jitOn { return JitStep(row: 1, advice: nil, primary: nil) }
+        if s.jitOn {
+            guard let advice = s.fallbackAdvice else { return JitStep(row: 1, advice: nil, primary: nil) }
+            return JitStep(row: 12, advice: advice, primary: nil)
+        }
         if s.entitlementMissing { return JitStep(row: 2, advice: row2, primary: nil) }
-        guard let method = s.method else { return JitStep(row: 3, advice: row3, primary: .chooseMethod) }
-        switch method {
-        case .builtin:
+        if s.stikDebugReturnedOff { return JitStep(row: 9, advice: row9, primary: .openStikDebug) }
+        if s.checklistFails {
+            let next = fallback(s, after: nil)
+            return JitStep(row: 3, advice: next.advice, primary: next.primary)
+        }
+        switch s.method {
+        case .builtin, .stikdebug:
             if !s.pairingImported || s.importRefusal != nil {
                 return pairingStep(s)
             }
+            // A stop at the disk image is stale once a mount succeeded.
+            let testFoundNoImage = s.testResult?.stoppedStage == .diskImage && s.diskImage != .mounted
             switch s.diskImage {
             case .notMounted, .busy:
                 let failed = s.mountResult.flatMap { $0 == "ready" ? nil : mountSentence($0) }
-                return JitStep(row: 5, advice: failed ?? row5, primary: .mountDiskImage)
+                // The test row already says the image is not mounted, so row5 would only repeat it.
+                let repeatsTest = testFoundNoImage && s.diskImage == .notMounted
+                return JitStep(row: 5, advice: failed ?? (repeatsTest ? nil : row5), primary: .mountDiskImage)
             case .mounted, .unknown:
-                break
+                if testFoundNoImage { return JitStep(row: 5, advice: nil, primary: .mountDiskImage) }
             }
-            if !s.actedThisLaunch, let sentence = helperSentence(s.helperWord) {
-                return JitStep(row: 6, advice: sentence, primary: nil)
+            // Nothing is left to press: the next launch turns JIT on, so no StikDebug line either.
+            if s.testResult == .passed { return JitStep(row: 7, advice: row7, primary: nil) }
+            if let stage = s.testResult?.stoppedStage, stage != .diskImage, !s.actedThisLaunch {
+                let next = fallback(s, after: nil)
+                return JitStep(row: 3, advice: next.advice, primary: next.primary)
             }
-            return JitStep(row: 7, advice: row7, primary: nil)
-        case .stikdebug:
-            if !s.stikDebugInstalled { return JitStep(row: 8, advice: row8, primary: nil) }
-            let row = s.stikDebugReturnedOff ? 9 : 10
-            let advice = s.stikDebugReturnedOff ? row9 : row10
-            return JitStep(row: row, advice: s.liveContainer ? advice + " " + liveContainerSentence : advice, primary: .openStikDebug)
+            let word = s.liveProcessMissing ? "liveprocess-missing" : s.helperWord
+            if !s.actedThisLaunch, let sentence = helperSentence(word) {
+                let next = fallback(s, after: sentence)
+                return JitStep(row: 6, advice: next.advice, primary: next.primary)
+            }
+            let next = fallback(s, after: row7)
+            return JitStep(row: 7, advice: next.advice, primary: next.primary)
         case .wait:
             return JitStep(row: 11, advice: s.txm == .missing ? row11Mac : row11TXM, primary: nil)
         }
@@ -191,7 +283,10 @@ enum JitNextStep {
             return String(localized: "Your pairing file couldn't be read. Make a new pairing file on a computer and import it.")
         case "ddi-not-mounted":
             return String(localized: "The Developer Disk Image isn't mounted. Mount it here, then reopen ARMSX3.")
-        case "attach-failed", "prepare-incomplete", "detach-failed", "timeout", "interrupted", "start-failed", "invalid-request":
+        case "liveprocess-missing":
+            return String(localized: "LiveContainer's LiveProcess extension is missing. Reinstall LiveContainer and keep its extensions.")
+        case "attach-failed", "prepare-incomplete", "detach-failed", "timeout", "interrupted", "start-failed", "invalid-request",
+             "connect-timeout":
             return String(localized: "JIT setup didn't finish. Close ARMSX3 fully and open it again.")
         default:
             return nil

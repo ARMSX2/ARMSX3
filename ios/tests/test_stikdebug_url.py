@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """StikDebugLink in JitNextStep.swift, run on the Mac host, builds the StikDebug relaunch link with the universal script
 except when TXM is missing, encodes the bundle ID and names no pid; JitMethod reads stored methods by the pre-main
-whitelist and leaves Built-in unset under LiveContainer. It does not show StikDebug accepting the link."""
+whitelist. It does not show StikDebug accepting the link."""
 
 import re
 import sys
@@ -23,31 +23,20 @@ TXMS = ("present", "missing", "unknown")
 STORED = (("nil", None, "builtin"), ("empty", "", "builtin"), ("builtin", "builtin", "builtin"),
           ("stikdebug", "stikdebug", "stikdebug"), ("wait", "wait", "wait"), ("Wait", "Wait", "builtin"),
           ("x", "x", "builtin"))
-METHODS = ("builtin", "stikdebug", "wait")
 
 
-def expected_url(txm, force):
-    return BASE_URL + (SCRIPT if txm != "missing" or force else "")
-
-
-def expected_effective(method, lc):
-    return "nil" if method == "builtin" and lc else method
+def expected_url(txm):
+    return BASE_URL + (SCRIPT if txm != "missing" else "")
 
 
 def driver():
     lines = ["import Foundation"]
     for txm in TXMS:
-        for force in (False, True):
-            lines.append('print("url {0} {1} \\(StikDebugLink.url(bundleID: "{2}", txm: .{0}, forceScript: {1})?.absoluteString ?? "nil")")'
-                         .format(txm, "true" if force else "false", BUNDLE))
-    lines.append('print("encoded \\(StikDebugLink.url(bundleID: "a b&c", txm: .missing, forceScript: false)?.absoluteString ?? "nil")")')
+        lines.append('print("url {0} \\(StikDebugLink.url(bundleID: "{1}", txm: .{0})?.absoluteString ?? "nil")")'.format(txm, BUNDLE))
+    lines.append('print("encoded \\(StikDebugLink.url(bundleID: "a b&c", txm: .missing)?.absoluteString ?? "nil")")')
     for name, raw, _ in STORED:
         value = "nil" if raw is None else '"{0}"'.format(raw)
         lines.append('print("stored {0} \\(JitMethod.stored({1}).rawValue)")'.format(name, value))
-    for method in METHODS:
-        for lc in (False, True):
-            lines.append('print("effective {0} {1} \\(JitMethod.effective(stored: .{0}, liveContainer: {1})?.rawValue ?? "nil")")'
-                         .format(method, "true" if lc else "false"))
     return "\n".join(lines) + "\n"
 
 
@@ -66,22 +55,16 @@ def stikdebug_url_problems(out):
         got[" ".join(parts[:-1])] = parts[-1]
     problems = []
     for txm in TXMS:
-        for force in (False, True):
-            key = "url {0} {1}".format(txm, "true" if force else "false")
-            if got.get(key) != expected_url(txm, force):
-                problems.append("url: {0} gave {1!r}, wanted {2!r}".format(key, got.get(key), expected_url(txm, force)))
-            if "pid" in (got.get(key) or ""):
-                problems.append("url: {0} names pid (Route R sends none)".format(key))
+        key = "url " + txm
+        if got.get(key) != expected_url(txm):
+            problems.append("url: {0} gave {1!r}, wanted {2!r}".format(key, got.get(key), expected_url(txm)))
+        if "pid" in (got.get(key) or ""):
+            problems.append("url: {0} names pid (Route R sends none)".format(key))
     if got.get("encoded") != "stikdebug://enable-jit?bundle-id=a%20b%26c":
         problems.append("encoded: bundle `a b&c` gave {0!r}, wanted bundle-id=a%20b%26c".format(got.get("encoded")))
     for name, _, want in STORED:
         if got.get("stored " + name) != want:
             problems.append("stored: {0} gave {1!r}, wanted {2!r}".format(name, got.get("stored " + name), want))
-    for method in METHODS:
-        for lc in (False, True):
-            key = "effective {0} {1}".format(method, "true" if lc else "false")
-            if got.get(key) != expected_effective(method, lc):
-                problems.append("effective: {0} gave {1!r}, wanted {2!r}".format(key, got.get(key), expected_effective(method, lc)))
     return problems
 
 
@@ -92,6 +75,8 @@ def source_problems(text):
         problems.append("source: line 1 is not the SPDX GPL-2.0-only line")
     if "Adapted from ARMSX2" in text:
         problems.append("source: the file carries the lifted-file header")
+    if "forceScript" in text:
+        problems.append("source: the force-script parameter is back")
     imports = set(re.findall(r"^\s*import\s+(\w+)", text, flags=re.MULTILINE))
     if imports != {"Foundation"}:
         problems.append("source: imports {0}, wanted Foundation only".format(sorted(imports)))
@@ -117,10 +102,8 @@ class RealFiles(unittest.TestCase):
         self.assertEqual(stikdebug_url_problems(out), [])
 
     def test_control_the_expected_table(self):
-        self.assertEqual([expected_url(t, f) for t in TXMS for f in (False, True)].count(BASE_URL), 1)
-        self.assertEqual(expected_url("missing", False), BASE_URL)
-        self.assertEqual(expected_effective("builtin", True), "nil")
-        self.assertEqual(expected_effective("stikdebug", True), "stikdebug")
+        self.assertEqual([expected_url(t) for t in TXMS].count(BASE_URL), 1)
+        self.assertEqual(expected_url("missing"), BASE_URL)
 
     def test_edge_missing_or_empty_input_raises(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -152,7 +135,7 @@ class Mutations(unittest.TestCase):
                            'URLQueryItem(name: "bundle-id", value: bundleID), URLQueryItem(name: "p" + "id", value: "1")', "url:")
 
     def test_mutation_the_script_omitted_for_unknown(self):
-        self.assert_caught("txm != .missing || forceScript", "txm == .present || forceScript", "url:")
+        self.assert_caught("if txm != .missing {", "if txm == .present {", "url:")
 
     def test_mutation_query_hand_concatenated(self):
         self.assert_caught("return components.url",
@@ -162,12 +145,12 @@ class Mutations(unittest.TestCase):
     def test_mutation_the_stored_reader_is_case_insensitive(self):
         self.assert_caught("JitMethod(rawValue: raw ?? \"\")", "JitMethod(rawValue: (raw ?? \"\").lowercased())", "stored:")
 
-    def test_mutation_effective_picks_stikdebug_under_livecontainer(self):
-        self.assert_caught("stored == .builtin && liveContainer ? nil : stored",
-                           "stored == .builtin && liveContainer ? .stikdebug : stored", "effective:")
-
     def test_mutation_pid_named_in_code(self):
         text = self.edited(self.text, "enum StikDebugLink {", "enum StikDebugLink {\n    static let pid = 0")
+        self.assertTrue(any(p.startswith("source:") for p in source_problems(text)))
+
+    def test_mutation_the_force_script_parameter_back(self):
+        text = self.edited(self.text, "txm: Presence) -> URL? {", "txm: Presence, forceScript: Bool = false) -> URL? {")
         self.assertTrue(any(p.startswith("source:") for p in source_problems(text)))
 
     def test_mutation_the_lifted_header_added(self):

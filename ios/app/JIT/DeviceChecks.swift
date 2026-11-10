@@ -30,6 +30,8 @@ struct DeviceReport: Equatable {
     let memoryLimitBytes: Int64
     let liveContainer: Bool
     var pairingRow: DeviceRow? = nil
+    var liveContainerVersion: String? = nil // set only when ARMSX3 runs inside LiveContainer
+    var helperFromOtherInstall = false // the helper in use belongs to the other ARMSX3 install
 
     /// Nil when any key is absent, so the pane shows its unreadable state instead.
     init?(_ checks: [String: NSNumber]) {
@@ -75,10 +77,18 @@ struct DeviceReport: Equatable {
             DeviceRow(label: String(localized: "Memory Limit"), value: Self.memoryText(memoryLimitBytes), isProblem: false, fix: nil),
             DeviceRow(label: String(localized: "TXM"), value: txmWord, isProblem: false, fix: nil, presence: txm),
             // The word, not a mark: a red mark read as something to fix, and signing cannot fix it.
-            DeviceRow(label: String(localized: "Address Space"), value: space, isProblem: false, fix: nil),
+            DeviceRow(label: String(localized: "Address Space"), value: space, isProblem: false,
+                      fix: liveContainer && extendedVirtualAddressing == .missing
+                          ? String(localized: "Inside LiveContainer this stays Standard unless LiveContainer itself has the extended virtual addressing entitlement.")
+                          : nil),
         ]
         if liveContainer {
-            rows.append(DeviceRow(label: String(localized: "LiveContainer"), value: String(localized: "Detected"), isProblem: false, fix: nil))
+            rows.append(DeviceRow(label: String(localized: "LiveContainer"),
+                                  value: liveContainerVersion.flatMap { $0.isEmpty ? nil : $0 } ?? String(localized: "Detected"),
+                                  isProblem: false,
+                                  fix: helperFromOtherInstall
+                                      ? String(localized: "JIT came from the helper of ARMSX3 installed outside LiveContainer.")
+                                      : nil))
         }
         if let pairingRow { rows.append(pairingRow) }
         return rows
