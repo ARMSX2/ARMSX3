@@ -167,17 +167,29 @@ static void spu_reset_failed_blocks()
 	s_spu_failed_blocks.clear();
 }
 
-#ifdef __APPLE__
+// Background SPU compiles: new code is interpreted while an LLVM worker compiles it, instead of the
+// SPU thread stopping until its own compile finishes. x86 has the spu_fast first tier for this and
+// ARM64 has none. Written for Apple; on Android too since 11-10, where every first-time compile
+// stopped the game for 100 to 300 ms and a new area strung several seconds of them together. Off
+// while Pause Game During SPU Compilation is on (spu_async_compile_enabled), so a title that needs
+// its compiles hidden from its timers keeps that.
+#if defined(__APPLE__) || defined(__ANDROID__)
+#define SPU_ASYNC_COMPILE 1
+#endif
+
+#ifdef SPU_ASYNC_COMPILE
 // Ranges still compiling in the background, and every program ever queued so each is queued once
 static shared_mutex s_spu_async_mutex;
 static std::vector<std::pair<u32, u32>> s_spu_async_pending;
 static std::unordered_set<u64> s_spu_async_queued;
+static atomic_t<bool> s_spu_async_logged{false};
 
 static void spu_reset_async_compiles()
 {
 	std::lock_guard lock(s_spu_async_mutex);
 	s_spu_async_pending.clear();
 	s_spu_async_queued.clear();
+	s_spu_async_logged = false;
 }
 
 #endif
@@ -2024,7 +2036,7 @@ spu_runtime::spu_runtime()
 	// fail to compile a block, so no other target has anything to reset.
 #ifdef ARCH_ARM64
 	spu_reset_failed_blocks();
-#ifdef __APPLE__
+#ifdef SPU_ASYNC_COMPILE
 	spu_reset_async_compiles();
 #endif
 #endif
@@ -3342,7 +3354,7 @@ static spu_function_t compile_spu_llvm_paused(spu_thread& spu, const spu_program
 }
 #endif
 
-#if defined(__APPLE__) && defined(ARCH_ARM64)
+#ifdef SPU_ASYNC_COMPILE
 // No fast tier on ARM64, so new code compiles in the background and its range is interpreted meanwhile
 static bool spu_async_compile_enabled()
 {
@@ -3472,6 +3484,11 @@ static bool spu_async_dispatch(spu_thread& spu, std::unique_ptr<spu_recompiler_b
 			s_spu_async_pending.push_back(range);
 		}
 
+		if (!s_spu_async_logged.exchange(true))
+		{
+			spu_log.notice("SPU: new code at 0x%05x compiles in the background, and the SPU interprets it meanwhile instead of waiting.", program.entry_point);
+		}
+
 		const u32 i = async.next++ % 2;
 		(async.workers->begin() + i)->queue.push(std::move(program));
 	}
@@ -3595,7 +3612,7 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
 		spu_run_interp_fallback(spu);
 		return;
 	}
-#ifdef __APPLE__
+#ifdef SPU_ASYNC_COMPILE
 
 	if (spu_async_dispatch(spu, spu.jit))
 	{
