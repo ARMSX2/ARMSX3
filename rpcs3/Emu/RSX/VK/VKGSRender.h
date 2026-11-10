@@ -321,6 +321,11 @@ private:
 	// as a VSync change does.
 	bool m_swapchain_framegen = false;
 
+	// Whether ZeroFG was on when the swapchain was built. Its images carry TRANSFER_SRC only then
+	// (swapchain.cpp), and ZeroFG captures the composited frame from them: a swapchain built while it
+	// was off cannot be captured, so switching it on in game rebuilds the swapchain. Like the above.
+	bool m_swapchain_zerofg = false;
+
 	// Whether pre-rotation was allowed (not switched off in Fixes) when the swapchain was built.
 	// swapchain.cpp reads the setting there, so a change rebuilds it, as above.
 	bool m_swapchain_prerotation = true;

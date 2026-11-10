@@ -84,6 +84,26 @@ void VKGSRender::zerofg_update_authority()
 		return;
 	}
 
+	if (m_swapchain_zerofg != wanted)
+	{
+		// ZeroFG was switched on or off in game, and the swapchain was built for the other state: its
+		// images lack TRANSFER_SRC when built with ZeroFG off, so nothing could be captured (this is
+		// why switching it back on never armed). ZeroFG leaves the window first, then the swapchain is
+		// rebuilt (reinitialize_swapchain sets m_swapchain_zerofg); the next flip offers the window again.
+		if (VKZeroFG::Connected())
+		{
+			VKZeroFG::DisconnectSurface();
+		}
+
+		if (wsi->is_offscreen())
+		{
+			wsi->set_offscreen(false);
+		}
+
+		swapchain_unavailable = true;
+		return;
+	}
+
 	const bool failed = VKZeroFG::ReconnectRequested();
 
 	if (failed || (VKZeroFG::Connected() && (!wanted || VKZeroFG::ModeChanged())))
@@ -312,6 +332,7 @@ bool VKGSRender::reinitialize_swapchain()
 
 	// Read with the same setting init() reads to pick the present mode. See m_swapchain_framegen.
 	m_swapchain_framegen = is_lsfg_mode(g_cfg.video.frame_generation);
+	m_swapchain_zerofg = is_zerofg_mode(g_cfg.video.frame_generation);
 	m_swapchain_prerotation = !g_cfg.video.disable_swapchain_prerotation;
 
 	// Rebuild swapchain. Old swapchain destruction is handled by the init_swapchain call

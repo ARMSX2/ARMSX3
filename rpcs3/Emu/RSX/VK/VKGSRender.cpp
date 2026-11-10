@@ -516,6 +516,7 @@ VKGSRender::VKGSRender(rsx::context* ctx, rsx::display_output* output) noexcept 
 
 	// Read with the same setting init() reads to pick the present mode. See m_swapchain_framegen.
 	m_swapchain_framegen = is_lsfg_mode(g_cfg.video.frame_generation);
+	m_swapchain_zerofg = is_zerofg_mode(g_cfg.video.frame_generation);
 	m_swapchain_prerotation = !g_cfg.video.disable_swapchain_prerotation;
 
 	if (!m_swapchain->init(m_swapchain_dims.width, m_swapchain_dims.height))
