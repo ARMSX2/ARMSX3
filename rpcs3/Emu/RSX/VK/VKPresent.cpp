@@ -5,6 +5,7 @@
 #include "VKCommandStream.h"
 #include "VKGSRender.h"
 #include "VKFrameGen.h"
+#include "ZeroFG/VKZeroFG.h"
 #include "vkutils/buffer_object.h"
 #include "vkutils/memory.h"
 #include "Emu/RSX/Overlays/overlay_manager.h"
@@ -69,6 +70,62 @@ namespace
 	}
 }
 
+void VKGSRender::zerofg_update_authority()
+{
+#if defined(ANDROID)
+	const frame_generation_mode mode = g_cfg.video.frame_generation;
+	const bool wanted = is_zerofg_mode(mode);
+	VKZeroFG::SetUserSettings(wanted, mode == frame_generation_mode::reallyzero ? 1 : 0);
+
+	auto* wsi = dynamic_cast<vk::swapchain_WSI*>(m_swapchain.get());
+	if (!wsi || swapchain_unavailable || m_zerofg_handoff_reinit)
+	{
+		// A rebuild is under way; reinitialize_swapchain deals with ZeroFG's side of it.
+		return;
+	}
+
+	const bool failed = VKZeroFG::ReconnectRequested();
+
+	if (failed || (VKZeroFG::Connected() && (!wanted || VKZeroFG::ModeChanged())))
+	{
+		// The presenter gave the window back, or ZeroFG was switched off (or to another engine) in
+		// game: take it off the window, and give this renderer a real swapchain on the surface again.
+		if (failed)
+		{
+			VKZeroFG::FailOpen();
+		}
+		else
+		{
+			VKZeroFG::DisconnectSurface();
+		}
+
+		if (wsi->is_offscreen())
+		{
+			wsi->set_offscreen(false);
+			swapchain_unavailable = true;
+		}
+	}
+	else if (!wsi->is_offscreen() && wanted && VKZeroFG::CanConnect())
+	{
+		VKZeroFG::OutputSurface output;
+		output.window = std::get<ANativeWindow*>(m_frame->handle());
+		output.surface = wsi->get_surface();
+		output.width = m_swapchain->get_width();
+		output.height = m_swapchain->get_height();
+		output.format = m_swapchain->get_surface_format();
+		VKZeroFG::ConnectSurface(output);
+	}
+	else if (!wsi->is_offscreen() && VKZeroFG::OwnsOutput() && VKZeroFG::MainSurfaceHandoffPending())
+	{
+		// The swapchain goes, the surface stays for ZeroFG's presenter. Rebuilt as offscreen images
+		// by reinitialize_swapchain (which drains the device first); ZeroFG is told once that is done.
+		wsi->set_offscreen(true);
+		m_zerofg_handoff_reinit = true;
+		swapchain_unavailable = true;
+	}
+#endif
+}
+
 bool VKGSRender::reinitialize_swapchain()
 {
 	// Never rebuild a swapchain on a lost device.
@@ -93,8 +150,29 @@ bool VKGSRender::reinitialize_swapchain()
 	// it when the swapchain is already unusable.
 	present_after_generated(true);
 
+	// A rebuild while ZeroFG holds the window (a resize, a rotation, a new window): its presenter is on
+	// the surface this is about to rebuild around, so it leaves first, and this renderer goes back to a
+	// real swapchain. The next flip offers the window again (zerofg_update_authority). The handoff
+	// itself is also a rebuild, but one that is meant to end offscreen.
+	if (auto* zerofg_wsi = dynamic_cast<vk::swapchain_WSI*>(m_swapchain.get());
+		zerofg_wsi && zerofg_wsi->is_offscreen() && !m_zerofg_handoff_reinit)
+	{
+		VKZeroFG::DisconnectSurface();
+		zerofg_wsi->set_offscreen(false);
+
+		// Offscreen images cannot tell that the window was replaced; a real swapchain finds out by
+		// failing, and by then the surface is the one that has to be rebuilt.
+		if (m_display_epoch != m_frame->display_epoch())
+		{
+			m_surface_lost = true;
+		}
+	}
+
 	if (m_surface_lost)
 	{
+		// ZeroFG's presenter may be on the surface that is about to be destroyed.
+		VKZeroFG::DisconnectSurface();
+
 		// Not while the emulator is stopping. Leaving a game closes its screen, so Android destroys
 		// the window while the renderer is still drawing its last frames, and the surface is lost
 		// mid-stop. handle() cannot wait for a new window then and hands back the one it already
@@ -233,7 +311,7 @@ bool VKGSRender::reinitialize_swapchain()
 	m_held_generated_count = 0;
 
 	// Read with the same setting init() reads to pick the present mode. See m_swapchain_framegen.
-	m_swapchain_framegen = g_cfg.video.frame_generation != frame_generation_mode::off;
+	m_swapchain_framegen = is_lsfg_mode(g_cfg.video.frame_generation);
 	m_swapchain_prerotation = !g_cfg.video.disable_swapchain_prerotation;
 
 	// Rebuild swapchain. Old swapchain destruction is handled by the init_swapchain call
@@ -241,6 +319,18 @@ bool VKGSRender::reinitialize_swapchain()
 	{
 		rsx_log.warning("Swapchain initialization failed. Request ignored [%dx%d]", m_swapchain_dims.width, m_swapchain_dims.height);
 		swapchain_unavailable = true;
+
+		if (m_zerofg_handoff_reinit)
+		{
+			// The offscreen images could not be made: ZeroFG leaves, and the retry builds a real swapchain.
+			m_zerofg_handoff_reinit = false;
+			VKZeroFG::DisconnectSurface();
+
+			if (auto* zerofg_wsi = dynamic_cast<vk::swapchain_WSI*>(m_swapchain.get()))
+			{
+				zerofg_wsi->set_offscreen(false);
+			}
+		}
 
 		// Distinguish "no usable window right now" from "the VkSurfaceKHR is dead". Retrying
 		// against a dead surface queries the same dead handle forever; the block at the top of
@@ -316,6 +406,18 @@ bool VKGSRender::reinitialize_swapchain()
 	swapchain_unavailable = false;
 	should_reinitialize_swapchain = false;
 	m_vsync_mode = g_cfg.video.vsync;
+
+	if (m_zerofg_handoff_reinit)
+	{
+		// The window is free of this renderer's swapchain: ZeroFG's presenter takes it.
+		m_zerofg_handoff_reinit = false;
+
+		if (m_swapchain->is_offscreen())
+		{
+			VKZeroFG::MainSurfaceReleasedByA();
+		}
+	}
+
 	return true;
 }
 
@@ -1020,6 +1122,12 @@ void VKGSRender::queue_swap_request()
 		m_swapchain->end_frame(*m_current_command_buffer, m_current_frame->present_image);
 		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[14]++; close_and_submit_command_buffer();
 	}
+	else if (m_swapchain->is_offscreen())
+	{
+		// ZeroFG owns the window. Nothing was acquired from a presentation engine, so there is no
+		// semaphore to wait on or signal; the frame's own fence is all that retires it.
+		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[14]++; close_and_submit_command_buffer();
+	}
 	else
 	{
 		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[15]++; close_and_submit_command_buffer(nullptr,
@@ -1036,6 +1144,20 @@ void VKGSRender::queue_swap_request()
 	// on OUR device and OUR graphics queue, and with Multithreaded RSX the submit above has only
 	// handed this frame to the offloader thread so far.)
 	vk::frame_gen::commit_capture();
+
+	if (m_zerofg_captured)
+	{
+		// ZeroFG copies the frame out of the staging image with a submit of its own, on this queue,
+		// "after the frame". With multithreaded RSX this frame's submit may still sit with the offloader,
+		// so wait for it to reach the queue first (present() does the same before it presents), and take
+		// the lock the queue's other users take: ZeroFG submits through the same VkQueue. Publishing may
+		// wait for ZeroFG's buffers, which is its Source backpressure and holds this thread only.
+		m_zerofg_captured = false;
+		m_current_frame->swap_command_buffer->flush();
+		vk::acquire_global_submit_lock();
+		VKZeroFG::PublishCapturedFrame();
+		vk::release_global_submit_lock();
+	}
 
 	if (framegen_frames && !m_framegen_pipelined)
 	{
@@ -1637,6 +1759,9 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 		}
 	}
 
+	// ZeroFG (Main Surface Authority): who holds the window this flip. May ask for a rebuild below.
+	zerofg_update_authority();
+
 	// Check swapchain condition/status
 	if (!m_swapchain->supports_automatic_wm_reports())
 	{
@@ -1668,7 +1793,7 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 	// first swapchain exists, and can be switched in-game, so it ran in MAILBOX: the real frame
 	// presented right after each generated one replaced it, and measured on the Odin 3 only 51 of
 	// 60 refreshes showed a new frame. Rebuild on a change, as for VSync.
-	if (m_swapchain_framegen != (g_cfg.video.frame_generation != frame_generation_mode::off))
+	if (m_swapchain_framegen != (is_lsfg_mode(g_cfg.video.frame_generation)))
 	{
 		swapchain_unavailable = true;
 	}
@@ -2615,6 +2740,36 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 	// less by the ratio of the two (720p on a 1080p screen: 2.25x fewer pixels to generate). Every
 	// other output mode renders through passes a generated frame would need a run of its own of,
 	// so those keep capturing the finished screen.
+	// ZeroFG owns the window: this image is not shown by this renderer, it is what ZeroFG takes. It is the
+	// composited screen -- the game with RPCS3's overlays (performance overlay, dialogs, trophies) drawn
+	// on it -- so the overlays reach every output frame, generated ones included, a little soft.
+	// Whole image in, whole image out: the Post puts it back where this present drew it.
+	if (m_swapchain->is_offscreen())
+	{
+		VKZeroFG::NoteSourceFrame();
+
+		if (VKZeroFG::WantsFrames())
+		{
+			vk::change_image_layout(*m_current_command_buffer, target_image, target_layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, subresource_range);
+			target_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+
+			const s32 screen_w = static_cast<s32>(m_swapchain_dims.width);
+			const s32 screen_h = static_cast<s32>(m_swapchain_dims.height);
+
+			VKZeroFG::GameFrame zerofg_frame;
+			zerofg_frame.image = target_image;
+			zerofg_frame.src[2] = screen_w;
+			zerofg_frame.src[3] = screen_h;
+			zerofg_frame.draw[2] = static_cast<float>(screen_w);
+			zerofg_frame.draw[3] = static_cast<float>(screen_h);
+			zerofg_frame.linear = true;
+			zerofg_frame.output_width = m_swapchain_dims.width;
+			zerofg_frame.output_height = m_swapchain_dims.height;
+			VKZeroFG::CaptureGameFrame(*m_current_command_buffer, zerofg_frame);
+			m_zerofg_captured = true;
+		}
+	}
+
 	const bool framegen_plain_output = image_to_flip && !pre_rotation && !avconfig.stereo_enabled && !cardboard_on &&
 		g_cfg.video.full_rgb_range_output.get() && rsx::fcmp(avconfig.gamma, 1.f) &&
 		(m_output_scaling == output_scaling_mode::bilinear || m_output_scaling == output_scaling_mode::nearest);

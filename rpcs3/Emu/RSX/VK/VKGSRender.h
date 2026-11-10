@@ -253,6 +253,18 @@ private:
 	// the generated frames of an image to be presented from.
 	bool m_framegen_pipelined = false;
 
+	// ZeroFG took this flip's frame (VKZeroFG::CaptureGameFrame ran); queue_swap_request publishes it
+	// once the frame's command buffer is submitted.
+	bool m_zerofg_captured = false;
+
+	// The swapchain rebuild now under way is the one that hands the window to ZeroFG (the images
+	// become offscreen ones), as opposed to a rebuild of it while ZeroFG holds the window.
+	bool m_zerofg_handoff_reinit = false;
+
+	// Main Surface Authority, once per flip: offers the window to ZeroFG, hands it over when ZeroFG
+	// asks, takes it back when ZeroFG fails or is switched off. May set swapchain_unavailable.
+	void zerofg_update_authority();
+
 	// Acquire/present semaphores for GENERATED frames.
 	//
 	// The real frame has had a pair of these all along (frame_context_t's

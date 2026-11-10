@@ -135,6 +135,13 @@ namespace vk
 		{
 			return (dev.get_present_queue() == VK_NULL_HANDLE);
 		}
+
+		// Plain images the renderer draws into while another producer owns the window (ZeroFG).
+		// Acquired and presented like any swapchain's, but with no semaphores and nothing shown.
+		virtual bool is_offscreen() const
+		{
+			return false;
+		}
 	};
 
 	template<typename T>
@@ -237,6 +244,28 @@ namespace vk
 		// the old one was lost, and only once destroy_swapchain_only() has run.
 		void replace_surface(VkSurfaceKHR surface) { m_surface = surface; }
 
+		VkSurfaceKHR get_surface() const { return m_surface; }
+
+		// Offscreen mode (ZeroFG, Main Surface Authority). While ZeroFG's presenter owns the window
+		// this device must not have a VkSwapchainKHR on the surface (Android connects a window to one
+		// producer at a time), but the renderer goes on drawing every frame exactly as before. So the
+		// "swapchain" is a ring of plain images of the window's size: acquire hands out a free one,
+		// present gives it back, and no semaphore is involved (the frame is submitted as the headless
+		// swapchain's is). ZeroFG copies the finished frame out of the image before it is released.
+		//
+		// The switch takes effect at the next init(), which the caller runs after draining the device
+		// (VKGSRender::reinitialize_swapchain). The surface is kept either way.
+		bool is_offscreen() const override { return m_offscreen; }
+		void set_offscreen(bool on) { m_offscreen = on; }
+
+	private:
+		bool m_offscreen = false;
+		std::vector<std::unique_ptr<image>> m_offscreen_images;
+		std::vector<bool> m_offscreen_in_use;
+
+		bool init_offscreen();
+		void release_offscreen_images();
+
 	protected:
 		VkColorSpaceKHR m_color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
 		VkSwapchainKHR m_vk_swapchain = nullptr;
@@ -278,10 +307,7 @@ namespace vk
 
 		bool surface_rotation_changed() override;
 
-		VkResult acquire_next_swapchain_image(VkSemaphore semaphore, u64 timeout, u32* result, VkFence fence) override
-		{
-			return vkAcquireNextImageKHR(dev, m_vk_swapchain, timeout, semaphore, fence, result);
-		}
+		VkResult acquire_next_swapchain_image(VkSemaphore semaphore, u64 timeout, u32* result, VkFence fence) override;
 
 		void end_frame(command_buffer& /*cmd*/, u32 /*index*/) override
 		{}
@@ -295,7 +321,8 @@ namespace vk
 
 		VkImageLayout get_optimal_present_layout() const override
 		{
-			return VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+			// Offscreen images are read by ZeroFG's capture (a copy) and presented by nobody.
+			return m_offscreen ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 		}
 	};
 

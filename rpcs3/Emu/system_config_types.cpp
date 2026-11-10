@@ -722,6 +722,8 @@ void fmt_class_string<frame_generation_mode>::format(std::string& out, u64 arg)
 		case frame_generation_mode::x2: return "x2";
 		case frame_generation_mode::x3: return "x3";
 		case frame_generation_mode::x4: return "x4";
+		case frame_generation_mode::zero: return "Zero";
+		case frame_generation_mode::reallyzero: return "ReallyZero";
 		}
 
 		// A missing case serialises as `unknown`, and cfg::_enum then refuses the value on load --

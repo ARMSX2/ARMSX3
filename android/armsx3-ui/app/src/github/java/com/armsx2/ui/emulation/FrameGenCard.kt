@@ -26,6 +26,7 @@ internal fun FrameGenCard(settings: Settings, viewModel: EmulationMenuViewModel)
             options = listOf(
                 str("perf.framegen.off"), str("perf.framegen.x2"),
                 str("perf.framegen.x3"), str("perf.framegen.x4"),
+                str("perf.framegen.zero"), str("perf.framegen.reallyzero"),
             ).mapIndexed { index, label -> index to label },
             selected = settings.ps3.frameGeneration,
             onSelect = { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(frameGeneration = v)) } },

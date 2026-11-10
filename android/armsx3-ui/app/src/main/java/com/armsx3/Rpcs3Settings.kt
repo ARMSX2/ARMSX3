@@ -579,7 +579,7 @@ object Rpcs3Settings {
 
     /** Frame Generation. Names, not indices -- cfg::_enum matches on the string the core's
      *  fmt_class_string produces, and these have to stay in step with frame_generation_mode. */
-    private val FRAME_GENERATION = arrayOf("Off", "x2", "x3", "x4")
+    private val FRAME_GENERATION = arrayOf("Off", "x2", "x3", "x4", "Zero", "ReallyZero")
 
     fun setFrameGenPerformance(on: Boolean) =
         setBool("$VIDEO@@Frame Generation Performance Mode", on)
