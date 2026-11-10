@@ -15,6 +15,7 @@
 #include "Emu/perf_meter.hpp"
 
 #include "util/asm.hpp"
+#include "util/sysinfo.hpp"
 #include <thread>
 #include <unordered_map>
 #include <map>
@@ -35,6 +36,24 @@ static thread_local u32 s_tls_thread_slot = -1;
 
 // Suspend counter stamp
 static thread_local u64 s_tls_sctr = -1;
+
+#ifdef ARCH_ARM64
+// How long a thread held by suspend_all spins before it sleeps instead: a quarter of a millisecond
+// (see check_state). get_tsc() on ARM is the 19.2 MHz (13 MHz on MediaTek) system counter. Read on
+// first use, not at load: sysinfo.cpp's own static initializer measures the frequency.
+static u64 long_suspend_ticks()
+{
+	static const u64 s_ticks = utils::get_tsc_freq() ? std::max<u64>(utils::get_tsc_freq() / 4000, 1) : 4800;
+	return s_ticks;
+}
+
+// Suspends that held everyone for at least a millisecond, reported every 10 s or so (see
+// suspend_work::push). Pause Game During SPU Compilation logs only its first and its 100 ms+
+// pauses, so a burst of short compiles holding the game added up unseen.
+static atomic_t<u64> s_long_suspends{0};
+static atomic_t<u64> s_long_suspend_us{0};
+static atomic_t<u64> s_long_suspend_report{0};
+#endif
 
 extern thread_local void(*g_tls_log_control)(const char* fmt, u64 progress);
 extern thread_local std::string(*g_tls_log_prefix)();
@@ -1070,6 +1089,9 @@ bool cpu_thread::check_state() noexcept
 			if (state0 & cpu_flag::pause)
 			{
 				// Wait for current suspend_all operation
+#ifdef ARCH_ARM64
+				const u64 held_since = utils::get_tsc();
+#endif
 				for (u64 i = 0;; i++)
 				{
 					u64 ctr = g_suspend_counter;
@@ -1078,6 +1100,20 @@ bool cpu_thread::check_state() noexcept
 					{
 						if (i < 20 || ctr & 1)
 						{
+#ifdef ARCH_ARM64
+							// A suspend that lasts: sleep until its owner's notify_all instead of
+							// spinning for its whole length. Upstream's suspends hold everyone for
+							// microseconds, but Pause Game During SPU Compilation holds them for a
+							// whole SPU compile, tens to hundreds of milliseconds on a phone, and
+							// every held thread spun through it at full speed: on an Odin 3 in The
+							// Last of Us, 48% of the SPU threads' time while new code compiled
+							// (11-09), heat and cores the compile itself could have used.
+							if (i >= 20 && utils::get_tsc() - held_since >= long_suspend_ticks())
+							{
+								g_suspend_counter.wait(ctr, atomic_wait_timeout{1'000'000});
+								continue;
+							}
+#endif
 							busy_wait(300);
 						}
 						else
@@ -1511,6 +1547,10 @@ bool cpu_thread::suspend_work::push(cpu_thread* _this) noexcept
 			return true;
 		});
 
+#ifdef ARCH_ARM64
+		const u64 work_start = get_system_time();
+#endif
+
 		// Execute all stored workload
 		for (s32 prio = max_prio; prio >= min_prio; prio--)
 		{
@@ -1524,6 +1564,14 @@ bool cpu_thread::suspend_work::push(cpu_thread* _this) noexcept
 				}
 			}
 		}
+
+#ifdef ARCH_ARM64
+		if (const u64 held = get_system_time() - work_start; held >= 1000)
+		{
+			s_long_suspends++;
+			s_long_suspend_us += held;
+		}
+#endif
 
 		// Finalization (last increment)
 		ensure(g_suspend_counter++ & 1);
@@ -1545,6 +1593,20 @@ bool cpu_thread::suspend_work::push(cpu_thread* _this) noexcept
 	}
 
 	g_suspend_counter.notify_all();
+
+#ifdef ARCH_ARM64
+	// After everyone is running again, at most once every 10 s. The first one only starts the clock.
+	if (const u64 now = get_system_time(), last = s_long_suspend_report; s_long_suspends && now - last >= 10'000'000 &&
+		s_long_suspend_report.compare_and_swap_test(last, now) && last)
+	{
+		const u64 count = s_long_suspends.exchange(0);
+		const u64 us = s_long_suspend_us.exchange(0);
+
+		sys_log.notice("The game was held %u times for %u ms in all in the last %u s (each 1 ms or longer: Pause Game During SPU Compilation, mostly).",
+			count, us / 1000, (now - last) / 1'000'000);
+	}
+#endif
+
 	return true;
 }
 
