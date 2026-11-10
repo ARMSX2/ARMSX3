@@ -273,6 +273,16 @@ struct GameListView: View {
 
     private var grid: some View {
         ScrollView {
+            if let notice = JitNoticeModel.shared.current {
+                JitNoticeCard(title: notice.title, message: notice.body, symbol: notice.symbol,
+                              action: notice.action == nil ? nil : {
+                                  NotificationCenter.default.post(name: JitNoticeModel.openJitDeviceNotification, object: nil)
+                              },
+                              onDismiss: { JitNoticeModel.shared.dismiss() })
+                    .padding([.horizontal, .top])
+                    .inLeftLeafInBookPose()
+                    .onAppear { JitNoticeModel.shared.appeared() }
+            }
             // Only while none is installed: without firmware games would not start, and testers could not tell.
             if installs.version == "" {
                 FirmwareStatusCard(version: "", install: { sheet = .install })

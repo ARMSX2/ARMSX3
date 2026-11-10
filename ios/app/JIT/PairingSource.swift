@@ -33,14 +33,16 @@ enum PairingSource {
         }
     }
 
-    static func paneRejected(report: [String: String], fileFound: Bool) -> Bool {
-        fileFound && report["result"] == "rejected"
+    static func paneRejected(report: [String: String], fileFound: Bool, testStoppedAtPairing: Bool = false) -> Bool {
+        fileFound && (report["result"] == "rejected" || testStoppedAtPairing)
     }
 
     static func paneValue(ownFileFound: Bool, sideStoreInPlace: Bool, origin: Origin, awaitingSideStore: Bool,
-                          report: [String: String] = [:]) -> String {
+                          report: [String: String] = [:], testStoppedAtPairing: Bool = false) -> String {
         if awaitingSideStore { return String(localized: "Waiting for SideStore…") }
-        if paneRejected(report: report, fileFound: ownFileFound || sideStoreInPlace) { return String(localized: "Rejected") }
+        if paneRejected(report: report, fileFound: ownFileFound || sideStoreInPlace, testStoppedAtPairing: testStoppedAtPairing) {
+            return String(localized: "Rejected")
+        }
         if ownFileFound, report["rejected"] == "own", inSideStore(report["used"] ?? "") { return String(localized: "SideStore's") }
         if ownFileFound {
             switch origin {

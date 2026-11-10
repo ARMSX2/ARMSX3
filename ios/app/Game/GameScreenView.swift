@@ -35,6 +35,7 @@ struct GameScreenView: View {
     @State private var settingsOpen = false
     @State private var report: ReportRequest?
     @State private var controllersSheet: ControllersSheetRequest?
+    @State private var jitDeviceSheet: JitDeviceSheetRequest?
     @State private var shotFile: URL?
     @State private var shotFailed = false
     @StateObject private var shotBanner = TransientBannerController<String>(defaultDisplayDuration: 2.5)
@@ -227,13 +228,29 @@ struct GameScreenView: View {
             .alert("Couldn't save the recording.", isPresented: $recordingFailed) {
                 Button("OK", role: .cancel) {}
             }
-            // Not now ends it for this session: the dual map offers once per game session.
+            // Not Now ends it for this session: the dual map offers once per game session. Set Up Built-in JIT keeps the game paused under the sheet.
             .alert("More JIT memory needed",
                    isPresented: Binding(get: { jitOffer != nil }, set: { if !$0 { jitOffer = nil } }), presenting: jitOffer) { trigger in
                 Button("Open StikDebug") { openStikDebugForMoreJit(trigger) }
-                Button("Not now", role: .cancel) {}
+                Button("Set Up Built-in JIT") {
+                    setMenu(open: true)
+                    jitDeviceSheet = JitDeviceSheetRequest()
+                }
+                Button("Not Now", role: .cancel) {}
             } message: { _ in
-                Text("Open StikDebug to prepare more. The game pauses while it works.")
+                Text("Open StikDebug to prepare more. The game pauses while it works. Built-in JIT prepares enough from the start, so setting it up avoids this.")
+            }
+            // The menu stays open beneath, so the game stays paused.
+            .sheet(item: $jitDeviceSheet) { _ in
+                NavigationStack {
+                    JitDevicePane(host: .inGame,
+                                  controller: SettingsControllerContext(input: controllerInput),
+                                  onBack: { jitDeviceSheet = nil; return true })
+                        .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Done") { jitDeviceSheet = nil } } }
+                }
+                .background(OverlayFrostBackground().ignoresSafeArea())
+                .presentationDetents([.large])
+                .preferredColorScheme(.dark)
             }
             .sheet(isPresented: $discPicker) {
                 DiscPicker(onPick: { path, url in
@@ -1043,7 +1060,7 @@ struct GameScreenView: View {
         let start: (Bool) -> Void = { opened in
             Rpcs3Bridge.startJitSecondPass(trigger, opened: opened) { _ in }
         }
-        guard let url = JitSecondPassLink.url(bundleID: Bundle.main.bundleIdentifier ?? "",
+        guard let url = JitSecondPassLink.url(bundleID: LiveContainerProbe.stikDebugBundleID,
                                               pid: ProcessInfo.processInfo.processIdentifier) else {
             start(false)
             return
@@ -1069,8 +1086,8 @@ struct GameScreenView: View {
         guard stopStatus == EmulatorSession.jitExhausted else {
             return Text("The game's graphics crashed, so it can't be stopped safely. Close ARMSX3 and open it again to keep playing.")
         }
-        if session.jitReason == "stikdebug-handshake" {
-            return Text("The game ran out of JIT memory. Close ARMSX3, then open it from the home screen to use the built-in JIT, which prepares more.")
+        if session.jitReason != "helper-ok" {
+            return Text("The game ran out of JIT memory. Built-in JIT prepares more. Set it up in Settings › JIT and Device, then open ARMSX3 again.")
         }
         return Text("The game ran out of JIT memory. Close ARMSX3 and open it again.")
     }
@@ -1091,4 +1108,9 @@ struct GameScreenView: View {
         }
         return false
     }
+}
+
+// One request per opening, so the sheet is rebuilt each time.
+struct JitDeviceSheetRequest: Identifiable {
+    let id = UUID()
 }

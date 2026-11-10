@@ -262,6 +262,20 @@ def firmware_wiring_problems(flow):
     return problems
 
 
+def primary_problems(flow):
+    """Step 3 with JIT off takes the JIT-off screen's primary on every row, reopen rows included."""
+    problems = []
+    code, _ = scan(flow)
+    if "static func primary(step: Int" not in code:
+        return ["primary: SetupFlow declares no static func primary(step: Int"]
+    body = braced(code, "static func primary(step: Int")
+    if "model.step.primary.map(SetupStepPrimary.jit)" not in body:
+        problems.append("primary: step 3 does not return model.step.primary.map(SetupStepPrimary.jit)")
+    if "reopenRows" in body:
+        problems.append("primary: step 3 drops the primary on reopen rows")
+    return problems
+
+
 def controller_problems(flow):
     """Step 6's live name and its announcement."""
     problems = []
@@ -401,6 +415,11 @@ class Firmware(unittest.TestCase):
         self.assertEqual(controller_problems(read(FLOW)), [])
 
 
+class Primary(unittest.TestCase):
+    def test_step_3_takes_the_jit_off_screens_primary_on_every_row(self):
+        self.assertEqual(primary_problems(read(FLOW)), [])
+
+
 class Mutations(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -491,6 +510,15 @@ class Mutations(unittest.TestCase):
     def test_mutation_firmware_wiring_the_guard_removed(self):
         text = self.edited(self.flow, "guard jitOn else { return }\n            steps.reading = true", "steps.reading = true")
         self.caught("firmware-wiring:", firmware_wiring_problems(text))
+
+    def test_mutation_primary_the_reopen_row_check_put_back(self):
+        old = "            return model.step.primary.map(SetupStepPrimary.jit)"
+        text = self.edited(self.flow, old, "            if JitCard.reopenRows.contains(model.step.row) { return nil }\n" + old)
+        self.caught("primary:", primary_problems(text))
+
+    def test_mutation_primary_step_3_returns_none(self):
+        text = self.edited(self.flow, "return model.step.primary.map(SetupStepPrimary.jit)", "return nil")
+        self.caught("primary:", primary_problems(text))
 
     def test_mutation_controller_disconnect_unobserved(self):
         text = self.edited(self.flow, ".GCControllerDidDisconnect", ".GCControllerDidBecomeCurrent")

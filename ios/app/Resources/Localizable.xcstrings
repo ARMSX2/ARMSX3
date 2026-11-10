@@ -951,6 +951,16 @@
         }
       }
     },
+    "ARMSX3 couldn't reach this device through LocalDevVPN, so StikDebug turned on JIT instead. Turn LocalDevVPN on before you open ARMSX3." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ARMSX3 couldn't reach this device through LocalDevVPN, so StikDebug turned on JIT instead. Turn LocalDevVPN on before you open ARMSX3."
+          }
+        }
+      }
+    },
     "ARMSX3 couldn't use the Bind address set in Network. Set it back to 0.0.0.0, then try again." : {
       "localizations" : {
         "en" : {
@@ -991,12 +1001,42 @@
         }
       }
     },
+    "ARMSX3 has no pairing file, so StikDebug turned on JIT instead. Add one, and ARMSX3 turns on JIT itself." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ARMSX3 has no pairing file, so StikDebug turned on JIT instead. Add one, and ARMSX3 turns on JIT itself."
+          }
+        }
+      }
+    },
     "ARMSX3 is free software under the GNU General Public License version 2 only. It comes with no warranty. Its source is the repository it was built from." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "ARMSX3 is free software under the GNU General Public License version 2 only. It comes with no warranty. Its source is the repository it was built from."
+          }
+        }
+      }
+    },
+    "ARMSX3 is open in a LiveContainer window, where built-in JIT can't start. Close the window and open ARMSX3 from LiveContainer's app list." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ARMSX3 is open in a LiveContainer window, where built-in JIT can't start. Close the window and open ARMSX3 from LiveContainer's app list."
+          }
+        }
+      }
+    },
+    "ARMSX3 now turns on JIT itself" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ARMSX3 now turns on JIT itself"
           }
         }
       }
@@ -1489,6 +1529,36 @@
         }
       }
     },
+    "ARMSX3 waits for a debugger you attach yourself, from a Mac." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ARMSX3 waits for a debugger you attach yourself, from a Mac."
+          }
+        }
+      }
+    },
+    "ARMSX3 was opened in a LiveContainer window, where built-in JIT can't start, so StikDebug turned on JIT instead. Next time, open ARMSX3 full screen from LiveContainer." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ARMSX3 was opened in a LiveContainer window, where built-in JIT can't start, so StikDebug turned on JIT instead. Next time, open ARMSX3 full screen from LiveContainer."
+          }
+        }
+      }
+    },
+    "ARMSX3 was opened through StikDebug, so it didn't try built-in JIT. Open ARMSX3 from the Home Screen instead." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ARMSX3 was opened through StikDebug, so it didn't try built-in JIT. Open ARMSX3 from the Home Screen instead."
+          }
+        }
+      }
+    },
     "Asks before loading." : {
       "localizations" : {
         "en" : {
@@ -1808,6 +1878,46 @@
         }
       }
     },
+    "Built-in JIT didn't finish setting up, so StikDebug turned on JIT instead. ARMSX3 tries built-in JIT again each time it opens." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Built-in JIT didn't finish setting up, so StikDebug turned on JIT instead. ARMSX3 tries built-in JIT again each time it opens."
+          }
+        }
+      }
+    },
+    "Built-in JIT didn't start" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Built-in JIT didn't start"
+          }
+        }
+      }
+    },
+    "Built-in JIT didn't start inside LiveContainer, so StikDebug turned on JIT instead. Check that LiveContainer is 3.8.13 or later and Helper Process Support is on for ARMSX3." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Built-in JIT didn't start inside LiveContainer, so StikDebug turned on JIT instead. Check that LiveContainer is 3.8.13 or later and Helper Process Support is on for ARMSX3."
+          }
+        }
+      }
+    },
+    "Built-in JIT is ready. Close ARMSX3 and open it again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Built-in JIT is ready. Close ARMSX3 and open it again."
+          }
+        }
+      }
+    },
     "Button Opacity" : {
       "localizations" : {
         "en" : {
@@ -1824,6 +1934,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "CHD"
+          }
+        }
+      }
+    },
+    "Checks the helper, LocalDevVPN, the pairing file and the disk image." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Checks the helper, LocalDevVPN, the pairing file and the disk image."
+          }
+        }
+      }
+    },
+    "Checks the setup again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Checks the setup again."
           }
         }
       }
@@ -3593,6 +3723,16 @@
         }
       }
     },
+    "Dismiss Notice" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dismiss Notice"
+          }
+        }
+      }
+    },
     "Dispersion" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4973,6 +5113,36 @@
         }
       }
     },
+    "Helper Process Support is off for ARMSX3 in LiveContainer, so StikDebug turned on JIT instead. In LiveContainer, long-press ARMSX3, open Settings and turn it on." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Helper Process Support is off for ARMSX3 in LiveContainer, so StikDebug turned on JIT instead. In LiveContainer, long-press ARMSX3, open Settings and turn it on."
+          }
+        }
+      }
+    },
+    "Helper Process Support on" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Helper Process Support on"
+          }
+        }
+      }
+    },
+    "Helper started, device reached through LocalDevVPN, pairing accepted, disk image mounted." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Helper started, device reached through LocalDevVPN, pairing accepted, disk image mounted."
+          }
+        }
+      }
+    },
     "Heny Blue" : {
       "localizations" : {
         "en" : {
@@ -5029,6 +5199,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "I Have a Code"
+          }
+        }
+      }
+    },
+    "If built-in JIT can't work here, StikDebug can turn it on instead." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "If built-in JIT can't work here, StikDebug can turn it on instead."
           }
         }
       }
@@ -5183,6 +5363,16 @@
         }
       }
     },
+    "In LiveContainer, long-press ARMSX3, open Settings and turn on Helper Process Support. Then close ARMSX3 and open it again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In LiveContainer, long-press ARMSX3, open Settings and turn on Helper Process Support. Then close ARMSX3 and open it again."
+          }
+        }
+      }
+    },
     "In SideStore, open Pairing File Management, long-press Remote Pairing File and choose Set as Preferred, then try again." : {
       "localizations" : {
         "en" : {
@@ -5220,6 +5410,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Index jitter"
+          }
+        }
+      }
+    },
+    "Inside LiveContainer this stays Standard unless LiveContainer itself has the extended virtual addressing entitlement." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inside LiveContainer this stays Standard unless LiveContainer itself has the extended virtual addressing entitlement."
           }
         }
       }
@@ -5374,6 +5574,16 @@
         }
       }
     },
+    "It did this time. StikDebug is only used if built-in JIT fails." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "It did this time. StikDebug is only used if built-in JIT fails."
+          }
+        }
+      }
+    },
     "It isn't a settings file ARMSX3 can read. Pick a .yml settings file from RPCS3 or ARMSX3." : {
       "localizations" : {
         "en" : {
@@ -5430,6 +5640,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Its files are deleted from ARMSX3. To use it again, choose the theme file again."
+          }
+        }
+      }
+    },
+    "JIT came from the helper of ARMSX3 installed outside LiveContainer." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "JIT came from the helper of ARMSX3 installed outside LiveContainer."
           }
         }
       }
@@ -5685,6 +5905,56 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Live Wallpaper Resolution changes backing resolution and structural detail without changing full-screen framing. Particle Amount and Face Button Amount independently control animated object counts."
+          }
+        }
+      }
+    },
+    "LiveContainer 3.8.13 or later" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LiveContainer 3.8.13 or later"
+          }
+        }
+      }
+    },
+    "LiveContainer didn't start the JIT helper. Check that Helper Process Support is on for ARMSX3, then close ARMSX3 and open it again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LiveContainer didn't start the JIT helper. Check that Helper Process Support is on for ARMSX3, then close ARMSX3 and open it again."
+          }
+        }
+      }
+    },
+    "LiveContainer was opened through StikDebug, so ARMSX3 didn't try built-in JIT. Open LiveContainer from the Home Screen instead." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LiveContainer was opened through StikDebug, so ARMSX3 didn't try built-in JIT. Open LiveContainer from the Home Screen instead."
+          }
+        }
+      }
+    },
+    "LiveContainer's LiveProcess extension is missing, so StikDebug turned on JIT instead. Reinstall LiveContainer and keep its extensions." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LiveContainer's LiveProcess extension is missing, so StikDebug turned on JIT instead. Reinstall LiveContainer and keep its extensions."
+          }
+        }
+      }
+    },
+    "LiveContainer's LiveProcess extension is missing. Reinstall LiveContainer and keep its extensions." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LiveContainer's LiveProcess extension is missing. Reinstall LiveContainer and keep its extensions."
           }
         }
       }
@@ -6128,6 +6398,16 @@
         }
       }
     },
+    "No" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No"
+          }
+        }
+      }
+    },
     "No PS3 firmware" : {
       "localizations" : {
         "en" : {
@@ -6405,16 +6685,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Not installed: %@"
-          }
-        }
-      }
-    },
-    "Not now" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Not now"
           }
         }
       }
@@ -6764,12 +7034,12 @@
         }
       }
     },
-    "Open StikDebug to prepare more. The game pauses while it works." : {
+    "Open StikDebug to prepare more. The game pauses while it works. Built-in JIT prepares enough from the start, so setting it up avoids this." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Open StikDebug to prepare more. The game pauses while it works."
+            "value" : "Open StikDebug to prepare more. The game pauses while it works. Built-in JIT prepares enough from the start, so setting it up avoids this."
           }
         }
       }
@@ -6780,6 +7050,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Open the Settings app, then Privacy & Security › Analytics & Improvements › Analytics Data."
+          }
+        }
+      }
+    },
+    "Opened full screen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opened full screen"
+          }
+        }
+      }
+    },
+    "Opened through StikDebug" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opened through StikDebug"
           }
         }
       }
@@ -6954,6 +7244,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Pairing file replaced. ARMSX3 uses the new one the next time it opens."
+          }
+        }
+      }
+    },
+    "Pairing…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pairing…"
+          }
+        }
+      }
+    },
+    "Passed" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Passed"
           }
         }
       }
@@ -9274,6 +9584,16 @@
         }
       }
     },
+    "Set Up Built-in JIT" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Set Up Built-in JIT"
+          }
+        }
+      }
+    },
     "Set Value" : {
       "localizations" : {
         "en" : {
@@ -10028,6 +10348,16 @@
         }
       }
     },
+    "Starting helper…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Starting helper…"
+          }
+        }
+      }
+    },
     "Starting Last Game…" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -10035,6 +10365,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Starting Last Game…"
+          }
+        }
+      }
+    },
+    "StikDebug can turn on JIT for ARMSX3 this time." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "StikDebug can turn on JIT for ARMSX3 this time."
+          }
+        }
+      }
+    },
+    "StikDebug is only used if built-in JIT fails. Set it up once, and ARMSX3 turns on JIT each time it opens." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "StikDebug is only used if built-in JIT fails. Set it up once, and ARMSX3 turns on JIT each time it opens."
+          }
+        }
+      }
+    },
+    "StikDebug support ends in an upcoming update." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "StikDebug support ends in an upcoming update."
           }
         }
       }
@@ -10121,6 +10481,16 @@
         }
       }
     },
+    "Stop the game first." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stop the game first."
+          }
+        }
+      }
+    },
     "Stopped at %@ · %@" : {
       "localizations" : {
         "en" : {
@@ -10137,6 +10507,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Stopped at %1$@, %2$@"
+          }
+        }
+      }
+    },
+    "Stopped at disk image" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stopped at disk image"
+          }
+        }
+      }
+    },
+    "Stopped at helper" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stopped at helper"
+          }
+        }
+      }
+    },
+    "Stopped at LocalDevVPN" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stopped at LocalDevVPN"
+          }
+        }
+      }
+    },
+    "Stopped at pairing" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stopped at pairing"
           }
         }
       }
@@ -10221,6 +10631,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Tension"
+          }
+        }
+      }
+    },
+    "Test JIT Setup" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Test JIT Setup"
+          }
+        }
+      }
+    },
+    "Test JIT Setup checks it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Test JIT Setup checks it."
           }
         }
       }
@@ -10525,6 +10955,36 @@
         }
       }
     },
+    "The Developer Disk Image isn't mounted, so StikDebug turned on JIT instead. Mount it, and ARMSX3 turns on JIT itself next time." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Developer Disk Image isn't mounted, so StikDebug turned on JIT instead. Mount it, and ARMSX3 turns on JIT itself next time."
+          }
+        }
+      }
+    },
+    "The Developer Disk Image isn't mounted. Mount it, then test again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The Developer Disk Image isn't mounted. Mount it, then test again."
+          }
+        }
+      }
+    },
+    "The game ran out of JIT memory. Built-in JIT prepares more. Set it up in Settings › JIT and Device, then open ARMSX3 again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The game ran out of JIT memory. Built-in JIT prepares more. Set it up in Settings › JIT and Device, then open ARMSX3 again."
+          }
+        }
+      }
+    },
     "The JIT enabler's engine. The modified file stays under MPL-2.0 and its source is offered." : {
       "localizations" : {
         "en" : {
@@ -10665,16 +11125,6 @@
         }
       }
     },
-    "The game ran out of JIT memory. Close ARMSX3, then open it from the home screen to use the built-in JIT, which prepares more." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "The game ran out of JIT memory. Close ARMSX3, then open it from the home screen to use the built-in JIT, which prepares more."
-          }
-        }
-      }
-    },
     "The game stopped because of an error. Close ARMSX3 and open it again to keep playing." : {
       "localizations" : {
         "en" : {
@@ -10751,6 +11201,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "The install failed (status %lld)"
+          }
+        }
+      }
+    },
+    "The JIT helper didn't start. Close ARMSX3 fully and open it again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The JIT helper didn't start. Close ARMSX3 fully and open it again."
           }
         }
       }
@@ -11075,6 +11535,16 @@
         }
       }
     },
+    "This device didn't accept the pairing file, so StikDebug turned on JIT instead. Make a new pairing file and add it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device didn't accept the pairing file, so StikDebug turned on JIT instead. Make a new pairing file and add it."
+          }
+        }
+      }
+    },
     "This device didn't accept the pairing file. Make a new pairing file on a computer and import it." : {
       "localizations" : {
         "en" : {
@@ -11101,6 +11571,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "This device rejected it. Make a new pairing file on a computer and add it."
+          }
+        }
+      }
+    },
+    "This LiveContainer is %@, and built-in JIT needs 3.8.13 or later, so StikDebug turned on JIT instead. Update LiveContainer, then install ARMSX3 in it again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This LiveContainer is %@, and built-in JIT needs 3.8.13 or later, so StikDebug turned on JIT instead. Update LiveContainer, then install ARMSX3 in it again."
+          }
+        }
+      }
+    },
+    "This LiveContainer is %@. Update it to 3.8.13 or later, then install ARMSX3 in it again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This LiveContainer is %@. Update it to 3.8.13 or later, then install ARMSX3 in it again."
           }
         }
       }
@@ -12396,6 +12886,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Yaw speed"
+          }
+        }
+      }
+    },
+    "Yes" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Yes"
           }
         }
       }

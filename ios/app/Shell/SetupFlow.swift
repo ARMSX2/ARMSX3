@@ -372,12 +372,11 @@ struct SetupStepPage: View {
 
     private var primary: SetupStepPrimary? { Self.primary(step: step, model: model, steps: steps) }
 
-    /// Step 3: Continue when JIT is on; none when the next step is a reopen, so Skip is the only button.
+    /// Step 3: Continue when JIT is on, else the same primary the JIT-off screen shows; none leaves Skip as the only button.
     static func primary(step: Int, model: JitDeviceModel, steps: SetupStepsModel) -> SetupStepPrimary? {
         switch step {
         case 3:
             if model.jitOn { return .setup(.continueStep) }
-            if JitCard.reopenRows.contains(model.step.row) { return nil }
             return model.step.primary.map(SetupStepPrimary.jit)
         case 4: return SetupRules.firmwarePrimary(jitOn: model.jitOn, installed: !steps.version.isEmpty).map(SetupStepPrimary.setup)
         case 5: return .setup(SetupRules.gamesPrimary(folderCount: steps.folderCount))

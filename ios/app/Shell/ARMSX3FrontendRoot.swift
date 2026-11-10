@@ -250,6 +250,23 @@ struct ARMSX3FrontendRoot: View {
 
         let session = EmulatorSession.shared
         let on = await session.checkJIT()
+        let defaults = UserDefaults.standard
+        let migrationPending = JitFallback.migrates(storedMethod: SettingsStore.shared.jitMethod)
+        // A backup restore can bring the old word back, and the once-only key stops a second notice.
+        if migrationPending { SettingsStore.shared.jitMethod = JitMethod.builtin.rawValue }
+        let verdict = JitFallback.decide(jitOn: on, jitReason: session.jitReason, helperWord: session.jitHelperOutcome,
+                                         methodAtLaunch: SettingsStore.shared.jitMethodAtLaunch,
+                                         storedCause: JitFallback.storedCause(in: defaults)?.rawValue,
+                                         probe: LiveContainerProbe.current)
+        JitFallback.store(verdict, in: defaults)
+        if on {
+            let announced = JitFallback.notice(verdict: verdict, jitOnThroughBuiltin: session.jitReason == "helper-ok",
+                                               migrationPending: migrationPending, probe: LiveContainerProbe.current,
+                                               shown: JitFallback.shownKeys(in: defaults),
+                                               supportEnds: JitFallback.supportEndsAnnounced)
+            JitNoticeModel.shared.current = announced?.notice
+            JitNoticeModel.shared.marks = announced?.marks ?? []
+        }
         // Every session carries this launch's record, booted or not.
         DiagnosticsSession.shared.recordLaunch()
         presentSetupIfDue()
