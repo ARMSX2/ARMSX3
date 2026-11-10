@@ -363,6 +363,28 @@ object ConfigDatabase {
         "BCUS99245" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
         "NPEA00457" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
         "NPUA80908" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
+
+        // The Last of Us: Pause Game During SPU Compilation, and Stub PPU Traps at 1.
+        //
+        // Its loading screen reaches thousands of SPU functions the first time, and each one compiled
+        // on the spot stalls its SPU while the game keeps waiting on it. Both failures on the Odin 3
+        // (11-09) came in such a burst. First boot, about 1,650 compiled in the 25 s before: a SPURS
+        // job wrote to address 0 and the main and sound threads crashed on overwritten pointers. Next
+        // boot, about 2,600 in 20 s: the main thread's countdown at 0x990abc (01.11) ran out and hit
+        // the game's assert trap. The pause holds the game while an SPU compiles, so a compile does
+        // not use up its waits; the picture freezes for that moment instead, and the SPU cache keeps
+        // it to the first time. Stub Traps 1 is RPCS3's own answer to that assert on ARM (its wiki,
+        // for macOS): if a wait runs out anyway the game carries on, and the log says "PPU Trap:
+        // Stubbing".
+        "BCUS98174" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n",
+        "BCES01584" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n",
+        "BCES01585" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n",
+        "BCJS37010" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n",
+        "BCAS20270" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n",
+        "NPUA80960" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n",
+        "NPEA00435" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n",
+        "NPHA80243" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n",
+        "NPJA00096" to "Core:\n  Pause Game During SPU Compilation: true\n  Stub PPU Traps: 1\n",
     )
 
     /**
