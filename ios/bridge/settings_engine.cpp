@@ -641,6 +641,8 @@ namespace
 	}
 
 	// Checks `dynamic` here because from_string ignores it; the running leaf takes the title's effective value.
+	bool left_out_on_ios(const cfg::_base* leaf);
+
 	bool apply_live(const std::string& serial, const std::vector<std::vector<std::string>>& all,
 		const armsx3::bridge::settings::db_layer_view& running_db, const std::string& product_config)
 	{
@@ -668,7 +670,7 @@ namespace
 		{
 			cfg::_base* const leaf = find_node(g_cfg, keys);
 			if (leaf == nullptr || leaf->get_type() == cfg::type::node || !cfg_is_editable(leaf)
-				|| !leaf->get_is_dynamic() || is_forced(product_config, keys))
+				|| !leaf->get_is_dynamic() || is_forced(product_config, keys) || left_out_on_ios(leaf))
 			{
 				continue;
 			}
@@ -904,6 +906,11 @@ namespace
 			&g_cfg.net.ip_address,                      // read nowhere
 			&g_cfg.io.load_sdl_mappings,                // SDL is not built for iOS
 			&g_cfg.io.sdl_camera_id,                    // SDL is not built for iOS
+			&g_cfg.video.frame_generation,              // the iOS core is built without frame generation
+			&g_cfg.video.frame_generation_performance,  // same
+			&g_cfg.video.frame_generation_flow_scale,   // same
+			&g_cfg.video.frame_generation_target_rate,  // same
+			&g_cfg.video.frame_generation_dll_path,     // same
 		};
 		return std::find(std::begin(unused), std::end(unused), leaf) != std::end(unused);
 	}
