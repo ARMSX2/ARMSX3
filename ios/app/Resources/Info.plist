@@ -85,6 +85,29 @@
 			</dict>
 		</dict>
 	</array>
+
+	<!-- SideStore's pairing file type; ARMSX3 declares it only so Open in and the picker can match the extension. -->
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>org.sidestore.mobiledevicepairing</string>
+			<key>UTTypeDescription</key>
+			<string>Pairing File</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>com.apple.property-list</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>mobiledevicepairing</string>
+					<string>mobiledevicepair</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
@@ -97,6 +120,20 @@
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>com.armsx3.padlayout</string>
+			</array>
+		</dict>
+		<!-- Alternate, so ARMSX3 is offered a pairing file but never becomes the default viewer of plain plists. -->
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Pairing File</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>org.sidestore.mobiledevicepairing</string>
+				<string>com.apple.property-list</string>
 			</array>
 		</dict>
 	</array>
@@ -114,10 +151,11 @@
 		</dict>
 	</array>
 
-	<!-- One query scheme so canOpenURL can tell whether StikDebug is installed; no URL scheme is registered. -->
+	<!-- Two query schemes so canOpenURL can tell whether StikDebug and SideStore are installed; neither is registered here. -->
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>stikdebug</string>
+		<string>sidestore</string>
 	</array>
 
 	<key>UILaunchScreen</key>

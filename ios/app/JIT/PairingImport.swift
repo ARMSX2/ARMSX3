@@ -35,44 +35,56 @@ enum PairingImport {
         case imported = 0, failed = 1, legacyLockdown = 2, invalid = 3
     }
 
+    static let maxSharedBytes = 65_536
+
     static func install(_ picked: URL) -> Outcome {
         let files = FileManager.default
         defer { try? files.removeItem(at: picked) }
-        var outcome = Outcome.failed
-        if isNonEmptyRegularFile(picked), let target = destination {
-            // The one read: the bytes go straight to the shape check and are dropped with this scope.
-            switch (try? Data(contentsOf: picked)).map(PairingFileCheck.classify) {
-            case .legacyLockdown?:
-                outcome = .legacyLockdown
-            case .invalid?:
-                outcome = .invalid
-            case nil:
-                outcome = .failed
-            case .valid?:
-                let incoming = target.deletingLastPathComponent().appendingPathComponent(".incoming-" + name, isDirectory: false)
-                var ok = false
-                do {
-                    try? files.removeItem(at: incoming)
-                    try files.moveItem(at: picked, to: incoming)
-                    if files.fileExists(atPath: target.path) {
-                        _ = try files.replaceItemAt(target, withItemAt: incoming)
-                    } else {
-                        try files.moveItem(at: incoming, to: target)
-                    }
-                    ok = isNonEmptyRegularFile(target)
-                } catch {
-                    ok = false
-                }
-                try? files.removeItem(at: incoming)
-                if ok {
-                    var placed = target
-                    excludeFromBackup(&placed)
-                    if let old = legacy { try? files.removeItem(at: old) }
-                }
-                outcome = ok ? .imported : .failed
-            }
+        guard isNonEmptyRegularFile(picked), let data = try? Data(contentsOf: picked) else { return .failed }
+        return install(data: data, origin: .imported).outcome
+    }
+
+    static func install(data: Data, origin: PairingSource.Origin) -> (outcome: Outcome, replaced: Bool) {
+        switch PairingFileCheck.classify(data) {
+        case .legacyLockdown: return (.legacyLockdown, false)
+        case .invalid: return (.invalid, false)
+        case .valid: break
         }
-        return outcome
+        guard let target = destination else { return (.failed, false) }
+        let files = FileManager.default
+        let folder = target.deletingLastPathComponent()
+        let incoming = folder.appendingPathComponent(".incoming-" + name, isDirectory: false)
+        let replaced = files.fileExists(atPath: target.path)
+        var ok = false
+        do {
+            try data.write(to: incoming, options: .atomic)
+            if replaced {
+                _ = try files.replaceItemAt(target, withItemAt: incoming)
+            } else {
+                try files.moveItem(at: incoming, to: target)
+            }
+            ok = isNonEmptyRegularFile(target)
+        } catch {
+            ok = false
+        }
+        try? files.removeItem(at: incoming)
+        guard ok else { return (.failed, false) }
+        var placed = target
+        excludeFromBackup(&placed)
+        // A missing or unreadable sidecar reads as a hand-picked file, so a failed write must not leave the last one.
+        let sidecar = folder.appendingPathComponent(PairingSource.originName, isDirectory: false)
+        if (try? Data(origin.rawValue.utf8).write(to: sidecar, options: .atomic)) == nil { try? files.removeItem(at: sidecar) }
+        if let old = legacy { try? files.removeItem(at: old) }
+        return (.imported, replaced)
+    }
+
+    // Open in can hand over the sender's own file, so it is only read here.
+    static func readShared(_ url: URL) -> Data? {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+              values.isRegularFile == true, let size = values.fileSize, size > 0, size <= maxSharedBytes else { return nil }
+        return try? Data(contentsOf: url)
     }
 
     // File-system metadata only; the contents are never opened.
@@ -86,7 +98,7 @@ enum PairingImport {
         let onFinish: (Outcome?) -> Void
 
         var body: some View {
-            FirmwarePicker(types: [.propertyList]) { url in onFinish(url.map(PairingImport.install)) }
+            FirmwarePicker(types: [.propertyList, UTType(importedAs: "org.sidestore.mobiledevicepairing")]) { url in onFinish(url.map(PairingImport.install)) }
         }
     }
 }

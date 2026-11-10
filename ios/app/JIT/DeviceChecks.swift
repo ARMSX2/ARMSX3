@@ -29,6 +29,7 @@ struct DeviceReport: Equatable {
     let txm: Presence
     let memoryLimitBytes: Int64
     let liveContainer: Bool
+    var pairingRow: DeviceRow? = nil
 
     /// Nil when any key is absent, so the pane shows its unreadable state instead.
     init?(_ checks: [String: NSNumber]) {
@@ -79,6 +80,7 @@ struct DeviceReport: Equatable {
         if liveContainer {
             rows.append(DeviceRow(label: String(localized: "LiveContainer"), value: String(localized: "Detected"), isProblem: false, fix: nil))
         }
+        if let pairingRow { rows.append(pairingRow) }
         return rows
     }
 }
