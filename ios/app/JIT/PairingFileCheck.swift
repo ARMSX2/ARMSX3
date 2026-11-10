@@ -23,4 +23,10 @@ enum PairingFileCheck {
         }
         return lockdownKeys.contains { dictionary[$0] != nil } ? .legacyLockdown : .invalid
     }
+
+    static func carriesLockdownKeys(_ data: Data) -> Bool {
+        guard let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+              let dictionary = plist as? [String: Any] else { return false }
+        return lockdownKeys.contains { dictionary[$0] != nil }
+    }
 }
