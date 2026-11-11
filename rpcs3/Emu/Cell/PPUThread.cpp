@@ -4716,9 +4716,16 @@ struct jit_core_allocator
 				ppu_log.notice("LLVM: %u MB available, compiling up to %u modules at once", avail >> 20, allowed);
 			}
 
-			if (compiling.fetch_op([&](u32& c) { return c < allowed ? (c++, true) : false; }).second)
+			// A module compiling alone holds the claim; nothing starts beside it.
+			if (!low_memory_claim && compiling.fetch_op([&](u32& c) { return c < allowed ? (c++, true) : false; }).second)
 			{
-				return true;
+				// The claim was taken between the check and the count: give the slot back and wait.
+				if (!low_memory_claim)
+				{
+					return true;
+				}
+
+				compiling--;
 			}
 
 			std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -7222,11 +7229,20 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 
 #ifdef __APPLE__
 						// iOS uses the graduated slots below instead of going alone below 2 GiB.
-						const bool alone = allocator.out_of_memory_seen;
+						// A part with the symbol resolver declares every function in its JIT group, about
+						// 1 GiB on a large title against tens of MiB for any other part, so it goes alone.
+						const bool resolver = part.jit_bounds && utils::get_avail_memory();
+						const bool alone = allocator.out_of_memory_seen || resolver;
 
 						if (alone)
 						{
 							ppu_log.notice("LLVM: Low memory (%u MB available), compiling %s alone", utils::get_avail_memory() >> 20, obj_name);
+
+							// The resolver parts compile first and queue for the claim one after another.
+							if (resolver)
+							{
+								take_claim(6000);
+							}
 #else
 						if (jit_core_allocator::memory_is_tight() || allocator.out_of_memory_seen)
 						{
@@ -7241,6 +7257,12 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 							jit_core_allocator::wait_for_memory();
 						}
 #ifdef __APPLE__
+
+						// Modules that took a slot before the claim finish first, bounded at ~10 minutes.
+						for (u32 i = 0; alone && i < 6000 && allocator.compiling && !Emu.IsStopped(); i++)
+						{
+							std::this_thread::sleep_for(std::chrono::milliseconds(100));
+						}
 
 						const bool slot_taken = !alone && allocator.take_compile_slot();
 
