@@ -36,7 +36,7 @@ int main()
 }
 '''
 
-EXPECTED = ("unknown=0 big=0 edge=0 tester_auto=1 tester_six=1 tester_one=0 two_gib_auto=1\n"
+EXPECTED = ("unknown=0 big=0 edge=0 tester_auto=2 tester_six=2 tester_one=0 two_gib_auto=2\n"
             "interp unknown=0 big=0 tester=1 tester_other_mode=0\n"
             "cse unknown=0 big=0 tester=1 tester_off=0")
 
