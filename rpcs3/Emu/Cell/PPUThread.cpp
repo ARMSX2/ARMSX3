@@ -4684,9 +4684,10 @@ struct jit_core_allocator
 #endif
 
 #ifdef __APPLE__
-	// As many modules compile at once as fit in what jetsam allows, keeping 1 GiB spare.
-	static constexpr u64 compile_reserve = 1024ull << 20;
-	static constexpr u64 compile_size = 450ull << 20;
+	// As many modules compile at once as fit in what jetsam allows, with a reserve kept spare.
+	// With the resolver parts alone any other part costs about 150 MiB, so a 4 GB device can run two.
+	const u64 compile_reserve = (utils::low_memory_device() ? 768ull : 1024ull) << 20;
+	const u64 compile_size = (utils::low_memory_device() ? 200ull : 450ull) << 20;
 
 	atomic_t<u32> logged_allowed{0};
 
