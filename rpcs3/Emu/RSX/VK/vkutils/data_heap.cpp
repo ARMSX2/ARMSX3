@@ -10,6 +10,9 @@
 #include "Emu/System.h"
 #include "util/sysinfo.hpp"
 #include "Emu/system_config.h"
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 
 #include <memory>
 
@@ -119,7 +122,7 @@ namespace vk
 		// the ceiling by free memory so that decision gets made before the fatal allocation
 		// rather than after it. A quarter of what is free leaves room for the copy, since the
 		// old heap is still resident while the new one is created.
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
 		// A hard ceiling, because free memory is not the constraint that matters.
 		//
 		// The first attempt bounded this by utils::get_avail_memory()/4 and did nothing: that
