@@ -12,6 +12,7 @@
 #include "Emu/system_config.h"
 #ifdef __APPLE__
 #include <TargetConditionals.h>
+#include "ios_jit_dual_map.h"
 #endif
 
 #include <memory>
@@ -144,6 +145,13 @@ namespace vk
 		if (!(m_flags & heap_pool_fixed_size))
 		{
 			size_limit = std::min<usz>(size_limit, 256 * 0x100000);
+#ifdef __APPLE__
+			// 4 GB iPhones were killed growing the texture upload ring to 256M.
+			if (utils::low_memory_device())
+			{
+				size_limit = std::min<usz>(size_limit, 128 * 0x100000);
+			}
+#endif
 		}
 #endif
 
