@@ -312,7 +312,12 @@ struct GameScreenView: View {
             .task { await pollRpcn() }
             // A full phone ends the game without a word, so the banner comes first and repeats while space stays low.
             .task { await watchStorage() }
+            // A controller does not reset the idle timer, so the phone would lock mid-game.
+            .onChange(of: bootStatus == 0 && !stopping && !menuOpen && scenePhase == .active, initial: true) { _, awake in
+                UIApplication.shared.isIdleTimerDisabled = awake
+            }
             .onDisappear {
+                UIApplication.shared.isIdleTimerDisabled = false
                 // The screen closing finishes a running recording's file.
                 stopRecordingAutomatically()
                 GamepadPoller.shared.stop()
