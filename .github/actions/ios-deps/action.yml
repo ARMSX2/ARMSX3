@@ -1,0 +1,159 @@
+name: iOS dependencies
+description: Restores LLVM, FFmpeg, librashader, MoltenVK and the JIT enabler library for iOS from the cache, and builds and saves the ones that are missing.
+
+inputs:
+  build:
+    description: "'true' builds what the cache lacks. Otherwise a missing dependency fails the job."
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Compute the cache keys
+      id: keys
+      shell: bash
+      run: |
+        h() { cat "$@" | shasum | cut -c1-16; }
+        sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
+        llvm_commit="$(git ls-tree HEAD 3rdparty/llvm/llvm | awk '{print $3}')"
+        {
+          echo "llvm=ios-llvm-$sdk-$llvm_commit-$(h ios/scripts/build-llvm-ios.sh ios/scripts/llvm-patched-source.sh 3rdparty/llvm/armsx3-aarch64-ghc-emergency-spill.patch)"
+          echo "ffmpeg=ios-ffmpeg-$sdk-$(h ios/scripts/build-ffmpeg-ios.sh android/ffmpeg.cmake)"
+          echo "librashader=ios-librashader-$sdk-$(h ios/scripts/build-librashader-ios.sh)"
+          echo "moltenvk=ios-moltenvk-$(h ios/scripts/fetch-moltenvk.sh)"
+          echo "idevice=ios-idevice-$sdk-$(h ios/jit-enabler/build-idevice.sh ios/jit-enabler/fetch-sources.sh ios/jit-enabler/vendor.tsv)"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Restore LLVM
+      id: llvm
+      uses: actions/cache/restore@v4
+      with:
+        path: ios/build-deps/llvm-ios-install
+        key: ${{ steps.keys.outputs.llvm }}
+        fail-on-cache-miss: ${{ inputs.build != 'true' }}
+
+    - name: Restore FFmpeg
+      id: ffmpeg
+      uses: actions/cache/restore@v4
+      with:
+        path: ios/build-deps/ffmpeg-ios
+        key: ${{ steps.keys.outputs.ffmpeg }}
+        fail-on-cache-miss: ${{ inputs.build != 'true' }}
+
+    - name: Restore librashader
+      id: librashader
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          ios/build-deps/librashader-ios
+          ios/build-deps/librashader-src/include
+        key: ${{ steps.keys.outputs.librashader }}
+        fail-on-cache-miss: ${{ inputs.build != 'true' }}
+
+    - name: Restore MoltenVK
+      id: moltenvk
+      uses: actions/cache/restore@v4
+      with:
+        path: ios/3rdparty/MoltenVK
+        key: ${{ steps.keys.outputs.moltenvk }}
+        fail-on-cache-miss: ${{ inputs.build != 'true' }}
+
+    - name: Restore the JIT enabler library
+      id: idevice
+      uses: actions/cache/restore@v4
+      with:
+        path: ios/3rdparty/jit-enabler/out
+        key: ${{ steps.keys.outputs.idevice }}
+        fail-on-cache-miss: ${{ inputs.build != 'true' }}
+
+    # The compile cache lets a build that hits the step timeout carry on from where it stopped.
+    - name: Restore the LLVM compile cache
+      if: inputs.build == 'true' && steps.llvm.outputs.cache-hit != 'true'
+      id: llvm-ccache
+      uses: actions/cache/restore@v4
+      with:
+        path: .ccache-llvm
+        key: ccache-ios-llvm-${{ github.run_id }}
+        restore-keys: ccache-ios-llvm-
+
+    - name: Build LLVM
+      if: inputs.build == 'true' && steps.llvm.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        CCACHE_DIR: ${{ github.workspace }}/.ccache-llvm
+        CCACHE_MAXSIZE: 2G
+        CMAKE_C_COMPILER_LAUNCHER: ccache
+        CMAKE_CXX_COMPILER_LAUNCHER: ccache
+      # Stops before the job's own limit so the compile cache below is still saved. Needs coreutils.
+      run: gtimeout 19000 bash ios/scripts/build-llvm-ios.sh
+
+    - name: Save the LLVM compile cache
+      if: always() && inputs.build == 'true' && steps.llvm.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: .ccache-llvm
+        key: ${{ steps.llvm-ccache.outputs.cache-primary-key }}
+
+    - name: Save LLVM
+      if: inputs.build == 'true' && steps.llvm.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ios/build-deps/llvm-ios-install
+        key: ${{ steps.keys.outputs.llvm }}
+
+    - name: Build FFmpeg
+      if: inputs.build == 'true' && steps.ffmpeg.outputs.cache-hit != 'true'
+      shell: bash
+      run: bash ios/scripts/build-ffmpeg-ios.sh
+
+    - name: Save FFmpeg
+      if: inputs.build == 'true' && steps.ffmpeg.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ios/build-deps/ffmpeg-ios
+        key: ${{ steps.keys.outputs.ffmpeg }}
+
+    - name: Build librashader
+      if: inputs.build == 'true' && steps.librashader.outputs.cache-hit != 'true'
+      shell: bash
+      run: bash ios/scripts/build-librashader-ios.sh
+
+    - name: Save librashader
+      if: inputs.build == 'true' && steps.librashader.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          ios/build-deps/librashader-ios
+          ios/build-deps/librashader-src/include
+        key: ${{ steps.keys.outputs.librashader }}
+
+    - name: Fetch MoltenVK
+      if: inputs.build == 'true' && steps.moltenvk.outputs.cache-hit != 'true'
+      shell: bash
+      run: bash ios/scripts/fetch-moltenvk.sh
+
+    - name: Save MoltenVK
+      if: inputs.build == 'true' && steps.moltenvk.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ios/3rdparty/MoltenVK
+        key: ${{ steps.keys.outputs.moltenvk }}
+
+    # The sources are small and pinned, so they are fetched every time. Only the Rust library is cached.
+    - name: Fetch the JIT enabler sources
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: bash ios/jit-enabler/fetch-sources.sh
+
+    - name: Build the JIT enabler library
+      if: inputs.build == 'true' && steps.idevice.outputs.cache-hit != 'true'
+      shell: bash
+      run: bash ios/jit-enabler/build-idevice.sh
+
+    - name: Save the JIT enabler library
+      if: inputs.build == 'true' && steps.idevice.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ios/3rdparty/jit-enabler/out
+        key: ${{ steps.keys.outputs.idevice }}
