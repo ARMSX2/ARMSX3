@@ -13461,6 +13461,16 @@
           }
         }
       }
+    },
+    "Storage is almost full. Free some space or the game may close." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Storage is almost full. Free some space or the game may close."
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
