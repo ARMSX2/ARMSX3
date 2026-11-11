@@ -14,6 +14,8 @@ import Observation
     }
 
     static let favouritesKey = "armsx3.library.favourites"
+    // Boot paths of games removed from the library while their files stay where they are.
+    static let hiddenKey = "armsx3.library.hidden"
     // The player's one answer to "move folders out of a temporary place?".
     static let moveTemporaryKey = "armsx3.library.moveTemporary"
 
@@ -25,6 +27,7 @@ import Observation
     private(set) var entries: [LibraryCache.Entry] = []
     private(set) var phase: Phase = .loading
     private(set) var favourites: Set<String>
+    private(set) var hidden: Set<String>
     private(set) var folders: [FolderRow] = []
     private(set) var askingMove = false
     private var moveWaiters: [CheckedContinuation<Void, Never>] = []
@@ -44,6 +47,7 @@ import Observation
         store = BookmarkStore(directory: directory)
         self.defaults = defaults
         favourites = Set(defaults.stringArray(forKey: Self.favouritesKey) ?? [])
+        hidden = Set(defaults.stringArray(forKey: Self.hiddenKey) ?? [])
     }
 
     private var cacheKey: String { LibraryCache.key(folderIDs: store.folders.map(\.id)) }
@@ -264,8 +268,23 @@ import Observation
         publish(entries)
     }
 
+    var hiddenCount: Int { hidden.count }
+
+    /// Takes the game out of the library; its files are left alone.
+    func hide(_ entry: LibraryCache.Entry) {
+        hidden.insert(entry.bootPath)
+        defaults.set(hidden.sorted(), forKey: Self.hiddenKey)
+        publish(entries)
+    }
+
+    func showHidden() async {
+        hidden = []
+        defaults.removeObject(forKey: Self.hiddenKey)
+        await refresh()
+    }
+
     private func publish(_ list: [LibraryCache.Entry]) {
-        entries = list.sorted { a, b in
+        entries = list.filter { !hidden.contains($0.bootPath) }.sorted { a, b in
             let fa = favourites.contains(a.serial), fb = favourites.contains(b.serial)
             if fa != fb { return fa }
             return a.title.localizedStandardCompare(b.title) == .orderedAscending

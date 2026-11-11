@@ -20,7 +20,7 @@ enum LibraryRelocation {
     enum Outcome: Equatable { case kept, moved(URL), failed(Int32) }
 
     // realpath(3), or the parent's plus the last component when it does not resolve, so both sides spell /private/var.
-    private static func canonical(_ path: String) -> String {
+    static func canonical(_ path: String) -> String {
         if let resolved = realpath(path, nil) {
             defer { free(resolved) }
             return String(cString: resolved)

@@ -21,6 +21,7 @@ enum GameLibraryControllerMenuAction: String, Identifiable, Equatable {
     case clearGameCache
     case deleteGameData
     case deleteGame
+    case removeGame
     case rename
     // The PS3 library's favourite row, which ARMSX2's library keeps outside this menu.
     case favourite
