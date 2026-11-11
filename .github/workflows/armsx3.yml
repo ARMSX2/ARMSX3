@@ -1,0 +1,232 @@
+# Builds what ARMSX3 ships: the Android APK and the iOS IPA.
+# The inherited RPCS3 workflow (rpcs3.yml) is left alone so upstream syncs stay clean.
+name: ARMSX3
+
+on:
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - '**/*.md'
+      - 'LICENSE*'
+      - '.gitignore'
+  pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - 'LICENSE*'
+      - '.gitignore'
+  workflow_dispatch:
+
+concurrency:
+  group: armsx3-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  android:
+    name: Android arm64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      NDK_VERSION: 29.0.14206865
+      CMAKE_VERSION: 3.30.5
+      ANDROID_API: 33
+      ARM_MARCH: armv8.2-a+dotprod+fp16
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 3G
+      CCACHE_SLOPPINESS: include_file_mtime,include_file_ctime,time_macros
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install the NDK, CMake and ccache
+        run: |
+          yes | sdkmanager "ndk;${NDK_VERSION}" "cmake;${CMAKE_VERSION}" >/dev/null || true
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ccache
+
+      # The core links against FFmpeg that android/ffmpeg.cmake builds once into build-ffmpeg/.
+      - name: Restore FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: build-ffmpeg
+          key: android-ffmpeg-${{ hashFiles('android/build-ffmpeg.sh', 'android/ffmpeg.cmake') }}
+
+      - name: Restore ccache
+        id: ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-android-${{ github.run_id }}
+          restore-keys: ccache-android-
+
+      # The upscaler includes librashader's loader header from 3rdparty/librashader, which is not
+      # checked in. This is the commit the iOS build pins, header only: librashader.so is
+      # loaded at run time and is not built here.
+      - name: Fetch the librashader header
+        run: |
+          pin="$(sed -n 's/^PIN=//p' ios/scripts/build-librashader-ios.sh)"
+          git init -q 3rdparty/librashader
+          git -C 3rdparty/librashader fetch -q --depth 1 https://github.com/SnowflakePowered/librashader.git "$pin"
+          git -C 3rdparty/librashader checkout -q FETCH_HEAD
+
+      # The JNI glue builds libadrenotools, another checkout the repository leaves out (see .gitignore).
+      - name: Fetch libadrenotools
+        run: |
+          dir=android/armsx3-ui/app/src/main/cpp/libadrenotools
+          git init -q $dir
+          git -C $dir fetch -q --depth 1 https://github.com/bylaws/libadrenotools.git 8fae8ce254dfc1344527e05301e43f37dea2df80
+          git -C $dir checkout -q FETCH_HEAD
+          git -C $dir submodule update -q --init --depth 1
+
+      - name: Configure the core
+        run: bash android/stamp-git-version.sh && bash android/configure.sh -DARMSX3_ARM_MARCH=$ARM_MARCH
+
+      # A cold build can outlast the job. Stopping the compile early still saves the compile cache,
+      # so the next run carries on from there.
+      - name: Build the core
+        run: |
+          export PATH="$ANDROID_HOME/cmake/$CMAKE_VERSION/bin:$PATH"
+          targets=android/libarmsx3-core.so
+          # Frame generation needs 3rdparty/lsfg/lsfg-vk-android, which is not in the repository.
+          if ninja -C build-android -t targets all | grep -q '^armsx3_lsfg:'; then targets="$targets armsx3_lsfg"; fi
+          timeout 19000 ninja -C build-android $targets
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.ccache.outputs.cache-primary-key }}
+
+      - name: Stage the native libraries
+        run: |
+          strip="$ANDROID_HOME/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          ui=android/armsx3-ui/app/src
+          mkdir -p $ui/main/jniLibs/arm64-v8a $ui/github/jniLibs/arm64-v8a
+          "$strip" --strip-unneeded -o $ui/main/jniLibs/arm64-v8a/libarmsx3-core.so build-android/android/libarmsx3-core.so
+          lsfg=build-android/3rdparty/lsfg/libarmsx3_lsfg.so
+          if [ -f "$lsfg" ]; then "$strip" --strip-unneeded -o $ui/github/jniLibs/arm64-v8a/libarmsx3_lsfg.so "$lsfg"; fi
+
+      # The JNI glue prints hundreds of thousands of warnings. Left on, Gradle holds them all and runs
+      # out of heap.
+      - name: Build the APK
+        working-directory: android/armsx3-ui
+        env:
+          CFLAGS: -w
+          CXXFLAGS: -w
+        run: ./gradlew :app:assembleGithubRelease -Parmsx3.minSdk=$ANDROID_API -Dorg.gradle.jvmargs="-Xmx6g -Dfile.encoding=UTF-8" --stacktrace
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: armsx3-android-arm64
+          path: android/armsx3-ui/app/build/outputs/apk/github/release/*.apk
+          if-no-files-found: error
+
+  ios-deps:
+    name: iOS dependencies
+    runs-on: xcode-27
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install tools
+        run: |
+          brew install cmake ninja ccache coreutils
+          rustup target add aarch64-apple-ios
+
+      - name: Fetch the LLVM sources
+        run: bash ios/scripts/bootstrap-submodules.sh --with-llvm
+
+      - uses: ./.github/actions/ios-deps
+        with:
+          build: 'true'
+
+  ios:
+    name: iOS
+    needs: ios-deps
+    runs-on: xcode-27
+    timeout-minutes: 360
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 2G
+      CCACHE_SLOPPINESS: include_file_mtime,include_file_ctime,time_macros,pch_defines
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+      CMAKE_OBJC_COMPILER_LAUNCHER: ccache
+      CMAKE_OBJCXX_COMPILER_LAUNCHER: ccache
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install tools
+        run: |
+          brew install cmake ninja xcodegen ccache
+          rustup target add aarch64-apple-ios
+
+      - name: Fetch the submodules
+        run: bash ios/scripts/bootstrap-submodules.sh --with-llvm
+
+      - uses: ./.github/actions/ios-deps
+
+      - name: Restore ccache
+        id: ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-ios-core-${{ github.run_id }}
+          restore-keys: ccache-ios-core-
+
+      - name: Configure the core
+        run: bash ios/configure.sh ios-llvm
+
+      - name: Build the core
+        run: |
+          cmake --build ios/build/ios-llvm --target rpcs3_emu armsx3_bridge armsx3_ios_render -- -j 4
+          bash ios/scripts/collect-ios-archives.sh ios-llvm
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.ccache.outputs.cache-primary-key }}
+
+      - name: Build the unsigned IPA
+        run: SIGN=0 bash ios/scripts/build-ios-ipa.sh
+
+      - name: Show the compiler errors
+        if: failure()
+        run: grep -n "error:" ios/build/ipa/xcodebuild-Release.log | head -30 | cut -c1-400 || true
+
+      # test_stderr_witness times a call against a 200 ms limit, which a busy shared runner can miss.
+      # A failure that repeats is real.
+      - name: Run the host tests
+        run: bash ios/tests/run_all.sh || bash ios/tests/run_all.sh
+
+      - name: Upload the IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: armsx3-ios-unsigned
+          path: ios/build/ipa/ARMSX3-Release-ios-llvm-unsigned.ipa
+          if-no-files-found: error
