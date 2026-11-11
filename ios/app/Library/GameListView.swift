@@ -198,6 +198,11 @@ struct GameListView: View {
                 UninstallSheet(serial: serial, gameTitle: title, onUninstalled: {
                     await installs.refreshAfterContentChange { await model.refresh() }
                 })
+            case .deleteGame(let entry, let item):
+                DeleteGameSheet(entry: entry, item: item, onRemoved: { filesDeleted in
+                    if !filesDeleted { model.hide(entry) }
+                    await installs.refreshAfterContentChange { await model.refresh() }
+                })
             }
         }
     }
@@ -488,6 +493,8 @@ struct GameListView: View {
         // Only a title installed into dev_hdd0 can be uninstalled; a disc folder or an ISO is the player's.
         if !entry.fromGamesYml && entry.category == "HG" {
             items.append(GameLibraryControllerMenuItem(action: .deleteGame, title: "Uninstall", systemImage: "trash"))
+        } else {
+            items.append(GameLibraryControllerMenuItem(action: .removeGame, title: "Delete Game", systemImage: "trash"))
         }
         return items
     }
@@ -588,6 +595,10 @@ struct GameListView: View {
             sheet = .trophies(titleDir: entry.bootPath, title: entry.title)
         case .deleteGame:
             sheet = .uninstall(serial: entry.serial, title: entry.title)
+        case .removeGame:
+            // nil for a game in a folder the app does not own.
+            let games = LibraryRelocation.Roots.current.games
+            sheet = .deleteGame(entry, item: GameDeletion.removable(bootPath: entry.bootPath, isISO: entry.isISO, games: games))
         case .clearGameCache:
             clearingCacheEntry = entry
         case .chooseCoverPhoto:
@@ -664,6 +675,7 @@ enum LibrarySheet: Identifiable {
     case saveData(serial: String, title: String)
     case trophies(titleDir: String, title: String)
     case uninstall(serial: String, title: String)
+    case deleteGame(LibraryCache.Entry, item: URL?)
 
     var id: String {
         switch self {
@@ -676,6 +688,7 @@ enum LibrarySheet: Identifiable {
         case .saveData(let serial, _): return "saveData." + serial
         case .trophies(let titleDir, _): return "trophies." + titleDir
         case .uninstall(let serial, _): return "uninstall." + serial
+        case .deleteGame(let entry, _): return "deleteGame." + entry.bootPath
         }
     }
 }
@@ -707,6 +720,13 @@ struct FolderListSheet: View {
                     }
                 } footer: {
                     Text("The folder stays where it is and is not copied. Folders in iCloud Drive may need downloading first.")
+                }
+                if model.hiddenCount > 0 {
+                    Section {
+                        Button("Show \(model.hiddenCount) Removed Games") { Task { await model.showHidden() } }
+                    } footer: {
+                        Text("Games you removed from the library without deleting their files.")
+                    }
                 }
             }
             .navigationTitle("Game Folders")

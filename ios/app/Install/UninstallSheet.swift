@@ -74,7 +74,7 @@ struct UninstallSheet: View {
     }
 
     // The states are deleted only when every save went.
-    private static func deleteSaves(serial: String) async -> Bool {
+    static func deleteSaves(serial: String) async -> Bool {
         let user = await withCheckedContinuation { (continuation: CheckedContinuation<String, Never>) in
             Rpcs3Bridge.userDirectory { path, status in continuation.resume(returning: status == 0 ? path : "") }
         }

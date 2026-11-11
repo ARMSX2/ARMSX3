@@ -911,6 +911,26 @@
         }
       }
     },
+    "Also clear its shader and SPU caches" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Also clear its shader and SPU caches"
+          }
+        }
+      }
+    },
+    "Also remove its update and DLC" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Also remove its update and DLC"
+          }
+        }
+      }
+    },
     "ARMSX3" : {
       "localizations" : {
         "en" : {
@@ -3477,12 +3497,32 @@
         }
       }
     },
+    "Delete %@?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete %@?"
+          }
+        }
+      }
+    },
     "Delete File" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Delete File"
+          }
+        }
+      }
+    },
+    "Delete Game" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete Game"
           }
         }
       }
@@ -4805,6 +4845,16 @@
         }
       }
     },
+    "Games you removed from the library without deleting their files." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Games you removed from the library without deleting their files."
+          }
+        }
+      }
+    },
     "Get from SideStore" : {
       "localizations" : {
         "en" : {
@@ -5594,6 +5644,16 @@
         }
       }
     },
+    "its caches" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "its caches"
+          }
+        }
+      }
+    },
     "Its compiled PPU, SPU and shader caches are removed and built again on its next boot, which takes a while. Saves are kept." : {
       "localizations" : {
         "en" : {
@@ -5640,6 +5700,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Its files are deleted from ARMSX3. To use it again, choose the theme file again."
+          }
+        }
+      }
+    },
+    "its saves and save states" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "its saves and save states"
+          }
+        }
+      }
+    },
+    "its update and DLC" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "its update and DLC"
           }
         }
       }
@@ -8107,6 +8187,26 @@
         }
       }
     },
+    "Remove %@?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove %@?"
+          }
+        }
+      }
+    },
+    "Remove from Library" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove from Library"
+          }
+        }
+      }
+    },
     "Replaced. ARMSX3 uses the new file the next time it opens." : {
       "localizations" : {
         "en" : {
@@ -9704,6 +9804,16 @@
         }
       }
     },
+    "Show %lld Removed Games" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show %lld Removed Games"
+          }
+        }
+      }
+    },
     "Show Face Buttons line waves" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -10985,6 +11095,36 @@
         }
       }
     },
+    "The game was removed, but %@ couldn't be." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The game was removed, but %@ couldn't be."
+          }
+        }
+      }
+    },
+    "The game's files are deleted from this app's games folder. This can't be undone." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The game's files are deleted from this app's games folder. This can't be undone."
+          }
+        }
+      }
+    },
+    "The game's files couldn't be deleted." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The game's files couldn't be deleted."
+          }
+        }
+      }
+    },
     "The JIT enabler's engine. The modified file stays under MPL-2.0 and its source is offered." : {
       "localizations" : {
         "en" : {
@@ -11571,6 +11711,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "This device rejected it. Make a new pairing file on a computer and add it."
+          }
+        }
+      }
+    },
+    "This game is in a folder the app doesn't own, so its files stay where they are. It only leaves the library; Game Folders can show it again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This game is in a folder the app doesn't own, so its files stay where they are. It only leaves the library; Game Folders can show it again."
           }
         }
       }
