@@ -231,6 +231,12 @@ struct ARMSX3FrontendRoot: View {
         started = true
         // fd 2 must be the app's drained pipe before the JIT check and any UIKit NSLog.
         _ = Rpcs3Bridge.installStderrDrain()
+        // Off the main actor: a deleted game can be tens of gigabytes.
+        Task.detached(priority: .utility) {
+            let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            let freed = DocumentsTrash.empty(documents: documents)
+            if freed > 0 { NSLog("ARMSX3: emptied Documents/.Trash, freed %lld bytes", freed) }
+        }
         // A savestate with no epoch record that is at least this new was made by this build.
         if UserDefaults.standard.object(forKey: SaveStateFiles.epochSinceKey) == nil {
             UserDefaults.standard.set(Date(), forKey: SaveStateFiles.epochSinceKey)
