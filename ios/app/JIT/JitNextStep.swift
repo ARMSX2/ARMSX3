@@ -91,6 +91,7 @@ struct JitSituation {
     var sideStoreLockdown = false
     var checklistFails = false
     var liveProcessMissing = false
+    var liveContainerOld = false
     var fallbackAdvice: String? = nil
     var testResult: JitTestResult? = nil
 }
@@ -128,10 +129,12 @@ enum JitTestResult: Equatable {
         }
     }
 
-    func fix(liveContainer: Bool) -> String? {
+    /// `tooOld` is the installed LiveContainer version when it is below what built-in JIT needs.
+    func fix(liveContainer: Bool, tooOld version: String? = nil) -> String? {
         guard case .stopped(let stage, _) = self else { return nil }
         switch stage {
         case .helper:
+            if let version { return String(localized: "This LiveContainer is \(version), and built-in JIT needs 3.8.13 or later. Update LiveContainer, then install ARMSX3 in it again.") }
             return liveContainer
                 ? String(localized: "LiveContainer didn't start the JIT helper. Check that Helper Process Support is on for ARMSX3, then close ARMSX3 and open it again.")
                 : String(localized: "The JIT helper didn't start. Close ARMSX3 fully and open it again.")
@@ -213,7 +216,8 @@ enum JitNextStep {
         if s.stikDebugReturnedOff { return JitStep(row: 9, advice: row9, primary: .openStikDebug) }
         if s.checklistFails {
             let next = fallback(s, after: nil)
-            return JitStep(row: 3, advice: next.advice, primary: next.primary)
+            // Trying again cannot help until LiveContainer is updated.
+            return JitStep(row: 3, advice: next.advice, primary: s.liveContainerOld && next.primary == .tryAgain ? nil : next.primary)
         }
         switch s.method {
         case .builtin, .stikdebug:
