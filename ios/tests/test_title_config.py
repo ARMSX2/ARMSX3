@@ -64,7 +64,8 @@ KOTLIN_CONFIG_DB = ROOT / "android" / "armsx3-ui" / "app" / "src" / "main" / "ja
 KILLZONE = "BCUS98234"
 
 IOS_ONLY_REQUIRED = ("NPUB30558", "BLUS30837", "BLES01613", "BLUS30405", "BLES00713",
-                     "BLES00714", "BLES00158", "BLUS30089", "BLUS30065", "BLES00142")
+                     "BLES00714", "BLES00158", "BLUS30089", "BLUS30065", "BLES00142",
+                     "BLES01717")
 
 IOS_ONLY_NO_INTERPRETER = "Video:\\n  Shader Mode: Async Recompiler (multi-threaded)\\n"
 
@@ -77,6 +78,8 @@ IOS_ONLY_STUB_TRAPS = "Core:\\n  Stub PPU Traps: 1\\n"
 IOS_ONLY_APPROXIMATE_ZCULL = "Video:\\n  Accurate ZCULL stats: false\\n  Relaxed ZCULL Sync: false\\n"
 
 IOS_ONLY_HIGH_PRECISION = "Video:\\n  Shader Precision: High\\n"
+
+IOS_ONLY_TWO_SPU_THREADS = "Core:\\n  Preferred SPU Threads: 2\\n"
 
 IOS_ONLY_ROWS = {
     "NPUB30558": "Core:\\n  SPU loop detection: true\\n",
@@ -107,6 +110,7 @@ IOS_ONLY_ROWS = {
     "NPUA80918": IOS_ONLY_STUB_TRAPS,
     "NPEA00445": IOS_ONLY_STUB_TRAPS,
     "NPHA80258": IOS_ONLY_STUB_TRAPS,
+    "BLES01717": IOS_ONLY_TWO_SPU_THREADS,
 }
 
 FIX_PATHS = ["Core@@PPU Decoder", "Video@@Frame limit", "Video@@Write Color Buffers"]
@@ -556,6 +560,10 @@ class Mutations(unittest.TestCase):
 
     def test_simpsons_row_takes_the_database_precision(self):
         h = self.edited(self.header, '{"BLUS30065", "Video:\\n  Shader Precision: High', '{"BLUS30065", "Video:\\n  Shader Precision: Low')
+        self.caught(behaviour_problems(h, self.product, self.kotlin), "iosonly")
+
+    def test_black_ops_2_row_lets_every_spu_thread_run(self):
+        h = self.edited(self.header, '{"BLES01717", "Core:\\n  Preferred SPU Threads: 2', '{"BLES01717", "Core:\\n  Preferred SPU Threads: 0')
         self.caught(behaviour_problems(h, self.product, self.kotlin), "iosonly")
 
     def test_redirect_merge_turns_case_sensitive(self):

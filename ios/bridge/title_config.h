@@ -705,6 +705,9 @@ namespace armsx3::bridge::title_config
 		{"NPUA80918", "Core:\n  Stub PPU Traps: 1\n"},
 		{"NPEA00445", "Core:\n  Stub PPU Traps: 1\n"},
 		{"NPHA80258", "Core:\n  Stub PPU Traps: 1\n"},
+
+		// Six busy SPU threads crowd out the PPU in Zombies; letting two run at once gave about a sixth more fps on a Mac.
+		{"BLES01717", "Core:\n  Preferred SPU Threads: 2\n"},
 	};
 
 	// Empty when neither table has the serial.
