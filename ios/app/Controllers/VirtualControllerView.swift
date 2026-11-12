@@ -457,6 +457,7 @@ final class PadTouchView: UIView {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        GamepadPoller.shared.padTouched()
         PadTouches.shared.prepare()
         PadTouches.shared.touch(began: touches.map { (ObjectIdentifier($0), $0.location(in: self)) })
         PadTouches.shared.aim(aimed(touches), began: true)
