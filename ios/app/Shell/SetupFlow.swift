@@ -153,6 +153,7 @@ struct SetupFlow: View {
 // The folder picker is a file importer, not a sheet (see pickingFolder).
 enum SetupSheet: String, Identifiable {
     case firmware
+    case report
     var id: String { rawValue }
 }
 
@@ -222,6 +223,15 @@ struct SetupStepPage: View {
         .navigationTitle(Text("Step \(step) of \(SetupRules.stepCount)"))
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(steps.installs.busy)
+        // Setup runs before Settings can be opened, so this is the only way to a report.
+        .toolbar {
+            if DiagnosticsSession.shared.current != nil {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Report") { sheet = .report }
+                        .controllerAccessibilityActionTarget(id: "setup.report", label: String(localized: "Report")) { sheet = .report }
+                }
+            }
+        }
         // The system presents this picker itself: embedded in a sheet, its Open button did nothing for a folder.
         .fileImporter(isPresented: $pickingFolder, allowedContentTypes: [.folder]) { result in
             if case .success(let url) = result { Task { await steps.add(url) } }
@@ -232,6 +242,10 @@ struct SetupStepPage: View {
                 FirmwarePicker(types: [.item]) { url in
                     sheet = nil
                     if let url { Task { await steps.installFirmware(url) } }
+                }
+            case .report:
+                if let session = DiagnosticsSession.shared.current {
+                    ProblemReportView(session: session, serial: nil)
                 }
             }
         }

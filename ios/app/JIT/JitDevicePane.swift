@@ -545,6 +545,7 @@ struct JitDevicePane: View {
     @State private var model = JitDeviceModel.shared
     @State private var showingPicker = false
     @State private var pairingRequest: PairingImportRequest?
+    @State private var report: ReportRequest?
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -631,6 +632,16 @@ struct JitDevicePane: View {
         } message: {
             Text("ARMSX3 deletes its downloaded copy. The next mount downloads it again, about 16 MB. A disk image that is mounted now stays mounted until this device restarts.")
         }
+        // Here rather than on JitOffScreen so the button joins this pane's controller scope.
+        .toolbar {
+            if host == .jitOff && DiagnosticsSession.shared.current != nil {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Report") { openReport() }
+                        .controllerAccessibilityActionTarget(id: "jitoff.report", label: String(localized: "Report")) { openReport() }
+                }
+            }
+        }
+        .sheet(item: $report) { ProblemReportView(session: $0.session, serial: $0.serial) }
         .controllerAccessibilityNavigation(controllerInput: controller.input,
                                            scopeKey: host == .settings ? "settings.pane." + SettingsPane.jitDevice.navigationKey : host == .inGame ? "game.jitdevice" : "jitoff.pane",
                                            onBack: onBack, onPreviousTab: controller.onPreviousTab,
@@ -646,6 +657,10 @@ struct JitDevicePane: View {
     }
 
     private var primary: JitPrimary? { model.step.primary }
+
+    private func openReport() {
+        report = DiagnosticsSession.shared.current.map { ReportRequest(session: $0, serial: nil) }
+    }
 
     private var mountBlockedInGame: Bool { host == .inGame && primary == .mountDiskImage }
 

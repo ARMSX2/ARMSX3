@@ -34,7 +34,7 @@ Then install the new IPA, open the same screen and use Restore from Backup to br
 
 ## Reporting problems
 
-Settings › Diagnostics › Report a Problem writes a report to Files › ARMSX3 › Reports. Nothing is sent unless you share it, folder paths are removed, and the pairing file is never included. Attach the report when you open an issue on the ARMSX3 GitHub project, along with the game's title and serial and your device model.
+Settings › Diagnostics › Report a Problem writes a report to Files › ARMSX3 › Reports. During setup, and on the screen ARMSX3 shows when JIT is off, the Report button at the top right writes the same report. Nothing is sent unless you share it, folder paths are removed, and the pairing file is never included. Attach the report when you open an issue on the ARMSX3 GitHub project, along with the game's title and serial and your device model.
 
 ## Licence
 
