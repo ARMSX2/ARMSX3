@@ -63,11 +63,8 @@ KOTLIN_CONFIG_DB = ROOT / "android" / "armsx3-ui" / "app" / "src" / "main" / "ja
 
 KILLZONE = "BCUS98234"
 
-IOS_ONLY_ROW = "Video:\\n  Emulate Extended Depth Range: true\\n"
-
-IOS_ONLY_REQUIRED = ("BLUS30591", "BLES01031", "NPUB30558", "BLUS30837", "BLES01613",
-                     "BLUS30405", "BLES00713", "BLES00714", "BLES00158", "BLUS30089",
-                     "BLUS30065", "BLES00142")
+IOS_ONLY_REQUIRED = ("NPUB30558", "BLUS30837", "BLES01613", "BLUS30405", "BLES00713",
+                     "BLES00714", "BLES00158", "BLUS30089", "BLUS30065", "BLES00142")
 
 IOS_ONLY_NO_INTERPRETER = "Video:\\n  Shader Mode: Async Recompiler (multi-threaded)\\n"
 
@@ -81,7 +78,7 @@ IOS_ONLY_APPROXIMATE_ZCULL = "Video:\\n  Accurate ZCULL stats: false\\n  Relaxed
 
 IOS_ONLY_HIGH_PRECISION = "Video:\\n  Shader Precision: High\\n"
 
-IOS_ONLY_OTHER_ROWS = {
+IOS_ONLY_ROWS = {
     "NPUB30558": "Core:\\n  SPU loop detection: true\\n",
     "BLUS30837": IOS_ONLY_NO_INTERPRETER,
     "BLES01613": IOS_ONLY_NO_INTERPRETER,
@@ -309,8 +306,10 @@ def ios_only_problems(header_text, kotlin_text, results):
     if len(set(serials)) != len(serials):
         problems.append("iosonly: a serial repeats in ios_only_overrides")
     for serial, config in rows:
-        want = IOS_ONLY_OTHER_ROWS.get(serial, IOS_ONLY_ROW)
-        if config != want:
+        want = IOS_ONLY_ROWS.get(serial)
+        if want is None:
+            problems.append("iosonly: {0} has no expected row in the test".format(serial))
+        elif config != want:
             problems.append("iosonly: {0} sets {1!r}, not exactly {2!r}".format(serial, config, want))
         if serial in ported:
             problems.append("iosonly: {0} is also in the ported table or Android's".format(serial))
@@ -517,13 +516,13 @@ class Mutations(unittest.TestCase):
         self.caught(behaviour_problems(h, self.product, self.kotlin), "iosonly")
 
     def test_ios_only_row_moved_into_the_ported_table(self):
-        row = '\t\t{"BLUS30591", "Video:\\n  Emulate Extended Depth Range: true\\n"},\n'
+        row = '\t\t{"BLUS30065", "Video:\\n  Shader Precision: High\\n"},\n'
         h = self.edited(self.header, row, "")
         h = self.edited(h, '\t\t{"BLUD80019", "Core:\\n  PPU Event Wake-Up Delay: 35\\n"},\n', '\t\t{"BLUD80019", "Core:\\n  PPU Event Wake-Up Delay: 35\\n"},\n' + row)
         self.caught(behaviour_problems(h, self.product, self.kotlin), "iosonly")
 
     def test_ios_only_row_sets_another_key(self):
-        h = self.edited(self.header, '{"BLES01031", "Video:\\n  Emulate Extended Depth Range: true\\n"},', '{"BLES01031", "Video:\\n  Strict Rendering Mode: true\\n"},')
+        h = self.edited(self.header, '{"BLES00142", "Video:\\n  Shader Precision: High\\n"},', '{"BLES00142", "Video:\\n  Strict Rendering Mode: true\\n"},')
         self.caught(behaviour_problems(h, self.product, self.kotlin), "iosonly")
 
     NBA_JAM_ROW = '{"NPUB30558", "Core:\\n  SPU loop detection: true\\n"},'
