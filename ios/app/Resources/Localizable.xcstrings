@@ -8627,6 +8627,16 @@
         }
       }
     },
+    "Report" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Report"
+          }
+        }
+      }
+    },
     "Report a Problem" : {
       "localizations" : {
         "en" : {
