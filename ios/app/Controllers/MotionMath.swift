@@ -38,11 +38,11 @@ struct Sixaxis: Equatable {
     // A flat DS3 at rest (pad_types.h DEFAULT_MOTION_X/Y/Z/G).
     static let rest = Sixaxis(x: 512, y: 399, z: 512, g: 512)
 
-    // An inverted axis is mirrored about 512, kept inside 0...1023.
+    // An inverted axis is mirrored about 512, kept inside 0...1023. Tilt Y is forward and back, which a DS3 reads on Z.
     func applying(invertX: Bool, invertY: Bool) -> Sixaxis {
         var s = self
         if invertX { s.x = min(1023, 1024 - x) }
-        if invertY { s.y = min(1023, 1024 - y) }
+        if invertY { s.z = min(1023, 1024 - z) }
         return s
     }
 }

@@ -36,6 +36,8 @@ let left = MotionMath.screenFrame(x: -1, y: 0.25, z: 0, orientation: .landscapeL
 print("S7 rotated=\(MotionMath.sixaxis(ax: right.0, ay: right.1, az: right.2, yaw: 0).x),\(MotionMath.sixaxis(ax: left.0, ay: left.1, az: left.2, yaw: 0).x)")
 let flipped = MotionMath.sixaxis(ax: 1, ay: -1, az: 0, yaw: 0).applying(invertX: true, invertY: false)
 print("S8 inverted=\(flipped.x),\(flipped.y)")
+let pitchedForward = MotionMath.sixaxis(ax: 0, ay: -1, az: 1, yaw: 0).applying(invertX: false, invertY: true)
+print("S9 invertY=\(pitchedForward.x),\(pitchedForward.y),\(pitchedForward.z)")
 
 let centred: (UInt8, UInt8) = (128, 128)
 let g1 = MotionMath.steer(stick: centred, rateX: 1, rateY: 1, setting: nil, previous: (0, 0)).stick
@@ -108,6 +110,9 @@ class TheMotionHolds(unittest.TestCase):
 
     def test_s8_invert_x_mirrors_x_and_leaves_y(self):
         self.check("S8 inverted", "S8 inverted=399,399")
+
+    def test_s9_invert_y_mirrors_forward_and_back_and_leaves_up(self):
+        self.check("S9 invertY", "S9 invertY=512,399,399")
 
     def test_g1_no_title_entry_no_steering(self):
         self.check("G1 off", "G1 off=128,128")
