@@ -47,6 +47,9 @@ CASES = {
                                      9, "openStikDebug", C["row9"]),
     "checklist-installed": (NOFILE + INSTALLED + ", liveContainer: true, checklistFails: true", 3, "openStikDebug", C["sd-ready"]),
     "checklist-not-installed": (NOFILE + ", liveContainer: true, checklistFails: true", 3, "tryAgain", C["sd-instead"]),
+    "lc-old-installed": (NOFILE + INSTALLED + ", liveContainer: true, checklistFails: true, liveContainerOld: true",
+                         3, "openStikDebug", C["sd-ready"]),
+    "lc-old-not-installed": (NOFILE + ", liveContainer: true, checklistFails: true, liveContainerOld: true", 3, "none", C["sd-instead"]),
     "checklist-beats-ddi": (BUILTIN + ", diskImage: .notMounted, liveContainer: true, checklistFails: true", 3, "tryAgain", C["sd-instead"]),
     "checklist-beats-helper": (BUILTIN + ', diskImage: .unknown, helperWord: "connect-failed", liveContainer: true, checklistFails: true',
                                3, "tryAgain", C["sd-instead"]),
@@ -169,22 +172,25 @@ CAPTIONS = {"builtin": C["caption-builtin"], "wait": C["caption-wait"]}
 HELPER_FIX = "The JIT helper didn't start. Close ARMSX3 fully and open it again."
 HELPER_FIX_LC = ("LiveContainer didn't start the JIT helper. Check that Helper Process Support is on for ARMSX3, "
                  "then close ARMSX3 and open it again.")
+HELPER_FIX_LC_OLD = ("This LiveContainer is 3.8.11, and built-in JIT needs 3.8.13 or later. "
+                     "Update LiveContainer, then install ARMSX3 in it again.")
 DISK_FIX = "The Developer Disk Image isn't mounted. Mount it, then test again."
 PASSED_DETAIL = "Helper started, device reached through LocalDevVPN, pairing accepted, disk image mounted."
 
 
-def stopped(value, report, fix, fix_lc=None):
-    return (value, report, fix, fix_lc or fix, "nil")
+def stopped(value, report, fix, fix_lc=None, fix_old=None):
+    return (value, report, fix, fix_lc or fix, "nil", fix_old or fix_lc or fix)
 
 
 # (result word, reason): value | report word | fix outside LiveContainer | fix inside | passed detail
+# | fix inside an old LiveContainer
 TEST_RESULTS = {
-    ("ready", "ignored"): ("Passed", "passed", "nil", "nil", PASSED_DETAIL),
-    ("other", "start-failed"): stopped("Stopped at helper", "stopped at helper (start-failed)", HELPER_FIX, HELPER_FIX_LC),
-    ("other", "timeout"): stopped("Stopped at helper", "stopped at helper (timeout)", HELPER_FIX, HELPER_FIX_LC),
-    ("other", "mounting:device:-8/0"): stopped("Stopped at helper", "stopped at helper (mounting:device:-8/0)", HELPER_FIX, HELPER_FIX_LC),
-    ("other", ""): stopped("Stopped at helper", "stopped at helper", HELPER_FIX, HELPER_FIX_LC),
-    ("download", "x"): stopped("Stopped at helper", "stopped at helper (x)", HELPER_FIX, HELPER_FIX_LC),
+    ("ready", "ignored"): ("Passed", "passed", "nil", "nil", PASSED_DETAIL, "nil"),
+    ("other", "start-failed"): stopped("Stopped at helper", "stopped at helper (start-failed)", HELPER_FIX, HELPER_FIX_LC, HELPER_FIX_LC_OLD),
+    ("other", "timeout"): stopped("Stopped at helper", "stopped at helper (timeout)", HELPER_FIX, HELPER_FIX_LC, HELPER_FIX_LC_OLD),
+    ("other", "mounting:device:-8/0"): stopped("Stopped at helper", "stopped at helper (mounting:device:-8/0)", HELPER_FIX, HELPER_FIX_LC, HELPER_FIX_LC_OLD),
+    ("other", ""): stopped("Stopped at helper", "stopped at helper", HELPER_FIX, HELPER_FIX_LC, HELPER_FIX_LC_OLD),
+    ("download", "x"): stopped("Stopped at helper", "stopped at helper (x)", HELPER_FIX, HELPER_FIX_LC, HELPER_FIX_LC_OLD),
     ("unreachable", "connect-failed"): stopped("Stopped at LocalDevVPN", "stopped at LocalDevVPN (connect-failed)", C["mount-unreachable"]),
     ("pairing", "rejected"): stopped("Stopped at pairing", "stopped at pairing (rejected)", C["mount-pairing"]),
     ("unmounted", ""): stopped("Stopped at disk image", "stopped at disk image", DISK_FIX),
@@ -230,7 +236,7 @@ def driver():
     for result, reason in sorted(TEST_RESULTS):
         lines.append('do {{ let r = JitTestResult(result: {0}, reason: {1}); emit("testresult", {2}, '
                      '[r.value, r.reportWord, r.fix(liveContainer: false) ?? "nil", r.fix(liveContainer: true) ?? "nil", '
-                     'r.passedDetail ?? "nil"].joined(separator: "|")) }}'.format(swift_string(result), swift_string(reason),
+                     'r.passedDetail ?? "nil", r.fix(liveContainer: true, tooOld: "3.8.11") ?? "nil"].joined(separator: "|")) }}'.format(swift_string(result), swift_string(reason),
                                                                                    swift_string(result + ":" + reason)))
     for key in sorted(DISK_FIXES):
         lines.append('emit("diskfix", {0}, JitNextStep.diskImageFix(jitOn: {1}, diskImage: {2}, testRowShown: {3}))'
@@ -430,6 +436,13 @@ class Mutations(unittest.TestCase):
 
     def test_mutation_helper_fix_ignores_livecontainer(self):
         self.assert_caught(self.edited(self.text, "return liveContainer\n", "return false\n"), "testresult:")
+
+    def test_mutation_old_livecontainer_offered_try_again(self):
+        self.assert_caught(self.edited(self.text, "s.liveContainerOld && next.primary == .tryAgain ? nil : next.primary", "next.primary"),
+                           "decide:")
+
+    def test_mutation_old_livecontainer_gets_the_helper_support_fix(self):
+        self.assert_caught(self.edited(self.text, "if let version {", "if let version, false {"), "testresult:")
 
     def test_mutation_report_word_drops_the_reason(self):
         self.assert_caught(self.edited(self.text, '(reason.isEmpty ? "" : " (\\(reason))")', '""'), "testresult:")

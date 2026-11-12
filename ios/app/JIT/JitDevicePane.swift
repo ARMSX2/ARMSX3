@@ -108,7 +108,7 @@ import SwiftUI
                      sideStoreAvailable: sideStoreAvailable, isPad: UIDevice.current.userInterfaceIdiom == .pad,
                      sideStoreSentNothing: sideStoreSentNothing, sideStoreLockdown: sideStoreLockdown,
                      checklistFails: !checklist.isEmpty, liveProcessMissing: liveContainer && probe.liveProcessPresent == false,
-                     fallbackAdvice: fallbackAdvice, testResult: testResult)
+                     liveContainerOld: liveContainerOldVersion != nil, fallbackAdvice: fallbackAdvice, testResult: testResult)
     }
 
     var step: JitStep { JitNextStep.decide(situation) }
@@ -116,6 +116,13 @@ import SwiftUI
     /// The LiveContainer rows, only for a player who relies on built-in JIT.
     var checklist: [JitFallback.ChecklistRow] {
         method == .builtin ? JitFallback.checklist(probe: probe, jitOnThroughBuiltin: jitOnThroughBuiltin) : []
+    }
+
+    /// The installed LiveContainer version when built-in JIT needs a newer one; nil when it is unknown or new enough.
+    var liveContainerOldVersion: String? {
+        guard method == .builtin, probe.insideLiveContainer, let version = probe.version,
+              JitFallback.versionAtLeast(version, JitFallback.minimumLiveContainer) == false else { return nil }
+        return version
     }
 
     /// With JIT on through StikDebug or an already traced launch, the notice body for the cause that holds.
@@ -373,7 +380,7 @@ import SwiftUI
         if found == .passed { diskImage = .mounted } else if found.stoppedStage == .diskImage { diskImage = .notMounted }
         let sentence = found == .passed && !jitOn
             ? String(localized: "Built-in JIT is ready. Close ARMSX3 and open it again.")
-            : found.passedDetail ?? [found.value, found.fix(liveContainer: liveContainer)].compactMap { $0 }.joined(separator: ". ")
+            : found.passedDetail ?? [found.value, found.fix(liveContainer: liveContainer, tooOld: liveContainerOldVersion)].compactMap { $0 }.joined(separator: ". ")
         AccessibilityNotification.Announcement(sentence).post()
     }
 
@@ -835,7 +842,7 @@ struct JitCard: View {
 
     private var testDetail: String? {
         guard !model.testRunning, let result = model.testResult else { return nil }
-        return result.fix(liveContainer: model.liveContainer) ?? result.passedDetail
+        return result.fix(liveContainer: model.liveContainer, tooOld: model.liveContainerOldVersion) ?? result.passedDetail
     }
 
     @ViewBuilder private var testRow: some View {

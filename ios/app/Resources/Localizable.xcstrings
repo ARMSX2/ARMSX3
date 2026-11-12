@@ -11735,6 +11735,16 @@
         }
       }
     },
+    "This LiveContainer is %@, and built-in JIT needs 3.8.13 or later. Update LiveContainer, then install ARMSX3 in it again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This LiveContainer is %@, and built-in JIT needs 3.8.13 or later. Update LiveContainer, then install ARMSX3 in it again."
+          }
+        }
+      }
+    },
     "This LiveContainer is %@. Update it to 3.8.13 or later, then install ARMSX3 in it again." : {
       "localizations" : {
         "en" : {
