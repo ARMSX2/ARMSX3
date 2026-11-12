@@ -321,6 +321,19 @@ private:
 	utils::address_range32 m_offloader_fault_range;
 	rsx::invalidation_cause m_offloader_fault_cause;
 
+#ifdef __APPLE__
+	// Deferred readbacks running on guest threads: whose cache, and the memory their sections cover
+	struct flush_in_flight
+	{
+		const void* cache;
+		utils::address_range32 range;
+	};
+
+	shared_mutex m_flushes_in_flight_mutex;
+	std::vector<flush_in_flight> m_flushes_in_flight;
+	atomic_t<u32> m_flushes_in_flight_done = 0;
+#endif
+
 	vk::draw_call_t m_current_draw {};
 
 	// The topology the draw actually wants, which stops being readable from m_pipeline_properties

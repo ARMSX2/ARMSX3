@@ -1174,10 +1174,45 @@ bool VKGSRender::on_access_violation(rsx::context* ctx, u32 address, bool is_wri
 	}
 
 	vk::texture_cache::thrashed_set result;
+#ifdef __APPLE__
+	// A fault on memory another guest thread is already reading back waits for that readback and
+	// then retries, instead of queueing a second flush that invalidates the range all over again.
+	const auto flush_cache = &resources->texture_cache;
+	const bool may_register = !g_fxo->get<rsx::dma_manager>().is_current_thread();
+	const bool may_wait = may_register && !RSX(m_ctx)->is_current_thread();
+	utils::address_range32 flush_range{};
+	bool wait_for_flush = false;
+	bool registered = false;
+	{
+		std::lock_guard lock(m_flushes_in_flight_mutex);
+
+		const rsx::invalidation_cause cause = is_writing ? rsx::invalidation_cause::deferred_write : rsx::invalidation_cause::deferred_read;
+		result = resources->texture_cache.invalidate_address(*m_secondary_cb_list.get(), address, cause);
+
+		if (result.violation_handled && result.num_flushable > 0 && may_register)
+		{
+			for (const auto* section : result.sections_to_flush)
+			{
+				const auto range = section->get_section_range();
+				flush_range = flush_range.valid() ? flush_range.get_min_max(range) : range;
+			}
+
+			wait_for_flush = may_wait && std::any_of(m_flushes_in_flight.cbegin(), m_flushes_in_flight.cend(),
+				[&](const flush_in_flight& f) { return f.cache == flush_cache && f.range.overlaps(flush_range); });
+
+			if (!wait_for_flush)
+			{
+				m_flushes_in_flight.push_back({ flush_cache, flush_range });
+				registered = true;
+			}
+		}
+	}
+#else
 	{
 		const rsx::invalidation_cause cause = is_writing ? rsx::invalidation_cause::deferred_write : rsx::invalidation_cause::deferred_read;
 		result = resources->texture_cache.invalidate_address(*m_secondary_cb_list.get(), address, cause);
 	}
+#endif
 
 	if (result.invalidate_samplers)
 	{
@@ -1190,6 +1225,30 @@ bool VKGSRender::on_access_violation(rsx::context* ctx, u32 address, bool is_wri
 		return false;
 	}
 
+#ifdef __APPLE__
+	if (wait_for_flush)
+	{
+		vm::temporary_unlock();
+
+		while (true)
+		{
+			const u32 done = m_flushes_in_flight_done.load();
+			{
+				reader_lock lock(m_flushes_in_flight_mutex);
+				if (std::none_of(m_flushes_in_flight.cbegin(), m_flushes_in_flight.cend(),
+					[&](const flush_in_flight& f) { return f.cache == flush_cache && f.range.overlaps(flush_range); }))
+				{
+					break;
+				}
+			}
+
+			m_flushes_in_flight_done.wait(done);
+		}
+
+		return true;
+	}
+
+#endif
 	if (result.num_flushable > 0)
 	{
 		if (g_fxo->get<rsx::dma_manager>().is_current_thread())
@@ -1254,6 +1313,22 @@ bool VKGSRender::on_access_violation(rsx::context* ctx, u32 address, bool is_wri
 
 		resources->texture_cache.flush_all(*m_secondary_cb_list.next(), result, data_transfer_completed_callback);
 
+#ifdef __APPLE__
+		if (registered)
+		{
+			{
+				std::lock_guard lock(m_flushes_in_flight_mutex);
+				const auto found = std::find_if(m_flushes_in_flight.begin(), m_flushes_in_flight.end(),
+					[&](const flush_in_flight& f) { return f.cache == flush_cache && f.range == flush_range; });
+				ensure(found != m_flushes_in_flight.end());
+				m_flushes_in_flight.erase(found);
+			}
+
+			m_flushes_in_flight_done++;
+			m_flushes_in_flight_done.notify_all();
+		}
+
+#endif
 		if (has_queue_ref)
 		{
 			// Release RSX thread if it's still locked
