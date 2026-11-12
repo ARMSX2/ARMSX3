@@ -32,6 +32,8 @@ import SwiftUI
     var recording = false
     /// The touch pad is up, so its layout can be edited.
     var touchLayout = false
+    /// The phone feeds player 1's tilt, so its grip can be recentred.
+    var recentreTilt = false
     var invites: [RpcnSession.Invite] = []
     /// The core's live values by Rpcs3LiveSetting raw value, read as the menu opens.
     private(set) var live: [Int: Int] = [:]
@@ -190,6 +192,7 @@ struct XmbGameMenu: View {
         .onChange(of: recording, initial: true) { _, on in store.recording = on }
         .onChange(of: invites, initial: true) { _, now in store.invites = now }
         .onChange(of: store.calls?.actions.touchLayout != nil, initial: true) { _, up in store.touchLayout = up }
+        .onChange(of: store.calls?.actions.recentreTilt != nil, initial: true) { _, up in store.recentreTilt = up }
         .onChange(of: controllerInput?.latestEvent) { _, event in
             guard let event, event.captureOwner == QuickMenuView.controllerScope else { return }
             press(event.command)

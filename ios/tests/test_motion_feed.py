@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""The motion mapping Swift source compiled and run on the Mac host: tilt to stick values, recentring and
-the touch-pad fold, checked against fixed expected lines.
+"""The motion mapping Swift source compiled and run on the Mac host: tilt to stick values, recentring,
+the touch-pad fold and phone tilt shaping, checked against fixed expected lines.
 """
 
 import tempfile
@@ -21,9 +21,12 @@ MAPPING = APP / "Controllers" / "GamepadMapping.swift"
 
 # Written at run time into a temporary directory, never committed.
 DRIVER = r"""
+import Foundation
+
 func line(_ name: String, _ s: Sixaxis) {
     print("\(name)=\(s.x),\(s.y),\(s.z),\(s.g)")
 }
+func line2(_ s: Sixaxis) -> String { "\(s.x),\(s.y),\(s.z)" }
 line("S1 rest", MotionMath.sixaxis(ax: 0, ay: -1, az: 0, yaw: 0))
 line("S2 high", MotionMath.sixaxis(ax: 10, ay: 10, az: 10, yaw: 10))
 line("S3 low", MotionMath.sixaxis(ax: -10, ay: -10, az: -10, yaw: -10))
@@ -61,6 +64,19 @@ print("V3 clamp=\(v.stick.0),\(v.stick.1)")
 v.integrate(yawRate: -0.3, pitchRate: 0.7, dt: 1)
 v.recentre()
 print("V4 recentred=\(v.stick.0),\(v.stick.1)")
+
+func held(_ degrees: Double) -> (Double, Double, Double) {
+    let a = degrees * .pi / 180
+    return (0, -cos(a), -sin(a))
+}
+func pad(_ v: (Double, Double, Double)) -> Sixaxis { MotionMath.sixaxis(ax: v.0, ay: v.1, az: v.2, yaw: 0) }
+let still: (Double, Double, Double) = (0, 0, 0)
+let grip = MotionMath.gripPitch(gravity: held(40))
+print("T1 grip=\(Int((grip * 180 / .pi).rounded())),\(line2(pad(MotionMath.shaped(gravity: held(40), movement: still, grip: grip, tremor: MotionMath.tremor))))")
+print("T2 fromGrip=\(line2(pad(MotionMath.shaped(gravity: held(50), movement: still, grip: grip, tremor: MotionMath.tremor))))")
+print("T3 tremor=\(line2(pad(MotionMath.shaped(gravity: held(0), movement: (0.1, 0, 0), grip: 0, tremor: MotionMath.tremor))))")
+print("T4 shake=\(line2(pad(MotionMath.shaped(gravity: held(0), movement: (0.5, 0, 0), grip: 0, tremor: MotionMath.tremor))))")
+print("T5 controller=\(line2(pad(MotionMath.shaped(gravity: held(0), movement: (0.1, 0, 0), grip: 0, tremor: 0))))")
 """
 
 
@@ -138,6 +154,22 @@ class TheMotionHolds(unittest.TestCase):
 
     def test_v4_recentre_puts_it_back(self):
         self.check("V4 recentred", "V4 recentred=128,128")
+
+    # Phone tilt: the grip and the tremor drop.
+    def test_t1_the_grip_reads_as_a_flat_ds3(self):
+        self.check("T1 grip", "T1 grip=40,512,399,512")
+
+    def test_t2_tilt_counts_from_the_grip(self):
+        self.check("T2 fromGrip", "T2 fromGrip=512,401,492")
+
+    def test_t3_tremor_is_dropped(self):
+        self.check("T3 tremor", "T3 tremor=512,399,512")
+
+    def test_t4_a_shake_passes(self):
+        self.check("T4 shake", "T4 shake=569,399,512")
+
+    def test_t5_no_tremor_drop_keeps_small_movement(self):
+        self.check("T5 controller", "T5 controller=523,399,512")
 
 
 if __name__ == "__main__":

@@ -191,7 +191,7 @@ extension XmbHost {
         return node
     }
 
-    /// On-Screen: the performance overlay and, while the touch pad is up, its layout.
+    /// On-Screen: the performance overlay and, while the touch pad is up, its layout; while the phone feeds the tilt, its recentre.
     private func onScreenNode(_ section: inout XmbSection, icon: XmbIcon) -> XmbNode {
         let store = XmbInGame.shared
         var rows: [XmbNode] = []
@@ -203,6 +203,10 @@ extension XmbHost {
         if store.touchLayout {
             rows.append(section.action(XmbNode(id: "ingame.osd.layout", title: String(localized: "Edit Touch Layout"), subtitle: nil, icon: icon,
                                                kind: .action)) { store.calls?.actions.touchLayout?() })
+        }
+        if store.recentreTilt {
+            rows.append(section.action(XmbNode(id: "ingame.osd.recentretilt", title: String(localized: "Recentre Tilt"), subtitle: nil, icon: icon,
+                                               kind: .action)) { store.calls?.actions.recentreTilt?() })
         }
         return XmbNode(id: "ingame.osd", title: String(localized: "On-Screen"), subtitle: nil, icon: icon, kind: .folder(rows))
     }

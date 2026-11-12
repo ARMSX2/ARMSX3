@@ -560,7 +560,12 @@ struct GameScreenView: View {
             friends: { friendsOpen = true },
             touchLayout: controllerConnected ? nil : {
                 layoutEditor = PadEditor(serial: game.serial, library: PadLayoutStore.shared.library)
-            })
+            },
+            recentreTilt: GamepadPoller.shared.phoneTilts ? {
+                let done = GamepadPoller.shared.recentreTilt()
+                setMenu(open: false)
+                shotBanner.present(done ? String(localized: "Tilt recentred") : String(localized: "Couldn't read the phone's tilt"))
+            } : nil)
     }
 
     // The XMB asks before a restart and before overwriting a slot, so these act at once.

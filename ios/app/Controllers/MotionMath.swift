@@ -84,6 +84,30 @@ enum MotionMath {
         return (fold(stick: stick, offset: offset), offset)
     }
 
+    // Hand movement shorter than this, in g, is tremor; a deliberate shake peaks far above it.
+    static let tremor = 0.15
+
+    // How far the grip tips the top edge away from upright, in radians, from gravity in the screen frame.
+    static func gripPitch(gravity g: (Double, Double, Double)) -> Double {
+        let pitch = atan2(-g.2, -g.1)
+        return pitch.isFinite ? pitch : 0
+    }
+
+    // Gravity and hand movement in the screen frame, in g, as the pad's acceleration: turned so the grip reads
+    // flat, and movement under `tremor` dropped.
+    static func shaped(gravity g: (Double, Double, Double), movement m: (Double, Double, Double),
+                       grip: Double, tremor: Double) -> (Double, Double, Double) {
+        let shaking = (m.0 * m.0 + m.1 * m.1 + m.2 * m.2).squareRoot() >= tremor
+        let tilt = pitched(g, by: -grip)
+        let move = shaking ? pitched(m, by: -grip) : (0, 0, 0)
+        return (tilt.0 + move.0, tilt.1 + move.1, tilt.2 + move.2)
+    }
+
+    // Turned about the pad's left-right axis; a positive angle tips the top edge away.
+    static func pitched(_ v: (Double, Double, Double), by angle: Double) -> (Double, Double, Double) {
+        (v.0, v.1 * cos(angle) - v.2 * sin(angle), v.1 * sin(angle) + v.2 * cos(angle))
+    }
+
     // Rounded and clamped to 0...1023.
     static func sixaxis(ax: Double, ay: Double, az: Double, yaw: Double) -> Sixaxis {
         func value(_ v: Double, rest: Double, scale: Double) -> UInt16 {

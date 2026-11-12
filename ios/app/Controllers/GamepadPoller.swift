@@ -32,6 +32,11 @@ import UIKit
         manager.deviceMotionUpdateInterval = 1.0 / 60
         return manager
     }()
+    // How far the player's grip tips the phone back, read as level. Stale until the next touch takes it again.
+    private var grip = 0.0
+    private var gripStale = true
+    private var gripOrientation: ScreenOrientation?
+    private var foregroundObserver: NSObjectProtocol?
     // Each slot's smoothed gyro offset, nil while that slot is not steered.
     private var steering: [(Double, Double)?] = Array(repeating: nil, count: PlayerSlots.count)
     static let keyboardKey = ControllerKey(category: "Keyboard", vendor: "", ordinal: 0)
@@ -77,6 +82,14 @@ import UIKit
         connectObserver = NotificationCenter.default.addObserver(forName: .GCControllerDidConnect, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { GamepadPoller.shared.setSystemGestures(.disabled) }
         }
+        grip = 0
+        gripStale = true
+        gripOrientation = nil
+        // Back from the background the phone was likely picked up again in another grip.
+        foregroundObserver = NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification,
+                                                                    object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { GamepadPoller.shared.gripStale = true }
+        }
     }
 
     func stop() {
@@ -84,6 +97,8 @@ import UIKit
         link = nil
         if let connectObserver { NotificationCenter.default.removeObserver(connectObserver) }
         connectObserver = nil
+        if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) }
+        foregroundObserver = nil
         setSystemGestures(.enabled)
         releasePads()
         moveOff()
@@ -188,7 +203,10 @@ import UIKit
             if phoneWanted { phone.startDeviceMotionUpdates() } else { phone.stopDeviceMotionUpdates() }
         }
         if phoneWanted, tiltOn(0), let sample = phone.deviceMotion {
-            motion[0] = inverted(Self.sixaxis(sample), slot: 0)
+            let orientation = Self.orientation()
+            if let previous = gripOrientation, previous != orientation { gripStale = true }
+            gripOrientation = orientation
+            motion[0] = inverted(Self.sixaxis(sample, grip: grip, orientation: orientation), slot: 0)
         }
         // A touch-pad player 1 is steered by the phone, handed only an offset.
         if !slots.playerOneHasController, setting != nil || steering[0] != nil {
@@ -330,11 +348,28 @@ import UIKit
         return value.applying(invertX: bits & 1 != 0, invertY: bits & 2 != 0)
     }
 
-    // Gravity plus user acceleration (a shake is signal), rotated into the screen frame.
-    private static func sixaxis(_ sample: CMDeviceMotion) -> Sixaxis {
-        let g = sample.gravity
-        let a = MotionMath.screenFrame(x: g.x + sample.userAcceleration.x, y: g.y + sample.userAcceleration.y,
-                                       z: g.z + sample.userAcceleration.z, orientation: orientation())
+    // While the phone feeds player 1's tilt, which is when Recentre Tilt does anything.
+    var phoneTilts: Bool { !slots.playerOneHasController && tiltOn(0) }
+
+    // The first touch after a game starts, returns from the background or rotates takes the grip.
+    func padTouched() {
+        if gripStale { recentreTilt() }
+    }
+
+    // Reads the phone's grip now as level; false while the phone reports no motion.
+    @discardableResult func recentreTilt() -> Bool {
+        guard phone.isDeviceMotionActive, let g = phone.deviceMotion?.gravity else { return false }
+        grip = MotionMath.gripPitch(gravity: MotionMath.screenFrame(x: g.x, y: g.y, z: g.z, orientation: Self.orientation()))
+        gripStale = false
+        return true
+    }
+
+    // Gravity and the hand's movement (a shake is signal, tremor is not), in the screen frame and levelled at the grip.
+    private static func sixaxis(_ sample: CMDeviceMotion, grip: Double, orientation: ScreenOrientation) -> Sixaxis {
+        let g = sample.gravity, m = sample.userAcceleration
+        let a = MotionMath.shaped(gravity: MotionMath.screenFrame(x: g.x, y: g.y, z: g.z, orientation: orientation),
+                                  movement: MotionMath.screenFrame(x: m.x, y: m.y, z: m.z, orientation: orientation),
+                                  grip: grip, tremor: MotionMath.tremor)
         let r = sample.rotationRate
         let length = (g.x * g.x + g.y * g.y + g.z * g.z).squareRoot()
         let yaw = length > 0 ? (r.x * g.x + r.y * g.y + r.z * g.z) / length : 0
