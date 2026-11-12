@@ -94,11 +94,11 @@ enum MotionMath {
     }
 
     // Gravity and hand movement in the screen frame, in g, as the pad's acceleration: turned so the grip reads
-    // flat, and movement under `tremor` dropped.
+    // flat, tilt scaled by `sensitivity` percent, and movement under `tremor` dropped. Movement is never scaled.
     static func shaped(gravity g: (Double, Double, Double), movement m: (Double, Double, Double),
-                       grip: Double, tremor: Double) -> (Double, Double, Double) {
+                       grip: Double, sensitivity: Int, tremor: Double) -> (Double, Double, Double) {
         let shaking = (m.0 * m.0 + m.1 * m.1 + m.2 * m.2).squareRoot() >= tremor
-        let tilt = pitched(g, by: -grip)
+        let tilt = scaled(pitched(g, by: -grip), percent: sensitivity)
         let move = shaking ? pitched(m, by: -grip) : (0, 0, 0)
         return (tilt.0 + move.0, tilt.1 + move.1, tilt.2 + move.2)
     }
@@ -106,6 +106,17 @@ enum MotionMath {
     // Turned about the pad's left-right axis; a positive angle tips the top edge away.
     static func pitched(_ v: (Double, Double, Double), by angle: Double) -> (Double, Double, Double) {
         (v.0, v.1 * cos(angle) - v.2 * sin(angle), v.1 * sin(angle) + v.2 * cos(angle))
+    }
+
+    // Roll from the horizon and pitch from flat, each multiplied and stopped at 90 degrees; the length is kept.
+    static func scaled(_ g: (Double, Double, Double), percent: Int) -> (Double, Double, Double) {
+        let k = Double(min(max(percent, 50), 200)) / 100
+        let length = (g.0 * g.0 + g.1 * g.1 + g.2 * g.2).squareRoot()
+        guard k != 1, length > 0, length.isFinite else { return g }
+        let limit = Double.pi / 2
+        let roll = min(max(asin(min(max(g.0 / length, -1), 1)) * k, -limit), limit)
+        let pitch = min(max(atan2(-g.2, -g.1) * k, -limit), limit)
+        return (length * sin(roll), -length * cos(roll) * cos(pitch), -length * cos(roll) * sin(pitch))
     }
 
     // Rounded and clamped to 0...1023.

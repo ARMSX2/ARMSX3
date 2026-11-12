@@ -483,6 +483,11 @@ private struct ControllersPlayerPage: View {
                                  systemImage: "arrow.left.and.right", isOn: tiltInvert(1))
                 OverlayToggleRow(controllerNavigationID: "settings.controllers.tiltinverty", label: "Invert Tilt Y",
                                  systemImage: "arrow.up.and.down", isOn: tiltInvert(2))
+                let key = String(model.player), sensitivity = SettingsStore.shared.controllerTiltSensitivity[key] ?? 100
+                LiveStepRow(navigationID: "settings.controllers.tiltsensitivity", label: "Tilt Sensitivity", systemImage: "dial.medium",
+                            value: "\(sensitivity)%",
+                            down: { SettingsStore.shared.controllerTiltSensitivity[key] = max(50, sensitivity - 10) },
+                            up: { SettingsStore.shared.controllerTiltSensitivity[key] = min(200, sensitivity + 10) })
             }
             OverlaySectionCard(title: String(localized: "Rumble")) {
                 ControllersRumbleRows(slot: model.player)
