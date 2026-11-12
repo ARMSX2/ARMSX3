@@ -45,6 +45,10 @@ namespace rsx
 	private:
 		context* m_ctx = nullptr;
 
+		// Programmable blending was wanted for the last draw but left off because not every color
+		// target the fragment program exports was bound (get_fragment_program_export_config).
+		bool m_programmable_blending_held = false;
+
 		void get_framebuffer_layout(rsx::framebuffer_creation_context context, framebuffer_layout& layout);
 
 		// Resolves the unscaled scissor region into draw_state.scissor. Can invalidate the framebuffer.

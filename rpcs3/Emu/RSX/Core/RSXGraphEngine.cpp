@@ -937,9 +937,35 @@ namespace rsx
 		{
 			expected_ctrl = m_ctx->program.fragment_program.ctrl & RSX_SHADER_CONTROL_PROGRAMMABLE_BLENDING;
 
-			if (m_ctx->graphics_state.test(rsx::pipeline_config_dirty))
+			if (m_ctx->graphics_state.test(rsx::pipeline_config_dirty) || m_programmable_blending_held)
 			{
 				evaluate_programmable_blending_state(m_ctx, expected_ctrl);
+			}
+
+			// It reads back one input per color target the program exports, so all of them have to be
+			// bound. A draw can lose some or all of them and keep its depth buffer, which the check above
+			// does not cover: no color writes (Ashes Cricket 2009 masks every channel with an alpha blend
+			// still on, and the Vulkan backend stopped on its "mrt_buffers_count == m_draw_buffers.size()"
+			// check), a target that fails the pitch check, or one aliasing the depth buffer. Such a draw
+			// blends in fixed function, and the next draw evaluates the state again, so the setting comes
+			// back once the targets do (pipeline_config_dirty is cleared at the end of this draw).
+			m_programmable_blending_held = false;
+
+			if (expected_ctrl & RSX_SHADER_CONTROL_PROGRAMMABLE_BLENDING)
+			{
+				const auto& layout = m_ctx->fb.layout;
+				u32 bound = 0;
+
+				for (const u8 index : rsx::utility::get_rtt_indexes(layout.target))
+				{
+					bound += layout.color_addresses[index] != 0;
+				}
+
+				if (bound != rsx::utility::get_mrt_buffers_count(REGS(m_ctx)->surface_color_target()))
+				{
+					expected_ctrl &= ~RSX_SHADER_CONTROL_PROGRAMMABLE_BLENDING;
+					m_programmable_blending_held = true;
+				}
 			}
 		}
 
