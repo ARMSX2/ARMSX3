@@ -664,21 +664,6 @@ namespace armsx3::bridge::title_config
 
 	// iOS-only rows, kept apart so the table above stays Android's entry for entry; tests check the two do not overlap.
 	inline constexpr local_override ios_only_overrides[] = {
-		// Black Ops was reported with a smeared viewmodel; no dump has been tested without this key.
-		{"BLUS30591", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLES01031", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLES01032", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLES01033", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLES01034", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLES01035", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLES01105", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLJM60286", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLJM60287", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"NPUB30584", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"NPEB00756", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"NPUB90430", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"NPEB90323", "Video:\n  Emulate Extended Depth Range: true\n"},
-
 		// Its SPU loop polls the decrementer, and loop detection lets it yield; per title because the global setting hurts other games.
 		{"NPUB30558", "Core:\n  SPU loop detection: true\n"},
 
