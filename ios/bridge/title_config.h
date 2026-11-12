@@ -676,6 +676,9 @@ namespace armsx3::bridge::title_config
 		{"BLES00713", "Core:\n  Pause Game During SPU Compilation: true\n  SPU Poll Park Sites: 3f47c:40801083\n"},
 		{"BLES00714", "Core:\n  Pause Game During SPU Compilation: true\n"},
 
+		// Cold starts sometimes freeze while SPU code compiles on demand; pausing the game during compiles stops it.
+		{"BCUS98174", "Core:\n  Pause Game During SPU Compilation: true\n"},
+
 		// Exact ZCULL stats make the torches flicker on iPhone; approximate stats stop it.
 		{"BLES00158", "Video:\n  Accurate ZCULL stats: false\n  Relaxed ZCULL Sync: false\n"},
 		{"BLUS30089", "Video:\n  Accurate ZCULL stats: false\n  Relaxed ZCULL Sync: false\n"},

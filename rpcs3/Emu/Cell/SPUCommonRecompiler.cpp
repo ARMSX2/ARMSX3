@@ -3272,8 +3272,13 @@ spu_recompiler_base::~spu_recompiler_base()
 // (ESRCH); the install, or the boot, then waits forever. It only happened while a raw SPU was
 // compiling new code, and a run with that code already cached went through (Odin 3, 10-19).
 // Holding every other guest thread for the length of the compile makes it take no time as far as
-// the game's threads can tell. The guest clock still moves: the JITs bake the timebase offset, so
-// winding it back is not safe.
+// the game's threads can tell.
+#ifdef __APPLE__
+// The guest clocks are wound back by the compile time while everyone is still held, so a game's
+// own timeouts do not see the compile either.
+void amend_guest_time_for_pause(u64 paused_us);
+#endif
+
 static spu_function_t compile_spu_llvm_paused(spu_thread& spu, const spu_program& program)
 {
 	static thread_local bool t_logged = false;
@@ -3283,7 +3288,14 @@ static spu_function_t compile_spu_llvm_paused(spu_thread& spu, const spu_program
 	// while we are parked, so the compiler is still only used by one thread at a time.
 	const auto func = cpu_thread::suspend_all(&spu, {}, [&]
 	{
+#ifdef __APPLE__
+		const u64 compile_start = get_system_time();
+		auto compiled = compile_spu_llvm_with_retry(spu.jit, program);
+		amend_guest_time_for_pause(get_system_time() - compile_start);
+		return compiled;
+#else
 		return compile_spu_llvm_with_retry(spu.jit, program);
+#endif
 	});
 
 	const u64 took = get_system_time() - start;
