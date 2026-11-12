@@ -228,6 +228,11 @@ import SwiftUI
         didSet { defaults.set(controllerTiltInvert, forKey: Self.key("controllerTiltInvert")) }
     }
 
+    /// Percent, by player. Clamped where it is applied.
+    var controllerTiltSensitivity: [String: Int] {
+        didSet { defaults.set(controllerTiltSensitivity, forKey: Self.key("controllerTiltSensitivity")) }
+    }
+
     var gyroStickTarget: [String: Int] {
         didSet { defaults.set(gyroStickTarget, forKey: Self.key("gyroStickTarget")) }
     }
@@ -335,6 +340,7 @@ import SwiftUI
         controllerPins = defaults.dictionary(forKey: Self.key("controllerPins")) as? [String: Int] ?? [:]
         controllerTiltOff = defaults.array(forKey: Self.key("controllerTiltOff")) as? [Int] ?? []
         controllerTiltInvert = defaults.dictionary(forKey: Self.key("controllerTiltInvert")) as? [String: Int] ?? [:]
+        controllerTiltSensitivity = defaults.dictionary(forKey: Self.key("controllerTiltSensitivity")) as? [String: Int] ?? [:]
         gyroStickTarget = defaults.dictionary(forKey: Self.key("gyroStickTarget")) as? [String: Int] ?? [:]
         gyroStickSensitivity = defaults.dictionary(forKey: Self.key("gyroStickSensitivity")) as? [String: Int] ?? [:]
         moveSlot = defaults.dictionary(forKey: Self.key("moveSlot")) as? [String: Int] ?? [:]

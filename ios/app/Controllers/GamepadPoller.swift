@@ -195,7 +195,7 @@ import UIKit
         var motion = Array(repeating: Sixaxis.rest, count: PlayerSlots.count)
         for (controller, _) in raw {
             guard let slot = self.slot(of: controller), tiltOn(slot), let sensors = controller.motion else { continue }
-            motion[slot] = inverted(sixaxis(sensors, of: controller), slot: slot)
+            motion[slot] = inverted(sixaxis(sensors, of: controller, sensitivity: tiltSensitivity(slot)), slot: slot)
         }
         // The phone feeds slot 0 only while no controller holds it, so the two never mix.
         let phoneWanted = !slots.playerOneHasController && (tiltOn(0) || setting != nil)
@@ -206,7 +206,7 @@ import UIKit
             let orientation = Self.orientation()
             if let previous = gripOrientation, previous != orientation { gripStale = true }
             gripOrientation = orientation
-            motion[0] = inverted(Self.sixaxis(sample, grip: grip, orientation: orientation), slot: 0)
+            motion[0] = inverted(Self.sixaxis(sample, grip: grip, sensitivity: tiltSensitivity(0), orientation: orientation), slot: 0)
         }
         // A touch-pad player 1 is steered by the phone, handed only an offset.
         if !slots.playerOneHasController, setting != nil || steering[0] != nil {
@@ -342,6 +342,10 @@ import UIKit
         !SettingsStore.shared.controllerTiltOff.contains(slot)
     }
 
+    private func tiltSensitivity(_ slot: Int) -> Int {
+        SettingsStore.shared.controllerTiltSensitivity[String(slot)] ?? 100
+    }
+
     // Invert Tilt X is bit 1 and Invert Tilt Y bit 2.
     private func inverted(_ value: Sixaxis, slot: Int) -> Sixaxis {
         let bits = SettingsStore.shared.controllerTiltInvert[String(slot)] ?? 0
@@ -365,11 +369,11 @@ import UIKit
     }
 
     // Gravity and the hand's movement (a shake is signal, tremor is not), in the screen frame and levelled at the grip.
-    private static func sixaxis(_ sample: CMDeviceMotion, grip: Double, orientation: ScreenOrientation) -> Sixaxis {
+    private static func sixaxis(_ sample: CMDeviceMotion, grip: Double, sensitivity: Int, orientation: ScreenOrientation) -> Sixaxis {
         let g = sample.gravity, m = sample.userAcceleration
         let a = MotionMath.shaped(gravity: MotionMath.screenFrame(x: g.x, y: g.y, z: g.z, orientation: orientation),
                                   movement: MotionMath.screenFrame(x: m.x, y: m.y, z: m.z, orientation: orientation),
-                                  grip: grip, tremor: MotionMath.tremor)
+                                  grip: grip, sensitivity: sensitivity, tremor: MotionMath.tremor)
         let r = sample.rotationRate
         let length = (g.x * g.x + g.y * g.y + g.z * g.z).squareRoot()
         let yaw = length > 0 ? (r.x * g.x + r.y * g.y + r.z * g.z) / length : 0
@@ -389,13 +393,14 @@ import UIKit
     }
 
     // shortcut: the DS3 axes and the negated yaw follow RPCS3's DualSense handler; GCMotion's axes are not measured.
-    private func sixaxis(_ sensors: GCMotion, of controller: GCController) -> Sixaxis {
+    // Raw acceleration counts as all tilt; no grip and no tremor drop, as a controller is held like a DS3.
+    private func sixaxis(_ sensors: GCMotion, of controller: GCController, sensitivity: Int) -> Sixaxis {
         activate(sensors, of: controller)
-        let a = sensors.hasGravityAndUserAcceleration
-            ? GCAcceleration(x: sensors.gravity.x + sensors.userAcceleration.x, y: sensors.gravity.y + sensors.userAcceleration.y,
-                             z: sensors.gravity.z + sensors.userAcceleration.z)
-            : sensors.acceleration
-        return MotionMath.sixaxis(ax: a.x, ay: a.y, az: a.z, yaw: -sensors.rotationRate.y)
+        let split = sensors.hasGravityAndUserAcceleration
+        let g = split ? sensors.gravity : sensors.acceleration
+        let m = split ? sensors.userAcceleration : GCAcceleration(x: 0, y: 0, z: 0)
+        let a = MotionMath.shaped(gravity: (g.x, g.y, g.z), movement: (m.x, m.y, m.z), grip: 0, sensitivity: sensitivity, tremor: 0)
+        return MotionMath.sixaxis(ax: a.0, ay: a.1, az: a.2, yaw: -sensors.rotationRate.y)
     }
 
     // Remembered so stop() switches them off, for the battery.
