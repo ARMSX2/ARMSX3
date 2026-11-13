@@ -15,13 +15,15 @@ enum MicState { case allowed, notAsked, off }
     let scope: SettingsScope
     // Players 1-4's mappings as the core last answered, updated here as each change is written.
     var mappings = Array(repeating: PlayerMapping(), count: PlayerSlots.count)
+    // Players 1-4's motion buttons, saved by the app since the core's file has no keys for them.
+    var motions = Array(repeating: [String: String](), count: PlayerSlots.count)
     // Whether the dump came from the title's own file.
     var perGame = false
     // Nil until answered; the Settings pane (scope .allGames) never asks.
     private(set) var scopeAnswer: SettingsScope?
     enum Question { case scope }
     var alert: Question?
-    @ObservationIgnored private var pending: (next: PlayerMapping, player: Int, op: String)?
+    @ObservationIgnored private var pending: (next: PlayerMapping, player: Int, op: String, motions: [String: String]?)?
     // The player whose page is open, or was open last.
     var player = 0
     var showsPlayer = false
@@ -128,12 +130,20 @@ enum MicState { case allowed, notAsked, off }
         capturing == key ? String(localized: "Press a button…") : mappings[player].source(key, keyboard: keyboardPlayer)
     }
 
+    // A motion row's bound element, or None.
+    func motionSource(_ gesture: MotionGesture) -> String {
+        motions[player][gesture.rawValue] ?? MotionBinding.none
+    }
+
     // A failed or garbled dump shows the defaults.
     func load() async {
         let (data, status) = await EmulatorSession.shared.inputConfigDump(serial: target)
         mappings = PlayerMapping.decode(status == 0 ? data : nil)
         let root = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
         perGame = status == 0 && root?["perGame"] as? Int == 1
+        motions = (0..<PlayerSlots.count).map {
+            MotionBinding.resolve(SettingsStore.shared.motionBindings, serial: target, perGame: perGame, player: $0)
+        }
         // The camera choice is global, so it is read from the All-games settings.
         let (settings, settingsStatus) = await EmulatorSession.shared.settingsDump(serial: nil)
         let cameraID = settingsStatus == 0 ? settings.flatMap(SettingsModel.decode)?.leaves
@@ -290,8 +300,22 @@ enum MicState { case allowed, notAsked, off }
         timeout?.cancel()
         KeyboardMouseFeed.shared.endCapture()
         let n = player ?? self.player
-        // A key swaps among keys.
-        commit(mappings[n].binding(key, to: source, keyboard: source.hasPrefix("Keyboard ")), player: n, op: "capture")
+        let keyboard = source.hasPrefix("Keyboard ")
+        if let gesture = MotionGesture(rawValue: key) {
+            let bound = MotionBinding.bind(gesture, to: source, mapping: mappings[n], motions: motions[n], keyboard: keyboard)
+            commit(bound.mapping, player: n, op: "motion", motions: bound.motions)
+            return
+        }
+        // A key swaps among keys, and takes its element from any motion that played it.
+        commit(mappings[n].binding(key, to: source, keyboard: keyboard), player: n, op: "capture",
+               motions: motions[n].filter { $0.value != source })
+    }
+
+    // The Clear row a touch user sees while a motion row waits for a press.
+    func clearMotion(_ gesture: MotionGesture, router: MenuControllerInputRouter?) {
+        router?.cancelButtonCapture()
+        captured(nil, for: gesture.rawValue)
+        commit(mappings[player], player: player, op: "motion", motions: motions[player].filter { $0.key != gesture.rawValue })
     }
 
     // The binding strings, then the four stick numbers.
@@ -305,16 +329,20 @@ enum MicState { case allowed, notAsked, off }
     }
 
     // A refused write re-reads the core, so the pane shows what it holds.
-    private func commit(_ next: PlayerMapping, player n: Int, op: String) {
+    private func commit(_ next: PlayerMapping, player n: Int, op: String, motions nextMotions: [String: String]? = nil) {
         // Not when the title has its own mapping: the poller loads that file, so a write for all games never reaches it.
         if scope == .game && scopeAnswer == nil && !perGame {
-            pending = (next, n, op)
+            pending = (next, n, op, nextMotions)
             alert = .scope
             return
         }
         let changes = zip(Self.values(mappings[n]), Self.values(next)).filter { $0.0.value != $0.1.value }.map { $0.1 }
         mappings[n] = next
         let serial = target
+        if let nextMotions, nextMotions != motions[n] {
+            motions[n] = nextMotions
+            SettingsStore.shared.motionBindings[MotionBinding.key(serial: serial, player: n)] = nextMotions
+        }
         let previous = writing
         writing = Task {
             await previous?.value
@@ -341,7 +369,7 @@ enum MicState { case allowed, notAsked, off }
         alert = nil
         guard let change = pending else { return }
         pending = nil
-        commit(change.next, player: change.player, op: change.op)
+        commit(change.next, player: change.player, op: change.op, motions: change.motions)
     }
 
     // Cancel on the scope question: the change is dropped, nothing is written, and the next change asks again.
@@ -375,6 +403,7 @@ enum MicState { case allowed, notAsked, off }
     func reset() {
         let n = player
         let serial = target
+        SettingsStore.shared.motionBindings[MotionBinding.key(serial: serial, player: n)] = nil
         let previous = writing
         writing = Task {
             await previous?.value
@@ -389,6 +418,7 @@ enum MicState { case allowed, notAsked, off }
     // The engine deletes the title's file (player -1); the pane and the poller re-read.
     func useAllGamesMapping() {
         guard let serial else { return }
+        SettingsStore.shared.motionBindings = SettingsStore.shared.motionBindings.filter { !$0.key.hasPrefix(serial + "/") }
         let previous = writing
         writing = Task {
             await previous?.value
@@ -488,6 +518,34 @@ private struct ControllersPlayerPage: View {
                             value: "\(sensitivity)%",
                             down: { SettingsStore.shared.controllerTiltSensitivity[key] = max(50, sensitivity - 10) },
                             up: { SettingsStore.shared.controllerTiltSensitivity[key] = min(200, sensitivity + 10) })
+            }
+            OverlaySectionCard(title: String(localized: "Motion")) {
+                Text("A button bound here plays that motion on the pad's tilt sensors while held. Press its button again to clear it.")
+                    .font(.subheadline)
+                    .foregroundStyle(OverlayTheme.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                ForEach(MotionGesture.allCases, id: \.self) { gesture in
+                    let key = gesture.rawValue, warm = model.capturing == key
+                    OverlayActionRow(controllerNavigationID: ControllersPaneView.navigationID(key), label: key,
+                                     trailingValue: warm ? model.trailing(key)
+                                        : dynamicTypeSize.isAccessibilitySize ? model.motionSource(gesture) : nil,
+                                     keepsTrailingValue: true) {
+                        model.startCapture(key, router: router)
+                    }
+                    .transformEnvironment(\.controllerTextAppearance) { if warm { $0.secondaryColor = OverlayTheme.warm } }
+                    .overlay(alignment: .trailing) {
+                        if !warm && !dynamicTypeSize.isAccessibilitySize {
+                            ControllerElementGlyph(name: model.motionSource(gesture), controller: playerController)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    if warm {
+                        OverlayActionRow(controllerNavigationID: "settings.controllers.motionclear", label: "Clear",
+                                         systemImage: "xmark.circle") {
+                            model.clearMotion(gesture, router: router)
+                        }
+                    }
+                }
             }
             OverlaySectionCard(title: String(localized: "Rumble")) {
                 ControllersRumbleRows(slot: model.player)

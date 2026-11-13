@@ -55,6 +55,46 @@ let g4a = MotionMath.steer(stick: quiet, rateX: 0.2, rateY: 0, setting: small, p
 let g4b = MotionMath.steer(stick: centred, rateX: 0.2, rateY: 0, setting: small, previous: (0, 0)).stick
 print("G4 order=\(g4a == g4b && g4b.0 != 128)")
 
+func play(_ p: MotionPlayback, _ now: Double) -> String {
+    let s = p.sample(at: now)
+    let pad = MotionMath.sixaxis(ax: s.0, ay: s.1, az: s.2, yaw: s.3)
+    return "\(pad.x),\(pad.y),\(pad.z),\(pad.g)"
+}
+var idle = MotionPlayback()
+idle.update(pressed: [], at: 0)
+print("M1 idle=\(idle.active(at: 0))")
+var tilt = MotionPlayback()
+tilt.update(pressed: [.tiltLeft], at: 0)
+print("M2 tiltLeft=\(play(tilt, 0))")
+tilt.update(pressed: [.tiltForward], at: 0)
+print("M3 tiltForward=\(play(tilt, 0))")
+var turn = MotionPlayback()
+turn.update(pressed: [.turnLeft], at: 0)
+print("M4 turnLeft=\(play(turn, 0))")
+var flick = MotionPlayback()
+flick.update(pressed: [.flickUp], at: 0)
+flick.update(pressed: [], at: 0.016)
+print("M5 flick=\(play(flick, 0.03))|\(play(flick, 0.1))|\(flick.active(at: 0.1)),\(flick.active(at: 0.2))")
+var shake = MotionPlayback()
+shake.update(pressed: [.shake], at: 1)
+print("M6 shake=\(play(shake, 1.0125))")
+let bound = MotionBinding.bind(.shake, to: "Button A", mapping: PlayerMapping(), motions: [:], keyboard: false)
+print("M7 bind=\(bound.mapping.source("Cross")),\(bound.motions)")
+let again = MotionBinding.bind(.shake, to: "Button A", mapping: bound.mapping, motions: bound.motions, keyboard: false)
+print("M8 again=\(again.motions.isEmpty),\(again.mapping.source("Cross"))")
+let moved = MotionBinding.bind(.tiltLeft, to: "Button A", mapping: bound.mapping, motions: bound.motions, keyboard: false)
+print("M9 moved=\(moved.motions)")
+let pressed = MotionBinding.pressed(reading: ["Button A": 0.6, "Right Trigger": 0.4],
+                                    bindings: ["Shake": "Button A", "Turn Left": "Right Trigger"])
+print("M10 pressed=\(pressed.map(\.rawValue).sorted())")
+let store = ["0": ["Shake": "Button X"], "BLUS1/0": ["Turn Left": "Button Y"]]
+let own = MotionBinding.resolve(store, serial: "BLUS1", perGame: false, player: 0)
+let shared = MotionBinding.resolve(store, serial: "BLUS2", perGame: false, player: 0)
+let fileOnly = MotionBinding.resolve(store, serial: "BLUS2", perGame: true, player: 0)
+let global = MotionBinding.resolve(store, serial: nil, perGame: false, player: 0)
+print("M11 resolve=\(own),\(shared),\(fileOnly),\(global)")
+print("M12 keyboardNone=\(bound.mapping.source("Cross", keyboard: true))")
+
 var v = MovePointer()
 print("V1 centre=\(v.stick.0),\(v.stick.1)")
 v.integrate(yawRate: 1, pitchRate: 0, dt: 0.5)
@@ -147,6 +187,43 @@ class TheMotionHolds(unittest.TestCase):
 
     def test_g4_the_gyro_is_added_after_the_deadzone(self):
         self.check("G4 order", "G4 order=true")
+
+    # Motion buttons: Android's gestures, one action per element, and where the bindings are read from.
+    def test_m1_nothing_held_plays_nothing(self):
+        self.check("M1 idle", "M1 idle=false")
+
+    def test_m2_tilt_left_rolls_50_degrees(self):
+        self.check("M2 tiltLeft", "M2 tiltLeft=425,439,512,512")
+
+    def test_m3_tilt_forward_pitches_50_degrees(self):
+        self.check("M3 tiltForward", "M3 tiltForward=512,439,425,512")
+
+    def test_m4_turn_left_is_3_rad_a_second(self):
+        self.check("M4 turnLeft", "M4 turnLeft=512,399,512,277")
+
+    def test_m5_a_flick_pushes_then_stops_and_ends_after_140_ms(self):
+        self.check("M5 flick", "M5 flick=512,117,512,512|512,602,512,512|true,false")
+
+    def test_m6_a_shake_wobbles_x_at_2_5_g(self):
+        self.check("M6 shake", "M6 shake=312,399,512,512")
+
+    def test_m7_a_motion_takes_its_element_from_a_button(self):
+        self.check("M7 bind", 'M7 bind=None,["Shake": "Button A"]')
+
+    def test_m8_binding_the_same_element_again_clears_it(self):
+        self.check("M8 again", "M8 again=true,None")
+
+    def test_m9_a_motion_takes_its_element_from_another_motion(self):
+        self.check("M9 moved", 'M9 moved=["Tilt Left": "Button A"]')
+
+    def test_m10_held_past_halfway_plays(self):
+        self.check("M10 pressed", 'M10 pressed=["Shake"]')
+
+    def test_m11_a_title_set_wins_and_a_title_file_hides_the_shared_set(self):
+        self.check("M11 resolve", 'M11 resolve=["Turn Left": "Button Y"],["Shake": "Button X"],[:],["Shake": "Button X"]')
+
+    def test_m12_none_holds_for_the_keyboard_too(self):
+        self.check("M12 keyboardNone", "M12 keyboardNone=None")
 
     # The PS Move's pointer.
     def test_v1_a_fresh_pointer_is_centred(self):
