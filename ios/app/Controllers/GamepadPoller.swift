@@ -24,6 +24,8 @@ import UIKit
     var mappings = Array(repeating: PlayerMapping(), count: PlayerSlots.count)
     var motionBindings = Array(repeating: [String: String](), count: PlayerSlots.count)
     private var playback = Array(repeating: MotionPlayback(), count: PlayerSlots.count)
+    // The touch pad's motion pieces held now; they play for player 1 while the touch pad holds it.
+    var touchGestures = Set<MotionGesture>()
     private(set) var serial: String?
     private var lastMotion: [Sixaxis?] = Array(repeating: nil, count: PlayerSlots.count)
     // stop() switches these sensors off again, for the battery.
@@ -207,6 +209,7 @@ import UIKit
             steerTouchPad(rateX: rate.0, rateY: rate.1, setting: phoneWanted ? setting : nil)
         }
         // A motion button takes over its player's sensors while it plays, uninverted.
+        if !slots.playerOneHasController { gestures[0].formUnion(touchGestures) }
         let now = CACurrentMediaTime()
         for slot in playback.indices {
             playback[slot].update(pressed: gestures[slot], at: now)

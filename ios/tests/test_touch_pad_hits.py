@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """PadHitTest.swift, run on the Mac host over art laid out from the pad's size constants, gives each button a region
 of at least 44 pt, lets a finger slide and chord within its cluster and keeps fingers apart; static checks pin the
-one touch view's sends, haptic and highlight. It says nothing about how the pad feels under a thumb."""
+one touch view's sends, haptics and highlight. It says nothing about how the pad feels under a thumb."""
 
 import re
 import tempfile
@@ -172,9 +172,13 @@ def text_problems(hits, pad):
 
     apply = block(pad_code, r"private\s+func\s+apply\(")
     pressed = apply.find("if !change.pressed.isEmpty {")
-    if pad_code.count("impactOccurred(") != 1 or pressed == -1 \
+    motions = block(pad_code, r"private\s+func\s+applyMotions\(")
+    motion_pressed = motions.find("if pressed {")
+    if pad_code.count("impactOccurred(") != 2 or pressed == -1 \
             or "impactOccurred(" not in apply[slice(*brace_span(apply, pressed))]:
-        problems.append("haptic: the pad's one impactOccurred( is not inside `if !change.pressed.isEmpty {` in apply")
+        problems.append("haptic: the pad's button impactOccurred( is not inside `if !change.pressed.isEmpty {` in apply")
+    if motion_pressed == -1 or "impactOccurred(" not in motions[slice(*brace_span(motions, motion_pressed))]:
+        problems.append("haptic: the motion pieces' impactOccurred( is not inside `if pressed {` in applyMotions")
     began = block(pad_code, r"override\s+func\s+touchesBegan\b")
     if "PadTouches.shared.prepare()" not in began or began.find("prepare()") > began.find("touch(began:"):
         problems.append("haptic: touchesBegan does not prepare the generator before the touch is applied")
