@@ -412,7 +412,8 @@ private fun xmbConfigDbNode(): XmbNode {
         @Suppress("UNUSED_EXPRESSION") revision.intValue
         if (serial == null || entries.isEmpty()) return@Folder listOf(XmbNode.Action("configdb.none", none, icon) {})
         val ignored = com.armsx2.config.ConfigDatabase.ignoredFor(serial)
-        val yours = com.armsx2.config.CoreSettingOverrides.load(com.armsx2.config.SettingsScope.Game, serial).keys
+        // Includes the frame-limit nodes while a Display FPS Cap is set: the core skips those too
+        val yours = com.armsx2.config.ConfigDatabase.ownedKeys(serial)
         entries.map { (path, value) ->
             val withheld = path in ignored || path in yours
             XmbNode.Setting(
@@ -424,7 +425,7 @@ private fun xmbConfigDbNode(): XmbNode {
                     if (applyThis) {
                         com.armsx2.config.CoreSettingOverrides.forget(com.armsx2.config.SettingsScope.Game, serial, path)
                     }
-                    val now = com.armsx2.config.CoreSettingOverrides.load(com.armsx2.config.SettingsScope.Game, serial).keys
+                    val now = com.armsx2.config.ConfigDatabase.ownedKeys(serial)
                     com.armsx2.config.ConfigDatabase.writeUserKeys(serial, now)
                     revision.intValue++
                 },

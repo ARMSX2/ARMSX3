@@ -510,6 +510,28 @@ object ConfigDatabase {
         return out
     }
 
+    /**
+     * The database keys this title's own configuration owns: the core edits made for it in All
+     * Core Settings and, while a Display FPS Cap is set, the two frame-limit nodes that row writes.
+     *
+     * A cap is the user's choice like any core edit, so the database must not land a different
+     * limit over it at boot. Sly Cooper: Thieves in Time's entry sets Frame limit 60, and a 30 cap
+     * read 60 on every launch until the row was touched in game (issue #278). "Off" sets no cap of
+     * ARMSX3's own, so there the database's limit still applies.
+     *
+     * [fpsLimit] is the cap being applied when the caller has it (the boot push); otherwise this
+     * title's resolved settings are read.
+     */
+    fun ownedKeys(settingsKey: String?, fpsLimit: Int? = null): Set<String> {
+        val title = settingsKey?.trim().orEmpty()
+        if (title.isEmpty()) return emptySet()
+        val edits = runCatching { CoreSettingOverrides.load(SettingsScope.Game, title).keys }.getOrDefault(emptySet())
+        val cap = fpsLimit ?: runCatching { ConfigStore.resolveForGame(title).fpsLimit }.getOrDefault(0)
+        return if (cap != 0) edits + FRAME_LIMIT_KEYS else edits
+    }
+
+    private val FRAME_LIMIT_KEYS = setOf("Video@@Frame limit", "Video@@Second Frame Limit")
+
     /** Keys of a title's database entry the user switched off. */
     fun ignoredFor(serial: String?): Set<String> {
         val title = serial?.trim().orEmpty()

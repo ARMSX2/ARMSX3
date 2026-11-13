@@ -1940,8 +1940,8 @@ private fun DatabaseSection() {
     // A key can be withheld from the core two ways and only one of them is this card's switch:
     // the core also skips any key you have set for this game yourself, so a row could read "on"
     // while the core kept skipping it and nothing on screen said why. Fold both into one switch.
-    fun ownValues() = com.armsx2.config.CoreSettingOverrides
-        .load(com.armsx2.config.SettingsScope.Game, serial).keys
+    // Includes the frame-limit nodes while a Display FPS Cap is set: the core skips those too.
+    fun ownValues() = com.armsx2.config.ConfigDatabase.ownedKeys(serial)
 
     var ignored by remember(serial) {
         mutableStateOf(com.armsx2.config.ConfigDatabase.ignoredFor(serial))

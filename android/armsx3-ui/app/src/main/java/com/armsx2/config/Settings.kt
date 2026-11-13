@@ -1533,7 +1533,8 @@ data class Settings(
         // also sets is written and then immediately overwritten, with nothing on screen to say so.
         runCatching {
             val key = MainActivityRuntime.currentGame.value?.settingsKey
-            ConfigDatabase.writeUserKeys(key, CoreSettingOverrides.load(SettingsScope.Game, key).keys)
+            // Includes the frame-limit nodes while a Display FPS Cap is set (see ownedKeys, #278)
+            ConfigDatabase.writeUserKeys(key, ConfigDatabase.ownedKeys(key, fpsLimit))
         }
         NativeApp.commitSettings()
     }
