@@ -188,7 +188,12 @@ object XmbMediaCache {
 @Composable
 fun XmbGameBackdrop(node: XmbNode?) {
     val game = (node as? XmbNode.Game)?.takeIf { XmbMode.gameBackgrounds.value }
-    val pic1 by produceState<File?>(null, game?.key) {
+    // Keyed on the media folder too: the game nodes are built before the media lookup finishes
+    // and built again, same key, once it has. Keyed on the game alone, the game focused at
+    // startup looked before its folder was known, found nothing, and showed the wave until the
+    // cursor left and came back, while its SND0 (looked up again when the boot animation ends)
+    // played. Same for the music and ICON1 below.
+    val pic1 by produceState<File?>(null, game?.key, game?.mediaDir) {
         value = withContext(Dispatchers.IO) { XmbMedia.pic1(game?.mediaDir) }
     }
     Crossfade(targetState = pic1, animationSpec = tween(700), label = "xmb-pic1") { file ->
@@ -221,7 +226,7 @@ fun XmbSnd0Preview(controller: XmbController) {
     // (once they are paused, it may).
     val listening = com.armsx2.LibraryMusic.listening() && !com.armsx2.LibraryMusic.userPaused.value
     val quiet = controller.busy || controller.levels.isNotEmpty() || XmbMode.booting.value || !resumed || !XmbMode.gameMusic.value || listening
-    androidx.compose.runtime.LaunchedEffect(node?.key, quiet) {
+    androidx.compose.runtime.LaunchedEffect(node?.key, node?.mediaDir, quiet) {
         if (node == null || quiet) return@LaunchedEffect
         // SND0, or failing that the animated icon's own sound, which starts with the icon.
         val snd0 = withContext(Dispatchers.IO) { XmbMedia.snd0(node.mediaDir) }

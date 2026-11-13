@@ -566,7 +566,7 @@ private fun ColumnItems(
             ) {
                 // The focused game plays its ICON1, as on the console.
                 val pam = if (isGame && isCurrent && i == focus && controller.levels.isEmpty() && XmbMode.animatedIcons.value) {
-                    remember(node.key) { XmbMedia.icon1((node as XmbNode.Game).mediaDir) }
+                    remember(node.key, (node as XmbNode.Game).mediaDir) { XmbMedia.icon1((node as XmbNode.Game).mediaDir) }
                 } else {
                     null
                 }
