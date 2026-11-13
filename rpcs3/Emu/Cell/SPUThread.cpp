@@ -3057,67 +3057,6 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
 		}
 	}
 
-	// Code-sized transfers, which is how a SPURS workload would arrive.
-	//
-	// The previous version of this filtered on lsa >= 0x30000 and capped at 64 lines -- and the cap
-	// filled inside one second on top-of-LS polling noise (0x3f600/0x3f700 descriptors, 0x3f800
-	// save area), leaving no visibility afterwards. That is a blind spot, not evidence: Borderlands
-	// 2's wake-up lives at pc 0x32038 and NO block is ever built at or above 0x30000 across five
-	// captures, so the code never RUNS, but whether it is ever FETCHED was never actually observed.
-	//
-	// Filter by size instead. A workload image is kilobytes; the polling descriptors are 0x80. This
-	// keeps the budget for transfers that could plausibly be code, wherever they land.
-	// The two SPURS control-block bytes that differ from x86, tracked over time.
-	//
-	// Captured at the same instant x86 issues the overlay GET, its control block differs from ours
-	// at exactly two of 128 bytes: +0x73 (the idle bitmap, which merely says WHICH kernel is
-	// running -- 0x17 here vs 0x1d there, both four-idle-one-running, so not a cause) and +0x04,
-	// where we hold 0x01 and x86 holds 0x00. +0x24 is 0x01 on both, so these read as parallel
-	// per-slot fields and we have an extra one set.
-	//
-	// The two snapshots came from different lifecycle moments, so a single comparison cannot say
-	// whether our 0x01 is a stuck flag or a normal transient. Logging it on CHANGE answers that
-	// without another round trip: a value that is set once and never clears while the kernels spin
-	// for minutes is a stuck flag, and a stuck per-workload flag would explain why selection never
-	// picks the workload whose overlay contains the wake-up.
-	if (_this && _this->spurs_addr && _this->spurs_addr < 0xfffffff0 && vm::check_addr(_this->spurs_addr, vm::page_readable, 0x80)) [[unlikely]]
-	{
-		// Key on (control block, +0x04) and log each combination once.
-		//
-		// The first attempt packed +0x04 together with +0x73 and shared one last-value across every
-		// SPU. Both were wrong: +0x73 is the idle bitmap and churns constantly as kernels rotate, so
-		// it ate the whole budget while +0x04 never moved; and the two SPURS groups have DIFFERENT
-		// control blocks (PhysWISE 0x1866b80, CompPatch 0x1867b80), so sampling each thread's own
-		// spurs_addr against one shared previous value made unrelated blocks look like transitions.
-		// Keying on the address and the byte of interest survives both.
-		static atomic_t<u32> s_ctl_n{0};
-		static shared_mutex s_ctl_mtx;
-		static std::array<u64, 32> s_ctl_seen{};
-
-		const u8* const ctl = static_cast<const u8*>(vm::base(_this->spurs_addr));
-		const u64 key = (u64{_this->spurs_addr} << 8) | ctl[0x04];
-
-		bool fresh = false;
-		{
-			std::lock_guard lock(s_ctl_mtx);
-
-			const u32 n = s_ctl_n.load();
-
-			if (n < 32 && std::find(s_ctl_seen.begin(), s_ctl_seen.begin() + n, key) == s_ctl_seen.begin() + n)
-			{
-				s_ctl_seen[n] = key;
-				s_ctl_n.store(n + 1);
-				fresh = true;
-			}
-		}
-
-		if (fresh)
-		{
-			spu_log.warning("SPURS ctl: block=0x%08x +0x04=0x%02x (+0x73=0x%02x) thread='%s'",
-				_this->spurs_addr, ctl[0x04], ctl[0x73], *_this->spu_tname.load());
-		}
-	}
-
 	// Registers at the last DMA both hosts issue in common.
 	//
 	// The overlay loader at pc=0x0451c pulls a job in as ten chunks, byte-identical on both hosts,
@@ -3182,24 +3121,32 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
 		// port-20 job at 0x32038, which is in neither range.
 		const u64 shape = lsa;
 
-		bool fresh = false;
+		// Look without the lock first: entries are only appended, each written before the count
+		// that publishes it, so the first `seen` are safe to read. Only a destination not seen yet
+		// takes the lock. Taking it on every GET that passed the filter queued the SPU threads on it.
+		const u32 seen = s_shapes.load();
+
+		if (seen < 64 && std::find(s_shape.begin(), s_shape.begin() + seen, shape) == s_shape.begin() + seen)
 		{
-			std::lock_guard lock(s_shape_mtx);
-
-			const u32 n = s_shapes.load();
-
-			if (n < 64 && std::find(s_shape.begin(), s_shape.begin() + n, shape) == s_shape.begin() + n)
+			bool fresh = false;
 			{
-				s_shape[n] = shape;
-				s_shapes.store(n + 1);
-				fresh = true;
-			}
-		}
+				std::lock_guard lock(s_shape_mtx);
 
-		if (fresh)
-		{
-			spu_log.warning("SPU code-sized GET: lsa=0x%05x eal=0x%08x size=0x%x tag=%u thread='%s'",
-				lsa, eal, args.size, +args.tag, *_this->spu_tname.load());
+				const u32 n = s_shapes.load();
+
+				if (n < 64 && std::find(s_shape.begin(), s_shape.begin() + n, shape) == s_shape.begin() + n)
+				{
+					s_shape[n] = shape;
+					s_shapes.store(n + 1);
+					fresh = true;
+				}
+			}
+
+			if (fresh)
+			{
+				spu_log.warning("SPU code-sized GET: lsa=0x%05x eal=0x%08x size=0x%x tag=%u thread='%s'",
+					lsa, eal, args.size, +args.tag, *_this->spu_tname.load());
+			}
 		}
 	}
 
