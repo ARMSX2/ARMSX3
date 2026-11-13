@@ -10,6 +10,9 @@
 #include "Emu/RSX/rsx_profiler.h"
 #include "vkutils/buffer_object.h"
 #include "vkutils/chip_class.h"
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+#include "ios_jit_dual_map.h"
+#endif
 #include <vulkan/vulkan_core.h>
 
 #include "Emu/RSX/NV47/HW/context_accessors.define.h"
@@ -1431,6 +1434,17 @@ bool VKGSRender::resolve_sampler_state(rsx::flags32_t& invalidated_programs)
 
 		m_current_frame->flags &= ~frame_context_state::dirty;
 	}
+
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+	// At its 128 MiB ceiling a full upload ring can only swap mid-upload, and holding two gets 4 GB iPhones killed
+	static u64 s_upload_ring_reclaim_frame = umax;
+	if (utils::low_memory_device() && m_texture_upload_buffer_ring_info.size() >= 128 * 0x100000 &&
+		m_texture_upload_buffer_ring_info.needs_room(32 * 0x100000) && s_upload_ring_reclaim_frame != vk::get_current_frame_id())
+	{
+		s_upload_ring_reclaim_frame = vk::get_current_frame_id();
+		flush_command_queue(true);
+	}
+#endif
 
 	invalidated_programs = load_texture_env();
 	return true;

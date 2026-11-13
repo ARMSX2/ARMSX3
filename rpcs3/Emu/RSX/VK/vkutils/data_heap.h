@@ -107,6 +107,10 @@ namespace vk
 		// Properties
 		bool is_dirty() const;
 		bool has_shadow() const { return !!shadow; }
+#ifdef __APPLE__
+		// True when size bytes would only fit by growing or swapping the heap
+		bool needs_room(usz size) const { return !can_alloc<256>(size); }
+#endif
 	};
 
 	extern data_heap* get_upload_heap();
