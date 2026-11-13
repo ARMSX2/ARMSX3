@@ -29,6 +29,16 @@ if(USE_ASAN)
     set_source_files_properties(../../Utilities/Thread.cpp PROPERTIES COMPILE_DEFINITIONS USE_ASAN)
 endif()
 
+# ARMSX3: native SPU programs must round every float step on its own, exactly as the recompiled SPU code
+# does (SPUNativeCode.h). They run on SPU threads, which flush denormals to zero (FPCR.FZ): without telling
+# the compiler, it turns a float compare with zero into a bit test, which counts a denormal as non-zero
+# where the hardware compare does not.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set_source_files_properties(Cell/SPUNativeCode.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off;-fno-fast-math;-fdenormal-fp-math=preserve-sign")
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    set_source_files_properties(Cell/SPUNativeCode.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off;-fno-fast-math")
+endif()
+
 # GCC overemits weak type information when using LTO
 # This causes an issue with LLVM 22 which is build without RTTI
 # Issue is specifically related to vfs::ProxyFileSystem
@@ -212,6 +222,8 @@ target_sources(rpcs3_emu PRIVATE
     Cell/SPUInterpreter.cpp
     Cell/SPUCommonRecompiler.cpp
     Cell/SPULLVMRecompiler.cpp
+    Cell/SPUNativeCode.cpp
+    Cell/SPUNativePrograms.cpp
     Cell/SPUThread.cpp
     Cell/lv2/lv2.cpp
     Cell/lv2/sys_bdemu.cpp

@@ -22,6 +22,7 @@ bool spu_is_killzone3(); // SPUThread.cpp
 #include "SPUThread.h"
 #include "SPUAnalyser.h"
 #include "SPUInterpreter.h"
+#include "SPUNativePrograms.h"
 #include <algorithm>
 #include <thread>
 
@@ -257,6 +258,9 @@ class spu_llvm_recompiler : public spu_recompiler_base, public cpu_translator
 
 	// Module name
 	std::string m_hash;
+
+	// ARMSX3: the program being compiled runs a native version when it can (SPUNativePrograms.h)
+	bool m_hooked = false;
 
 #ifdef __APPLE__
 	std::vector<std::pair<u32, u32>> m_poll_park_sites;
@@ -2067,6 +2071,16 @@ public:
 			m_hash_start = hash_start;
 		}
 
+		// A listed program (SPUNativePrograms.h) calls entry() there once its entry check passes. It gets a
+		// name of its own: the persistent object cache is keyed by name and must never hand back an object
+		// built without the hook.
+		m_hooked = spu_native::is_hooked(m_hash.c_str());
+
+		if (m_hooked)
+		{
+			m_hash += "-hooked";
+		}
+
 #ifdef ARCH_ARM64
 		m_use_tbl2 = !g_spu_llvm_compile_context || g_spu_llvm_compile_context->use_tbl2;
 
@@ -3030,23 +3044,44 @@ public:
 
 		// Call the entry function chunk
 		const auto entry_chunk = add_function(m_pos);
-		const auto entry_call = m_ir->CreateCall(entry_chunk->chunk, {m_thread, m_lsptr, m_base_pc});
-		entry_call->setCallingConv(entry_chunk->chunk->getCallingConv());
 
 		const auto dispatcher = llvm::cast<llvm::Function>(m_module->getOrInsertFunction("spu_dispatcher", main_func->getType()).getCallee());
 		m_engine->updateGlobalMapping("spu_dispatcher", reinterpret_cast<u64>(spu_runtime::tr_all));
 		dispatcher->setCallingConv(main_func->getCallingConv());
 
-		// Proceed to the next code
-		if (entry_chunk->chunk->getReturnType() != get_type<void>())
+		if (m_hooked)
 		{
-			const auto next_call = m_ir->CreateCall(main_func->getFunctionType(), entry_call, {m_thread, m_lsptr, m_ir->getInt64(0)});
+			// The hook may run a native version in place of the translated code (still built): then it
+			// returns 0x80000000 | the address to continue at, and the dispatcher carries on from there as
+			// after any indirect branch. Otherwise it returns 0 and the translated code runs as usual.
+			const auto hook = call("spu_native_entry", &spu_native::entry, m_thread, m_lsptr, m_ir->getInt32(start0), m_ir->getInt64(m_hash_start));
+			const auto native_ran = llvm::BasicBlock::Create(m_context, "", m_function);
+			const auto translated = llvm::BasicBlock::Create(m_context, "", m_function);
+			m_ir->CreateCondBr(m_ir->CreateICmpSLT(hook, m_ir->getInt32(0)), native_ran, translated, m_md_unlikely);
+			m_ir->SetInsertPoint(native_ran);
+			m_ir->CreateStore(m_ir->CreateAnd(hook, 0x3fffc), spu_ptr(&spu_thread::pc));
+			const auto next_call = m_ir->CreateCall(main_func->getFunctionType(), dispatcher, {m_thread, m_lsptr, m_ir->getInt64(0)});
 			next_call->setCallingConv(main_func->getCallingConv());
 			next_call->setTailCall();
+			m_ir->CreateRetVoid();
+			m_ir->SetInsertPoint(translated);
 		}
-		else
+
 		{
-			entry_call->setTailCall();
+			const auto entry_call = m_ir->CreateCall(entry_chunk->chunk, {m_thread, m_lsptr, m_base_pc});
+			entry_call->setCallingConv(entry_chunk->chunk->getCallingConv());
+
+			// Proceed to the next code
+			if (entry_chunk->chunk->getReturnType() != get_type<void>())
+			{
+				const auto next_call = m_ir->CreateCall(main_func->getFunctionType(), entry_call, {m_thread, m_lsptr, m_ir->getInt64(0)});
+				next_call->setCallingConv(main_func->getCallingConv());
+				next_call->setTailCall();
+			}
+			else
+			{
+				entry_call->setTailCall();
+			}
 		}
 
 		m_ir->CreateRetVoid();
