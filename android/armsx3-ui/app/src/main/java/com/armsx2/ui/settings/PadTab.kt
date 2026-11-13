@@ -1368,6 +1368,76 @@ internal fun GyroSection(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        // SIXAXIS's level pose (issue #280): upright and facing the player unless set, and then the pose
+        // the player held the device in when they pressed this (Sixaxis.captureNeutral). Read from the
+        // device's own sensors, so it works here and in the pause menu alike.
+        val neutralSet = remember { mutableStateOf(com.armsx2.input.Sixaxis.neutralIsSet()) }
+        val neutralNote = remember { mutableStateOf<String?>(null) }
+        val neutralFailed = str("pad.sixaxisNeutral.failed")
+        val setNeutral: () -> Unit = {
+            com.armsx2.input.Sixaxis.captureNeutral(ctx) { ok ->
+                neutralSet.value = com.armsx2.input.Sixaxis.neutralIsSet()
+                neutralNote.value = if (ok) null else neutralFailed
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(rowAura())
+                .clickable(onClick = setNeutral)
+                .controllerFocusable(controllerId = "pad-sixaxis-neutral", onConfirm = setNeutral)
+                .padding(horizontal = 6.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    str("pad.sixaxisNeutral.label"),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    neutralNote.value ?: str("pad.sixaxisNeutral.description"),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Text(
+                if (neutralSet.value) str("pad.sixaxisNeutral.custom") else str("pad.sixaxisNeutral.upright"),
+                color = Colors.pasx2_blue,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        if (neutralSet.value) {
+            val resetNeutral: () -> Unit = {
+                com.armsx2.input.Sixaxis.resetNeutral()
+                neutralSet.value = false
+                neutralNote.value = null
+            }
+            Spacer(Modifier.height(6.dp))
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(rowAura())
+                    .clickable(onClick = resetNeutral)
+                    .controllerFocusable(controllerId = "pad-sixaxis-neutral-reset", onConfirm = resetNeutral)
+                    .padding(horizontal = 6.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Text(
+                    str("pad.sixaxisNeutral.reset"),
+                    color = Colors.pasx2_blue,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
         val gyroMode = ControllerMappings.gyroModeScope(editSerial)
         SegmentedRow(
             label = str("pad.gyro.mode.label"),

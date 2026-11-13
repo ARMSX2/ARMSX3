@@ -111,6 +111,32 @@ fun xmbControllerMappingNode(): XmbNode {
         }
     }
 
+    // SIXAXIS's level pose (issue #280), at the top of the motion list, as in the Controls screen's
+    // gyro section: Cross takes the pose the device is held in now, Triangle offers going back to
+    // upright. The revision is read inside the list so it rebuilds when a capture lands.
+    val neutralRevision = androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    val xmbContext = androidx.compose.ui.platform.LocalContext.current
+    val neutralTitle = str("pad.sixaxisNeutral.label")
+    val neutralCustom = str("pad.sixaxisNeutral.custom")
+    val neutralUpright = str("pad.sixaxisNeutral.upright")
+    val neutralReset = str("pad.sixaxisNeutral.reset")
+    fun sixaxisNeutral(): XmbNode {
+        @Suppress("UNUSED_EXPRESSION") neutralRevision.intValue
+        val set = com.armsx2.input.Sixaxis.neutralIsSet()
+        return XmbNode.Action(
+            "controls.motion.neutral",
+            neutralTitle,
+            icon,
+            if (set) neutralCustom else neutralUpright,
+            options = if (set) listOf(XmbOption(neutralReset) {
+                com.armsx2.input.Sixaxis.resetNeutral()
+                neutralRevision.intValue++
+            }) else emptyList(),
+        ) {
+            com.armsx2.input.Sixaxis.captureNeutral(xmbContext) { neutralRevision.intValue++ }
+        }
+    }
+
     val host: @Composable () -> Unit = {
         LaunchedEffect(Unit) { vm.refresh() }
         // A capture still listening when the list closes would take the next press anywhere.
@@ -129,7 +155,7 @@ fun xmbControllerMappingNode(): XmbNode {
                 ),
             )
             add(XmbNode.Folder("controls.buttons", buttonsTitle, icon, buttonsHelp, live = true) { bindings(ControllerMappings.buttonActions) })
-            add(XmbNode.Folder("controls.motion", motionTitle, icon, motionHelp, live = true) { bindings(ControllerMappings.motionActions) })
+            add(XmbNode.Folder("controls.motion", motionTitle, icon, motionHelp, live = true) { listOf(sixaxisNeutral()) + bindings(ControllerMappings.motionActions) })
             add(XmbNode.Folder("controls.profiles", profilesTitle, icon, profilesHelp, live = true) { profiles() })
             add(XmbNode.Folder("controls.hotkeys", hotkeysTitle, icon, hotkeysHelp, live = true) { hotkeys() })
             add(

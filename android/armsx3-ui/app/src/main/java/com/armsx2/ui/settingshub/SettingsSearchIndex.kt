@@ -168,6 +168,7 @@ internal val SETTINGS_SEARCH_INDEX: List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry("pad.gyro.steerStick.label", true, SettingsCategory.Controls),
     SettingsSearchEntry("pad.gyro.sensitivity.label", true, SettingsCategory.Controls),
     SettingsSearchEntry("pad.gyro.splitAxes.label", true, SettingsCategory.Controls),
+    SettingsSearchEntry("pad.sixaxisNeutral.label", true, SettingsCategory.Controls),
     SettingsSearchEntry("pad.gyro.smoothing.label", true, SettingsCategory.Controls),
     SettingsSearchEntry("pad.gyro.invertX.label", true, SettingsCategory.Controls),
     SettingsSearchEntry("pad.gyro.invertY.label", true, SettingsCategory.Controls),

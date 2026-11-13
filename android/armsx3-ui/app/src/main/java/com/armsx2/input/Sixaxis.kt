@@ -45,6 +45,139 @@ class Sixaxis(context: Context) {
         /** DS3 rest: flat and still, one g down its Y axis (pad_types.h DEFAULT_MOTION_Y). */
         private const val REST_Y = -1f
 
+        // ---- The player's neutral pose for this device's own sensors (issue #280) ----
+        //
+        // SIXAXIS reads the device as level when it is held upright and facing the player (see
+        // DeviceFeed). A player who holds it tipped back, or lying flat, had every tilt measured
+        // from upright instead. They can take the pose they play in as level: gravity is read in
+        // screen axes at that moment, and every later reading is turned by the rotation that takes
+        // that direction to upright. Yaw needs nothing, it is measured about the device's own up.
+
+        private const val NEUTRAL_KEY = "sixaxis.neutral"
+
+        /** Gravity in screen axes (right, up, out of the screen), normalised, for the set pose; null = upright. */
+        @Volatile private var neutral: FloatArray? = null
+        /** Row-major 3x3 rotation taking [neutral] to upright; null when there is none to apply. */
+        @Volatile private var neutralRotation: FloatArray? = null
+        @Volatile private var neutralLoaded = false
+
+        private fun ensureNeutralLoaded() {
+            if (neutralLoaded) return
+            neutralLoaded = true
+            val saved = runCatching {
+                com.armsx2.runtime.MainActivityRuntime.prefs.getString(NEUTRAL_KEY, null)
+            }.getOrNull()
+            val parts = saved?.split(',')?.mapNotNull { it.toFloatOrNull() }
+            useNeutral(if (parts != null && parts.size == 3) parts.toFloatArray() else null)
+        }
+
+        private fun useNeutral(n: FloatArray?) {
+            neutral = n
+            neutralRotation = n?.let { rotationToUpright(it) }
+        }
+
+        /** True when the player has set a neutral pose of their own. */
+        fun neutralIsSet(): Boolean {
+            ensureNeutralLoaded()
+            return neutral != null
+        }
+
+        /** Back to upright, the default. */
+        fun resetNeutral() {
+            ensureNeutralLoaded()
+            useNeutral(null)
+            runCatching { com.armsx2.runtime.MainActivityRuntime.prefs.edit().remove(NEUTRAL_KEY).apply() }
+        }
+
+        /**
+         * Take how the device is held now as level: averages a quarter second of accelerometer, so
+         * the press itself does not end up in it. [done] runs on the main thread, false when the
+         * device has no accelerometer or nothing arrived.
+         */
+        fun captureNeutral(context: Context, done: (Boolean) -> Unit) {
+            ensureNeutralLoaded()
+            val app = context.applicationContext
+            val manager = app.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+            val sensor = manager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+            val main = Handler(Looper.getMainLooper())
+            if (manager == null || sensor == null) {
+                main.post { done(false) }
+                return
+            }
+            val windows = app.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+            val sum = FloatArray(3)
+            var count = 0
+            var finished = false
+            val listener = object : SensorEventListener {
+                override fun onSensorChanged(event: SensorEvent) {
+                    if (finished) return
+                    val rotation = runCatching { @Suppress("DEPRECATION") windows?.defaultDisplay?.rotation }.getOrNull()
+                    val (right, up) = screenAxes(rotation, event.values[0], event.values[1])
+                    sum[0] += right; sum[1] += up; sum[2] += event.values[2]
+                    count++
+                }
+
+                override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+            }
+            val finish = Runnable {
+                if (finished) return@Runnable
+                finished = true
+                runCatching { manager.unregisterListener(listener) }
+                val len = sqrt(sum[0] * sum[0] + sum[1] * sum[1] + sum[2] * sum[2])
+                if (count == 0 || len < 0.0001f) {
+                    done(false)
+                    return@Runnable
+                }
+                val n = floatArrayOf(sum[0] / len, sum[1] / len, sum[2] / len)
+                useNeutral(n)
+                runCatching {
+                    com.armsx2.runtime.MainActivityRuntime.prefs.edit()
+                        .putString(NEUTRAL_KEY, n.joinToString(",")).apply()
+                }
+                done(true)
+            }
+            if (!manager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_GAME, main)) {
+                main.post { done(false) }
+                return
+            }
+            main.postDelayed(finish, 250)
+        }
+
+        /**
+         * Sensor axes belong to the display's natural orientation (X right, Y to the top edge);
+         * these are the screen's as the player sees it. ROTATION_90 means the device was turned
+         * counter-clockwise, so its +X now points up and +Y left.
+         */
+        private fun screenAxes(rotation: Int?, ax: Float, ay: Float): Pair<Float, Float> = when (rotation) {
+            Surface.ROTATION_90 -> -ay to ax
+            Surface.ROTATION_180 -> -ax to -ay
+            Surface.ROTATION_270 -> ay to -ax
+            else -> ax to ay
+        }
+
+        /**
+         * The rotation taking unit vector [n] to upright (0, 1, 0), row-major, by Rodrigues: axis
+         * n x up, angle acos(n . up). Null when [n] is upright already.
+         */
+        private fun rotationToUpright(n: FloatArray): FloatArray? {
+            val c = n[1]
+            var kx = -n[2]
+            var kz = n[0]
+            val s = sqrt(kx * kx + kz * kz)
+            if (s < 1e-6f) {
+                // Upright already, or exactly upside down: half a turn about the screen's right axis
+                return if (c > 0f) null else floatArrayOf(1f, 0f, 0f, 0f, -1f, 0f, 0f, 0f, -1f)
+            }
+            kx /= s
+            kz /= s
+            val v = 1f - c
+            return floatArrayOf(
+                c + kx * kx * v, -kz * s, kx * kz * v,
+                kz * s, c, -kx * s,
+                kz * kx * v, kx * s, c + kz * kz * v,
+            )
+        }
+
         /**
          * The gamepad node that claims a player slot for [dev], a node carrying a controller's
          * motion sensors, or null when nothing pairs with it.
@@ -263,11 +396,18 @@ class Sixaxis(context: Context) {
             // edge, Z out of the screen); turn them into what the player sees. ROTATION_90 means
             // the device was turned counter-clockwise, so its +X now points up and +Y left.
             val rotation = runCatching { @Suppress("DEPRECATION") windowManager?.defaultDisplay?.rotation }.getOrNull()
-            val (right, up) = when (rotation) {
-                Surface.ROTATION_90 -> -ay to ax
-                Surface.ROTATION_180 -> -ax to -ay
-                Surface.ROTATION_270 -> ay to -ax
-                else -> ax to ay
+            var (right, up) = screenAxes(rotation, ax, ay)
+            var out = az
+
+            // The player's own level pose, when they set one: turned so that pose reads upright.
+            ensureNeutralLoaded()
+            neutralRotation?.let { r ->
+                val x = right
+                val y = up
+                val z = out
+                right = r[0] * x + r[1] * y + r[2] * z
+                up = r[3] * x + r[4] * y + r[5] * z
+                out = r[6] * x + r[7] * y + r[8] * z
             }
 
             // Held the way a handheld is held, upright and facing the player, is how a DS3 is held
@@ -285,7 +425,7 @@ class Sixaxis(context: Context) {
                 Surface.ROTATION_270 -> 270
                 else -> 0
             }
-            send(port, right / g, up / g, az / g, yawLeft, "this device's sensors (screen at $degrees)")
+            send(port, right / g, up / g, out / g, yawLeft, "this device's sensors (screen at $degrees)")
         }
 
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
