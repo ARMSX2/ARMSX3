@@ -437,10 +437,15 @@ object ConfigDatabase {
             runCatching {
                 val file = File(dir, "$serial.yml")
                 val existing = if (file.isFile) file.readText() else ""
-                // Already applied. Checking for the override itself rather than for the setting's
-                // name, which skipped an override whenever the database set the same key, the one
-                // case it exists for.
-                if (existing.contains(yaml.trimEnd())) return@runCatching
+                // Already applied when every setting it makes is the one in effect, i.e. the last
+                // occurrence of its key, which is how the core reads the file. Looking for the
+                // override's own text instead missed a value switched BACK: The Last of Us went
+                // pause off, then a test build appended pause on, then pause off again, and the
+                // third block was already in the file above the second, so it was never appended
+                // and the test build's value stayed in effect. Per-game choices are not in this
+                // file (see writeUserKeys), so writing a value again overrides nothing of the user's.
+                val effective = parseEntries(existing.lineSequence())
+                if (parseEntries(yaml.lineSequence()).all { (key, value) -> effective[key] == value }) return@runCatching
                 file.writeText(if (existing.isBlank()) yaml else existing.trimEnd() + "\n" + yaml)
             }
         }
@@ -475,28 +480,34 @@ object ConfigDatabase {
         val file = File(directory(), "$title.yml")
         if (!file.isFile) return emptyList()
 
+        return runCatching { parseEntries(file.readLines().asSequence()).toList() }.getOrDefault(emptyList())
+    }
+
+    /**
+     * "Section@@Key" to value for YAML in this file's shape, in file order, the last
+     * occurrence of a key winning as it does in the core. Two spaces per level.
+     */
+    private fun parseEntries(lines: Sequence<String>): LinkedHashMap<String, String> {
         val out = LinkedHashMap<String, String>()
         val path = ArrayList<String>()
 
-        runCatching {
-            for (raw in file.readLines()) {
-                val line = raw.trimEnd()
-                val first = line.indexOfFirst { it != ' ' }
-                if (first < 0 || line[first] == '#') continue
-                val colon = line.indexOf(':', first)
-                if (colon < 0) continue
+        for (raw in lines) {
+            val line = raw.trimEnd()
+            val first = line.indexOfFirst { it != ' ' }
+            if (first < 0 || line[first] == '#') continue
+            val colon = line.indexOf(':', first)
+            if (colon < 0) continue
 
-                val indent = first / 2
-                while (path.size > indent) path.removeAt(path.size - 1)
-                path.add(line.substring(first, colon).trim())
+            val indent = first / 2
+            while (path.size > indent) path.removeAt(path.size - 1)
+            path.add(line.substring(first, colon).trim())
 
-                val value = line.substring(colon + 1).trim()
-                // A header opens a section instead of setting anything.
-                if (value.isNotEmpty()) out[path.joinToString("@@")] = value
-            }
+            val value = line.substring(colon + 1).trim()
+            // A header opens a section instead of setting anything.
+            if (value.isNotEmpty()) out[path.joinToString("@@")] = value
         }
 
-        return out.toList()
+        return out
     }
 
     /** Keys of a title's database entry the user switched off. */
