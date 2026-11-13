@@ -3959,6 +3959,13 @@ void spu_recompiler_base::old_interpreter(spu_thread& spu, void* ls, u8* /*rip*/
 		{
 			if ((++t_spu_async_backedges & 255) == 0 && !spu_async_range_pending(spu.interp_fallback_begin, spu.interp_fallback_end))
 			{
+				static atomic_t<bool> s_logged{false};
+
+				if (!s_logged.exchange(true))
+				{
+					spu_log.notice("SPU: a loop at 0x%05x left the interpreter for compiled code once its background compile finished.", spu.pc);
+				}
+
 				spu.interp_fallback = false;
 				t_spu_async_interp = false;
 				break;
