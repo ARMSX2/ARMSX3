@@ -413,6 +413,13 @@ object ConfigDatabase {
         "NPEA00435" to "Core:\n  Pause Game During SPU Compilation: false\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
         "NPHA80243" to "Core:\n  Pause Game During SPU Compilation: false\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
         "NPJA00096" to "Core:\n  Pause Game During SPU Compilation: false\n  Stub PPU Traps: 1\n  SPU Cache: false\n",
+
+        // Blur: background SPU compiling, like every other title. Its splash video went black with it
+        // on (11-10) and played with the pause on instead (a test build), which pointed at the
+        // interpreter that runs new code meanwhile: it ignored SPU XFloat Accuracy (Blur runs Accurate)
+        // and its FI was off by a factor of two below 1.0. Both now match the compiled code. "false"
+        // outvotes the "true" that test build appended to this title's file, as the last occurrence wins.
+        "BLUS30295" to "Core:\n  Pause Game During SPU Compilation: false\n",
     )
 
     /**

@@ -35,11 +35,66 @@ const extern spu_decoder<spu_iflag> g_spu_iflag;
 enum class spu_exec_bit : u64
 {
 	use_dfma,
+	xfloat_accurate,
 
 	__bitset_enum_max
 };
 
 using enum spu_exec_bit;
+
+// SPU XFloat Accuracy: Accurate, as the recompiler emits it, one lane at a time.
+//
+// With a recompiler selected, this interpreter runs new SPU code while it compiles in the
+// background, and then the compiled copy takes over the same job. Both must produce the same
+// bits. The compiled accurate path widens each operand to double (xfloat_to_double), works in
+// double, then clamps to +-Smax, flushes below Smin to +0 and drops the 29 bits single precision
+// cannot hold (xfloat_in_double) before narrowing back (double_to_xfloat). These are the same
+// three steps; keep them in step with SPULLVMRecompiler.cpp. The rounding mode is the SPU
+// thread's own (round toward zero), set once in spu_thread::cpu_task, for both.
+template <spu_exec_bit... Flags>
+constexpr bool spu_xfloat_accurate = ((Flags == xfloat_accurate) || ...);
+
+static inline f64 spu_xf_to_f64(u32 x)
+{
+	const u64 s = u64{x & 0x80000000u} << 32;
+	const u64 a = x & 0x7fffffffu;
+	return std::bit_cast<f64>(s | (a > 0x7fffff ? (a + 0x1c0000000ull) << 29 : 0));
+}
+
+static inline u32 spu_f64_to_xf(f64 v)
+{
+	const u64 d = std::bit_cast<u64>(v);
+	const u64 m = (d >> 29) ^ 0x40000000;
+	return d ? static_cast<u32>((m & 0x7fffffff) | ((d >> 32) & 0x80000000)) : 0;
+}
+
+static inline u32 spu_xf_result(f64 v)
+{
+	const u64 d = std::bit_cast<u64>(v);
+	const f64 a = std::bit_cast<f64>(d & 0x7fffffffe0000000ull);
+	const f64 smax = std::bit_cast<f64>(0x47ffffffe0000000ull);
+
+	if (a < std::bit_cast<f64>(0x3810000000000000ull))
+	{
+		return 0;
+	}
+
+	// A NaN fails both tests and clamps to Smax, as in the compiled code
+	return spu_f64_to_xf(std::bit_cast<f64>(std::bit_cast<u64>(a < smax ? a : smax) | (d & 0x8000000000000000ull)));
+}
+
+template <typename F>
+static inline v128 spu_xf_map2(const v128& a, const v128& b, F op)
+{
+	v128 r;
+
+	for (u32 i = 0; i < 4; i++)
+	{
+		r._u32[i] = op(spu_xf_to_f64(a._u32[i]), spu_xf_to_f64(b._u32[i]));
+	}
+
+	return r;
+}
 
 template <spu_exec_bit... Flags0>
 struct spu_exec_select
@@ -1159,6 +1214,12 @@ bool ANDC(spu_thread& spu, spu_opcode_t op)
 template <spu_exec_bit... Flags>
 bool FCGT(spu_thread& spu, spu_opcode_t op)
 {
+	if constexpr (spu_xfloat_accurate<Flags...>)
+	{
+		spu.gpr[op.rt] = spu_xf_map2(spu.gpr[op.ra], spu.gpr[op.rb], [](f64 a, f64 b) { return a > b ? 0xffffffffu : 0u; });
+		return true;
+	}
+
 	// IMPL NOTES:
 	// if (v is inf) v = (inf - 1) i.e nearest normal value to inf with mantissa bits left intact
 	// if (v is denormalized) v = 0 flush denormals
@@ -1206,6 +1267,12 @@ bool DFCGT(spu_thread&, spu_opcode_t)
 template <spu_exec_bit... Flags>
 bool FA(spu_thread& spu, spu_opcode_t op)
 {
+	if constexpr (spu_xfloat_accurate<Flags...>)
+	{
+		spu.gpr[op.rt] = spu_xf_map2(spu.gpr[op.ra], spu.gpr[op.rb], [](f64 a, f64 b) { return spu_xf_result(a + b); });
+		return true;
+	}
+
 	spu.gpr[op.rt] = gv_addfs(spu.gpr[op.ra], spu.gpr[op.rb]);
 	return true;
 }
@@ -1213,6 +1280,12 @@ bool FA(spu_thread& spu, spu_opcode_t op)
 template <spu_exec_bit... Flags>
 bool FS(spu_thread& spu, spu_opcode_t op)
 {
+	if constexpr (spu_xfloat_accurate<Flags...>)
+	{
+		spu.gpr[op.rt] = spu_xf_map2(spu.gpr[op.ra], spu.gpr[op.rb], [](f64 a, f64 b) { return spu_xf_result(a - b); });
+		return true;
+	}
+
 	spu.gpr[op.rt] = gv_subfs(spu.gpr[op.ra], spu.gpr[op.rb]);
 	return true;
 }
@@ -1220,6 +1293,12 @@ bool FS(spu_thread& spu, spu_opcode_t op)
 template <spu_exec_bit... Flags>
 bool FM(spu_thread& spu, spu_opcode_t op)
 {
+	if constexpr (spu_xfloat_accurate<Flags...>)
+	{
+		spu.gpr[op.rt] = spu_xf_map2(spu.gpr[op.ra], spu.gpr[op.rb], [](f64 a, f64 b) { return spu_xf_result(a * b); });
+		return true;
+	}
+
 	const auto zero = _mm_set1_ps(0.f);
 	const auto sign_bits = _mm_castsi128_ps(_mm_set1_epi32(0x80000000));
 	const auto all_exp_bits = _mm_castsi128_ps(_mm_set1_epi32(0x7f800000));
@@ -1265,6 +1344,12 @@ bool ORC(spu_thread& spu, spu_opcode_t op)
 template <spu_exec_bit... Flags>
 bool FCMGT(spu_thread& spu, spu_opcode_t op)
 {
+	if constexpr (spu_xfloat_accurate<Flags...>)
+	{
+		spu.gpr[op.rt] = spu_xf_map2(spu.gpr[op.ra], spu.gpr[op.rb], [](f64 a, f64 b) { return std::fabs(a) > std::fabs(b) ? 0xffffffffu : 0u; });
+		return true;
+	}
+
 	//IMPL NOTES: See FCGT
 
 	const auto zero = _mm_set1_ps(0.f);
@@ -1441,6 +1526,23 @@ bool FSCRRD(spu_thread& spu, spu_opcode_t op)
 template <spu_exec_bit... Flags>
 bool FESD(spu_thread& spu, spu_opcode_t op)
 {
+	if constexpr (spu_xfloat_accurate<Flags...>)
+	{
+		// Extended singles become infinity (exactly 2^128) or NaN (above it)
+		const auto a = spu.gpr[op.ra];
+		v128 r;
+
+		for (u32 i = 0; i < 2; i++)
+		{
+			const u64 d = std::bit_cast<u64>(spu_xf_to_f64(a._u32[i * 2 + 1]));
+			const u64 m = d & 0x7fffffffffffffffull;
+			r._u64[i] = m > 0x47f0000000000000ull ? 0x7ff8000000000000ull : m == 0x47f0000000000000ull ? (d & 0x8000000000000000ull) | 0x7ff0000000000000ull : d;
+		}
+
+		spu.gpr[op.rt] = r;
+		return true;
+	}
+
 	const auto a = spu.gpr[op.ra];
 	spu.gpr[op.rt] = _mm_cvtps_pd(_mm_shuffle_ps(a, a, 0x8d));
 	return true;
@@ -1449,6 +1551,29 @@ bool FESD(spu_thread& spu, spu_opcode_t op)
 template <spu_exec_bit... Flags>
 bool FRDS(spu_thread& spu, spu_opcode_t op)
 {
+	if constexpr (spu_xfloat_accurate<Flags...>)
+	{
+		// Clamped and flushed as the compiled code does, then narrowed WITHOUT the usual fixup, as
+		// it does too: a flushed negative result there is -0.0, which double_to_xfloat turns into
+		// 0xc0000000. Matches it bit for bit; fix both together if that is ever changed.
+		const auto a = spu.gpr[op.ra];
+		v128 r{};
+
+		for (u32 i = 0; i < 2; i++)
+		{
+			const u64 d = a._u64[i];
+			const u64 m = d & 0x7fffffffffffffffull;
+			const u64 s = d & 0x8000000000000000ull;
+			u64 z = m > 0x47f0000000000000ull ? (s | 0x47f0000000000000ull) : d;
+			z = m > 0x7ff0000000000000ull ? 0x47f8000000000000ull : z;
+			z = m < 0x3810000000000000ull ? s : z;
+			r._u32[i * 2 + 1] = spu_f64_to_xf(std::bit_cast<f64>(z));
+		}
+
+		spu.gpr[op.rt] = r;
+		return true;
+	}
+
 	const auto t = _mm_cvtpd_ps(spu.gpr[op.ra]);
 	spu.gpr[op.rt] = _mm_shuffle_ps(t, t, 0x72);
 	return true;
@@ -1470,6 +1595,12 @@ bool DFTSV(spu_thread&, spu_opcode_t)
 template <spu_exec_bit... Flags>
 bool FCEQ(spu_thread& spu, spu_opcode_t op)
 {
+	if constexpr (spu_xfloat_accurate<Flags...>)
+	{
+		spu.gpr[op.rt] = spu_xf_map2(spu.gpr[op.ra], spu.gpr[op.rb], [](f64 a, f64 b) { return a == b ? 0xffffffffu : 0u; });
+		return true;
+	}
+
 	spu.gpr[op.rt] = _mm_cmpeq_ps(spu.gpr[op.rb], spu.gpr[op.ra]);
 	return true;
 }
@@ -1520,6 +1651,12 @@ bool CEQH(spu_thread& spu, spu_opcode_t op)
 template <spu_exec_bit... Flags>
 bool FCMEQ(spu_thread& spu, spu_opcode_t op)
 {
+	if constexpr (spu_xfloat_accurate<Flags...>)
+	{
+		spu.gpr[op.rt] = spu_xf_map2(spu.gpr[op.ra], spu.gpr[op.rb], [](f64 a, f64 b) { return std::fabs(a) == std::fabs(b) ? 0xffffffffu : 0u; });
+		return true;
+	}
+
 	const auto mask = _mm_castsi128_ps(_mm_set1_epi32(0x7fffffff));
 	spu.gpr[op.rt] = _mm_cmpeq_ps(_mm_and_ps(spu.gpr[op.rb], mask), _mm_and_ps(spu.gpr[op.ra], mask));
 	return true;
@@ -1551,15 +1688,30 @@ bool CEQB(spu_thread& spu, spu_opcode_t op)
 template <spu_exec_bit... Flags>
 bool FI(spu_thread& spu, spu_opcode_t op)
 {
-	// TODO
-	const auto mask_se = _mm_castsi128_ps(_mm_set1_epi32(0xff800000)); // sign and exponent mask
-	const auto mask_bf = _mm_castsi128_ps(_mm_set1_epi32(0x007ffc00)); // base fraction mask
-	const auto mask_sf = _mm_set1_epi32(0x000003ff); // step fraction mask
-	const auto mask_yf = _mm_set1_epi32(0x0007ffff); // Y fraction mask (bits 13..31)
-	const auto base = _mm_or_ps(_mm_and_ps(spu.gpr[op.rb], mask_bf), _mm_castsi128_ps(_mm_set1_epi32(0x3f800000)));
-	const auto step = _mm_mul_ps(_mm_cvtepi32_ps(_mm_and_si128(spu.gpr[op.rb], mask_sf)), _mm_set1_ps(std::exp2(-13.f)));
-	const auto y = _mm_mul_ps(_mm_cvtepi32_ps(_mm_and_si128(spu.gpr[op.ra], mask_yf)), _mm_set1_ps(std::exp2(-19.f)));
-	spu.gpr[op.rt] = _mm_or_ps(_mm_and_ps(mask_se, spu.gpr[op.rb]), _mm_andnot_ps(mask_se, _mm_sub_ps(base, _mm_mul_ps(step, y))));
+	// The recompiler's integer model of the hardware interpolation (SPULLVMRecompiler.cpp FI, and
+	// spu_re/spu_rsqrte, which fold FREST/FRSQEST into it with the same bits). The float version
+	// this replaces kept rb's exponent even when base - step * y fell below 1.0, so its result was
+	// off by a factor of two there, and FI follows every FREST and FRSQEST in SPU math code. With a
+	// recompiler selected, this runs new code while it compiles in the background, so it has to
+	// give what the compiled copy will.
+	const auto a = spu.gpr[op.ra];
+	const auto b = spu.gpr[op.rb];
+	v128 r;
+
+	for (u32 i = 0; i < 4; i++)
+	{
+		const u32 x = a._u32[i];
+		const u32 y = b._u32[i];
+		const u32 base = (y & 0x007ffc00u) << 9; // base fraction
+		const u32 ymul = (y & 0x3ffu) * (x & 0x7ffffu); // step fraction * Y fraction (fixed point at 2^-32)
+		const u32 adjust = ymul > base ? 1 : 0; // below 1.0: one bit less of shift, exponent minus one
+		const u32 bnew = (base - ymul) >> (9 - adjust);
+		const u32 expo = (y & 0xff800000u) - (adjust << 23);
+		const u32 clamped = (expo & 0x7fffffffu) >= 0x7f800000u ? (expo & 0x80000000u) | 0x7f7fffffu : expo; // clamp_smax
+		r._u32[i] = clamped | (bnew & 0x007fffffu);
+	}
+
+	spu.gpr[op.rt] = r;
 	return true;
 }
 
@@ -1577,6 +1729,21 @@ bool HEQ(spu_thread& spu, spu_opcode_t op)
 template <spu_exec_bit... Flags>
 bool CFLTS(spu_thread& spu, spu_opcode_t op)
 {
+	if constexpr (spu_xfloat_accurate<Flags...>)
+	{
+		const auto a = spu.gpr[op.ra];
+		v128 r;
+
+		for (u32 i = 0; i < 4; i++)
+		{
+			const f64 v = std::ldexp(spu_xf_to_f64(a._u32[i]), 173 - static_cast<int>(op.i8));
+			r._s32[i] = v >= 2147483648. ? 0x7fffffff : v < -2147483648. ? (-0x7fffffff - 1) : static_cast<s32>(v);
+		}
+
+		spu.gpr[op.rt] = r;
+		return true;
+	}
+
 	const auto scaled = _mm_mul_ps(spu.gpr[op.ra], g_spu_imm.scale[173 - op.i8]);
 #if defined(ARCH_ARM64)
 	// x86's cvttps2dq returns the "integer indefinite" 0x80000000 for ANYTHING it cannot
@@ -1600,6 +1767,21 @@ bool CFLTS(spu_thread& spu, spu_opcode_t op)
 template <spu_exec_bit... Flags>
 bool CFLTU(spu_thread& spu, spu_opcode_t op)
 {
+	if constexpr (spu_xfloat_accurate<Flags...>)
+	{
+		const auto a = spu.gpr[op.ra];
+		v128 r;
+
+		for (u32 i = 0; i < 4; i++)
+		{
+			const f64 v = std::ldexp(spu_xf_to_f64(a._u32[i]), 173 - static_cast<int>(op.i8));
+			r._u32[i] = v >= 4294967296. ? 0xffffffffu : v >= 0. ? static_cast<u32>(v) : 0u;
+		}
+
+		spu.gpr[op.rt] = r;
+		return true;
+	}
+
 	const auto scaled1 = _mm_max_ps(_mm_mul_ps(spu.gpr[op.ra], g_spu_imm.scale[173 - op.i8]), _mm_set1_ps(0.0f));
 #if defined(ARCH_ARM64)
 	// The x86 form below RELIES on cvttps2dq returning 0x80000000 for scaled1 >= 2^31 and then
@@ -1627,6 +1809,20 @@ bool CFLTU(spu_thread& spu, spu_opcode_t op)
 template <spu_exec_bit... Flags>
 bool CSFLT(spu_thread& spu, spu_opcode_t op)
 {
+	if constexpr (spu_xfloat_accurate<Flags...>)
+	{
+		const auto a = spu.gpr[op.ra];
+		v128 r;
+
+		for (u32 i = 0; i < 4; i++)
+		{
+			r._u32[i] = spu_xf_result(std::ldexp(static_cast<f64>(a._s32[i]), static_cast<int>(op.i8) - 155));
+		}
+
+		spu.gpr[op.rt] = r;
+		return true;
+	}
+
 	spu.gpr[op.rt] = _mm_mul_ps(_mm_cvtepi32_ps(spu.gpr[op.ra]), g_spu_imm.scale[op.i8 - 155]);
 	return true;
 }
@@ -1634,6 +1830,20 @@ bool CSFLT(spu_thread& spu, spu_opcode_t op)
 template <spu_exec_bit... Flags>
 bool CUFLT(spu_thread& spu, spu_opcode_t op)
 {
+	if constexpr (spu_xfloat_accurate<Flags...>)
+	{
+		const auto a = spu.gpr[op.ra];
+		v128 r;
+
+		for (u32 i = 0; i < 4; i++)
+		{
+			r._u32[i] = spu_xf_result(std::ldexp(static_cast<f64>(a._u32[i]), static_cast<int>(op.i8) - 155));
+		}
+
+		spu.gpr[op.rt] = r;
+		return true;
+	}
+
 	const auto a = spu.gpr[op.ra];
 	const auto fix = _mm_and_ps(_mm_castsi128_ps(_mm_srai_epi32(a, 31)), _mm_set1_ps(0x80000000));
 	spu.gpr[op.rt] = _mm_mul_ps(_mm_add_ps(_mm_cvtepi32_ps(_mm_and_si128(a, _mm_set1_epi32(0x7fffffff))), fix), g_spu_imm.scale[op.i8 - 155]);
@@ -2135,6 +2345,22 @@ bool MPYA(spu_thread& spu, spu_opcode_t op)
 template <spu_exec_bit... Flags>
 bool FNMS(spu_thread& spu, spu_opcode_t op)
 {
+	if constexpr (spu_xfloat_accurate<Flags...>)
+	{
+		const auto a = spu.gpr[op.ra], b = spu.gpr[op.rb], c = spu.gpr[op.rc];
+		v128 r;
+
+		// The product of two singles is exact in double, so fused or not gives the same bits
+		for (u32 i = 0; i < 4; i++)
+		{
+			const f64 x = spu_xf_to_f64(a._u32[i]), y = spu_xf_to_f64(b._u32[i]), z = spu_xf_to_f64(c._u32[i]);
+			r._u32[i] = spu_xf_result(std::fma(-x, y, z));
+		}
+
+		spu.gpr[op.rt4] = r;
+		return true;
+	}
+
 	const u32 test_bits = 0x7f800000;
 	auto mask = _mm_set1_ps(std::bit_cast<f32>(test_bits));
 
@@ -2153,6 +2379,22 @@ bool FNMS(spu_thread& spu, spu_opcode_t op)
 template <spu_exec_bit... Flags>
 bool FMA(spu_thread& spu, spu_opcode_t op)
 {
+	if constexpr (spu_xfloat_accurate<Flags...>)
+	{
+		const auto a = spu.gpr[op.ra], b = spu.gpr[op.rb], c = spu.gpr[op.rc];
+		v128 r;
+
+		// The product of two singles is exact in double, so fused or not gives the same bits
+		for (u32 i = 0; i < 4; i++)
+		{
+			const f64 x = spu_xf_to_f64(a._u32[i]), y = spu_xf_to_f64(b._u32[i]), z = spu_xf_to_f64(c._u32[i]);
+			r._u32[i] = spu_xf_result(std::fma(x, y, z));
+		}
+
+		spu.gpr[op.rt4] = r;
+		return true;
+	}
+
 	const u32 test_bits = 0x7f800000;
 	auto mask = _mm_set1_ps(std::bit_cast<f32>(test_bits));
 
@@ -2171,6 +2413,22 @@ bool FMA(spu_thread& spu, spu_opcode_t op)
 template <spu_exec_bit... Flags>
 bool FMS(spu_thread& spu, spu_opcode_t op)
 {
+	if constexpr (spu_xfloat_accurate<Flags...>)
+	{
+		const auto a = spu.gpr[op.ra], b = spu.gpr[op.rb], c = spu.gpr[op.rc];
+		v128 r;
+
+		// The product of two singles is exact in double, so fused or not gives the same bits
+		for (u32 i = 0; i < 4; i++)
+		{
+			const f64 x = spu_xf_to_f64(a._u32[i]), y = spu_xf_to_f64(b._u32[i]), z = spu_xf_to_f64(c._u32[i]);
+			r._u32[i] = spu_xf_result(std::fma(x, y, -z));
+		}
+
+		spu.gpr[op.rt4] = r;
+		return true;
+	}
+
 	const u32 test_bits = 0x7f800000;
 	auto mask = _mm_set1_ps(std::bit_cast<f32>(test_bits));
 
@@ -3203,6 +3461,8 @@ spu_interpreter_rt_base::spu_interpreter_rt_base() noexcept
 	bs_t<spu_exec_bit> selected{};
 	if (g_cfg.core.use_accurate_dfma)
 		selected += use_dfma;
+	if (g_cfg.core.spu_xfloat_accuracy == xfloat_accuracy::accurate)
+		selected += xfloat_accurate;
 
 	ptrs = std::make_unique<decltype(ptrs)::element_type>();
 
@@ -3379,11 +3639,11 @@ spu_interpreter_rt_base::spu_interpreter_rt_base() noexcept
 	INIT(BINZ);
 	INIT(BIHZ);
 	INIT(BIHNZ);
-	INIT(FA);
+	INIT(FA, xfloat_accurate);
 	INIT(DFA);
-	INIT(FS);
+	INIT(FS, xfloat_accurate);
 	INIT(DFS);
-	INIT(FM);
+	INIT(FM, xfloat_accurate);
 	INIT(DFM);
 	INIT(DFMA);
 	INIT(DFNMS);
@@ -3392,16 +3652,16 @@ spu_interpreter_rt_base::spu_interpreter_rt_base() noexcept
 	INIT(FREST);
 	INIT(FRSQEST);
 	INIT(FI);
-	INIT(CSFLT);
-	INIT(CFLTS);
-	INIT(CUFLT);
-	INIT(CFLTU);
-	INIT(FRDS);
-	INIT(FESD);
-	INIT(FCEQ);
-	INIT(FCMEQ);
-	INIT(FCGT);
-	INIT(FCMGT);
+	INIT(CSFLT, xfloat_accurate);
+	INIT(CFLTS, xfloat_accurate);
+	INIT(CUFLT, xfloat_accurate);
+	INIT(CFLTU, xfloat_accurate);
+	INIT(FRDS, xfloat_accurate);
+	INIT(FESD, xfloat_accurate);
+	INIT(FCEQ, xfloat_accurate);
+	INIT(FCMEQ, xfloat_accurate);
+	INIT(FCGT, xfloat_accurate);
+	INIT(FCMGT, xfloat_accurate);
 	INIT(FSCRWR);
 	INIT(FSCRRD);
 	INIT(DFCEQ);
@@ -3409,9 +3669,9 @@ spu_interpreter_rt_base::spu_interpreter_rt_base() noexcept
 	INIT(DFCGT);
 	INIT(DFCMGT);
 	INIT(DFTSV);
-	INIT(FMA);
-	INIT(FNMS);
-	INIT(FMS);
+	INIT(FMA, xfloat_accurate);
+	INIT(FNMS, xfloat_accurate);
+	INIT(FMS, xfloat_accurate);
 }
 
 spu_interpreter_rt_base::~spu_interpreter_rt_base()
