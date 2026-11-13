@@ -17,6 +17,9 @@ APP = IOS / "app"
 
 MAPPING = APP / "Controllers" / "GamepadMapping.swift"
 
+# The motion names a mapping binds to.
+MOTION = APP / "Controllers" / "MotionMath.swift"
+
 FIXTURE = IOS / "tests" / "fixtures" / "input-config-dump.json"
 
 # Written into a temporary directory at run time; @FIXTURE@ becomes the input-config dump fixture as a Swift raw string.
@@ -111,7 +114,7 @@ class TheMappingHolds(unittest.TestCase):
         if '"#' in fixture:
             raise AssertionError("the fixture cannot be embedded as a Swift raw string")
         with tempfile.TemporaryDirectory() as tmp:
-            out = compile_and_run([MAPPING], DRIVER.replace("@FIXTURE@", fixture), tmp)
+            out = compile_and_run([MAPPING, MOTION], DRIVER.replace("@FIXTURE@", fixture), tmp)
         cls.lines = {line.split(" ", 1)[0]: line for line in out.splitlines() if line.strip()}
 
     def check(self, key, expected):

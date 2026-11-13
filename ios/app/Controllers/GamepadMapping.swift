@@ -81,10 +81,10 @@ struct PlayerMapping: Equatable {
         return Self.defaults[key] ?? ""
     }
 
-    // A stored controller element, which no key can press, reads the keyboard default instead.
+    // A stored controller element, which no key can press, reads the keyboard default instead. None is None for both.
     func source(_ key: String, keyboard: Bool) -> String {
         guard keyboard else { return source(key) }
-        if let stored = bindings[key], stored.hasPrefix("Keyboard ") { return stored }
+        if let stored = bindings[key], stored.hasPrefix("Keyboard ") || stored == MotionBinding.none { return stored }
         return Self.keyboardDefaults[key] ?? ""
     }
 
@@ -239,5 +239,44 @@ enum GamepadMapping {
     static func trigger(_ v: Float) -> UInt8 {
         guard v.isFinite else { return 0 }
         return UInt8((min(max(v, 0), 1) * 255).rounded())
+    }
+}
+
+// A player's motion buttons: a motion's name to the element that plays it. One action per element, the last binding wins.
+enum MotionBinding {
+    // What a PS3 button reads once a motion took its element; no reading carries it.
+    static let none = "None"
+
+    // Elements held past halfway play their motion.
+    static func pressed(reading: [String: Float], bindings: [String: String]) -> Set<MotionGesture> {
+        Set(bindings.compactMap { name, element in (reading[element] ?? 0) >= 0.5 ? MotionGesture(rawValue: name) : nil })
+    }
+
+    // The motion takes `element` from every PS3 button and other motion that read it; its own element again clears it.
+    static func bind(_ gesture: MotionGesture, to element: String, mapping: PlayerMapping, motions: [String: String],
+                     keyboard: Bool) -> (mapping: PlayerMapping, motions: [String: String]) {
+        var others = motions.filter { $0.value != element }
+        if motions[gesture.rawValue] == element { return (mapping, others) }
+        var next = mapping
+        for key in PlayerMapping.bindingKeys where mapping.source(key, keyboard: keyboard) == element {
+            next.bindings[key] = none
+        }
+        others[gesture.rawValue] = element
+        return (next, others)
+    }
+
+    // Saved for all games by player ("2"), or for one title ("BLUS30443/2").
+    static func key(serial: String?, player: Int) -> String {
+        guard let serial, !serial.isEmpty else { return String(player) }
+        return serial + "/" + String(player)
+    }
+
+    // A title's own set wins; a title with its own mapping file but no set has none, since all-games ones could clash with it.
+    static func resolve(_ store: [String: [String: String]], serial: String?, perGame: Bool, player: Int) -> [String: String] {
+        if let serial, !serial.isEmpty {
+            if let own = store[key(serial: serial, player: player)] { return own }
+            if perGame { return [:] }
+        }
+        return store[key(serial: nil, player: player)] ?? [:]
     }
 }

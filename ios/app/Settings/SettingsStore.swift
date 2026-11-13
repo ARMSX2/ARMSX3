@@ -237,6 +237,11 @@ import SwiftUI
         didSet { defaults.set(gyroStickSensitivity, forKey: Self.key("gyroStickSensitivity")) }
     }
 
+    /// MotionBinding.key to a motion's name to the element that plays it.
+    var motionBindings: [String: [String: String]] {
+        didSet { defaults.set(motionBindings, forKey: Self.key("motionBindings")) }
+    }
+
     /// The core's own switch is that title's `Input/Output@@Move` = `Fake`, which the Controllers pane writes beside it.
     var moveSlot: [String: Int] {
         didSet { defaults.set(moveSlot, forKey: Self.key("moveSlot")) }
@@ -338,6 +343,7 @@ import SwiftUI
         gyroStickTarget = defaults.dictionary(forKey: Self.key("gyroStickTarget")) as? [String: Int] ?? [:]
         gyroStickSensitivity = defaults.dictionary(forKey: Self.key("gyroStickSensitivity")) as? [String: Int] ?? [:]
         moveSlot = defaults.dictionary(forKey: Self.key("moveSlot")) as? [String: Int] ?? [:]
+        motionBindings = defaults.dictionary(forKey: Self.key("motionBindings")) as? [String: [String: String]] ?? [:]
         movePointer = defaults.dictionary(forKey: Self.key("movePointer")) as? [String: Int] ?? [:]
         let keyboard = defaults.object(forKey: Self.key("keyboardSlot")) as? Int ?? -1
         keyboardSlot = (0...3).contains(keyboard) ? keyboard : -1

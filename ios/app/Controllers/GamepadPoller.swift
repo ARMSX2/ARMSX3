@@ -22,6 +22,8 @@ import UIKit
     // The chord's physical elements, by default name, held at zero in every reading; empty when none.
     private var consumed: Set<String> = []
     var mappings = Array(repeating: PlayerMapping(), count: PlayerSlots.count)
+    var motionBindings = Array(repeating: [String: String](), count: PlayerSlots.count)
+    private var playback = Array(repeating: MotionPlayback(), count: PlayerSlots.count)
     private(set) var serial: String?
     private var lastMotion: [Sixaxis?] = Array(repeating: nil, count: PlayerSlots.count)
     // stop() switches these sensors off again, for the battery.
@@ -92,6 +94,7 @@ import UIKit
         activated = []
         phone.stopDeviceMotionUpdates()
         lastMotion = Array(repeating: nil, count: PlayerSlots.count)
+        playback = Array(repeating: MotionPlayback(), count: PlayerSlots.count)
         // A touch pad steered at the end of the game is let go (released controller slots already were).
         if steering[0] != nil, !slots.playerOneHasController { steerTouchPad(rateX: 0, rateY: 0, setting: nil) }
         steering = Array(repeating: nil, count: PlayerSlots.count)
@@ -108,6 +111,11 @@ import UIKit
             let (data, status) = await EmulatorSession.shared.inputConfigDump(serial: serial)
             guard self.serial == serial else { return }
             mappings = status == 0 ? PlayerMapping.decode(data) : Array(repeating: PlayerMapping(), count: PlayerSlots.count)
+            let root = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            let perGame = status == 0 && root?["perGame"] as? Int == 1
+            motionBindings = (0..<PlayerSlots.count).map {
+                MotionBinding.resolve(SettingsStore.shared.motionBindings, serial: serial, perGame: perGame, player: $0)
+            }
         }
     }
 
@@ -136,6 +144,7 @@ import UIKit
             consumed = []
         }
         var readings: [(slot: Int, snapshot: GamepadSnapshot, controller: GCController)] = []
+        var gestures = Array(repeating: Set<MotionGesture>(), count: PlayerSlots.count)
         for (controller, rawReading) in raw {
             let id = ObjectIdentifier(controller)
             let key = live[id] ?? PlayerSlots.key(category: controller.productCategory, vendor: controller.vendorName ?? "",
@@ -146,6 +155,7 @@ import UIKit
             let pressed = GamepadMapping.snapshot(reading: reading, mapping: PlayerMapping()).mask != 0
             guard let slot = slots.slot(of: key) ?? (pressed ? claim(key, controller) : nil) else { continue }
             readings.append((slot, GamepadMapping.snapshot(reading: reading, mapping: mappings[slot]), controller))
+            gestures[slot].formUnion(MotionBinding.pressed(reading: reading, bindings: motionBindings[slot]))
         }
         let setting = gyroSetting()
         for (slot, snapshot, controller) in readings {
@@ -160,6 +170,7 @@ import UIKit
         if let held = slots.slot(of: Self.keyboardKey) {
             let reading = Dictionary(uniqueKeysWithValues: keyboardKeys.map { ($0, Float(1)) })
             let snapshot = GamepadMapping.snapshot(reading: reading, mapping: mappings[held], keyboard: true)
+            gestures[held].formUnion(MotionBinding.pressed(reading: reading, bindings: motionBindings[held]))
             let pad = PadSnapshot.slot(held)
             if snapshot != lastSent[held] || snapshot != pad.current {
                 lastSent[held] = snapshot
@@ -194,6 +205,14 @@ import UIKit
         if !slots.playerOneHasController, setting != nil || steering[0] != nil {
             let rate = phone.deviceMotion.map(Self.steeringRates) ?? (0, 0)
             steerTouchPad(rateX: rate.0, rateY: rate.1, setting: phoneWanted ? setting : nil)
+        }
+        // A motion button takes over its player's sensors while it plays, uninverted.
+        let now = CACurrentMediaTime()
+        for slot in playback.indices {
+            playback[slot].update(pressed: gestures[slot], at: now)
+            guard playback[slot].active(at: now) else { continue }
+            let s = playback[slot].sample(at: now)
+            motion[slot] = MotionMath.sixaxis(ax: s.0, ay: s.1, az: s.2, yaw: s.3)
         }
         for slot in motion.indices {
             let value = motion[slot]

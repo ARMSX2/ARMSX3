@@ -47,6 +47,66 @@ struct Sixaxis: Equatable {
     }
 }
 
+// What a motion button plays on the SIXAXIS, named as the Controllers pane lists it.
+enum MotionGesture: String, CaseIterable {
+    case flickUp = "Flick Up", flickDown = "Flick Down", shake = "Shake"
+    case tiltLeft = "Tilt Left", tiltRight = "Tilt Right", tiltForward = "Tilt Forward", tiltBack = "Tilt Back"
+    case turnLeft = "Turn Left", turnRight = "Turn Right"
+}
+
+// One player's held motion buttons, with Android's strengths (MotionButtons.kt). Times are in seconds.
+struct MotionPlayback: Equatable {
+    static let tilt = 50.0 * Double.pi / 180
+    static let turn = 3.0
+    static let shakeHz = 10.0
+    static let shakeG = 2.5
+    static let flickPush = 0.07
+    static let flickTotal = 0.14
+    static let flickPushG = 2.5
+    static let flickStopG = 1.8
+
+    private(set) var held: Set<MotionGesture> = []
+    private var flickUp = true
+    private var flickStart = -Double.infinity
+    private var shakeStart = 0.0
+
+    // A flick plays once per press; a shake starts its wobble at the press.
+    mutating func update(pressed: Set<MotionGesture>, at now: Double) {
+        for gesture in pressed.subtracting(held) {
+            switch gesture {
+            case .flickUp, .flickDown:
+                flickUp = gesture == .flickUp
+                flickStart = now
+            case .shake: shakeStart = now
+            default: break
+            }
+        }
+        held = pressed
+    }
+
+    func active(at now: Double) -> Bool { !held.isEmpty || now - flickStart < Self.flickTotal }
+
+    // In the units MotionMath.sixaxis takes: g with a flat pad at y -1, and yaw in rad/s.
+    func sample(at now: Double) -> (Double, Double, Double, Double) {
+        let roll = (held.contains(.tiltLeft) ? Self.tilt : 0) - (held.contains(.tiltRight) ? Self.tilt : 0)
+        let pitch = (held.contains(.tiltForward) ? Self.tilt : 0) - (held.contains(.tiltBack) ? Self.tilt : 0)
+        // Android's values negated, since its frame reads +1 g flat.
+        var x = -sin(roll)
+        var y = -cos(roll) * cos(pitch)
+        let z = -sin(pitch)
+        var yaw = 0.0
+        if held.contains(.turnLeft) { yaw -= Self.turn }
+        if held.contains(.turnRight) { yaw += Self.turn }
+        if held.contains(.shake) { x -= Self.shakeG * sin(2 * Double.pi * Self.shakeHz * (now - shakeStart)) }
+        let t = now - flickStart
+        if t < Self.flickTotal {
+            let push = t < Self.flickPush ? Self.flickPushG : -Self.flickStopG
+            y -= flickUp ? push : -push
+        }
+        return (x, y, z, yaw)
+    }
+}
+
 // As UIKit names it (landscape-right: the home side on the right).
 enum ScreenOrientation {
     case portrait, portraitUpsideDown, landscapeLeft, landscapeRight
