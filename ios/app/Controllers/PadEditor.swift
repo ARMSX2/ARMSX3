@@ -335,6 +335,7 @@ struct PadGuide: Hashable {
         case .l3, .r3: return 4
         case .lstick: return 5
         case .rstick: return 6
+        case .flickUp, .flickDown, .shake, .tiltLeft, .tiltRight, .tiltForward, .tiltBack, .turnLeft, .turnRight: return 7
         }
     }
 

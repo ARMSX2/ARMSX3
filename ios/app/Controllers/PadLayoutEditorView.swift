@@ -27,6 +27,7 @@ extension PadPiece {
         case .select: return String(localized: "Select")
         case .ps: return "PS"
         case .start: return String(localized: "Start")
+        default: return gesture?.rawValue ?? rawValue
         }
     }
 }
@@ -758,6 +759,7 @@ private struct PadEditorBar: View {
         }
         if PadTouches.shared.heldSticks.contains(true) { names.append(PadPiece.lstick.title) }
         if PadTouches.shared.heldSticks.contains(false) { names.append(PadPiece.rstick.title) }
+        names += MotionGesture.allCases.filter { PadTouches.shared.heldMotions.contains($0) }.map(\.rawValue)
         return names.isEmpty ? String(localized: "Press a button to try it.")
             : String(localized: "Held: \(names.joined(separator: ", "))")
     }
