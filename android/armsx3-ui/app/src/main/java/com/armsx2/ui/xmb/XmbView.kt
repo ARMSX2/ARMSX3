@@ -137,13 +137,20 @@ fun XmbView(
 
         // The focused top-level item once it has stayed focused a moment: a game's background waits,
         // as on the console, rather than flashing past while scrolling.
+        //
+        // Settled by key, and read from the current node. The game nodes are built again under the
+        // same keys once the media lookup finishes; holding the node object from the moment it
+        // settled kept the copy built before that, with no media folder, so the game focused when
+        // the XMB first came up showed the wave until the cursor left and came back (its SND0, read
+        // from the current node, played).
         val focusedRoot = controller.rootNode()
-        var settledRoot by remember { mutableStateOf<XmbNode?>(null) }
+        var settledKey by remember { mutableStateOf<String?>(null) }
         LaunchedEffect(focusedRoot?.key) {
-            settledRoot = null
+            settledKey = null
             delay(650)
-            settledRoot = focusedRoot
+            settledKey = focusedRoot?.key
         }
+        val settledRoot = focusedRoot?.takeIf { it.key == settledKey }
         Box(Modifier.fillMaxSize().graphicsLayer { alpha = reveal }) {
             backdrop(if (depth == 0 && !controller.busy) settledRoot else null)
         }
