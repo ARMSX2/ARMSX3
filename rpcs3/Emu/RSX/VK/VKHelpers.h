@@ -76,6 +76,12 @@ namespace vk
 	void release_global_submit_lock();
 	void queue_submit(const vk::queue_submit_t* packet);
 
+#ifdef __APPLE__
+	// Installed by the host; true while the app may not send GPU work, which Metal answers by losing the device
+	extern bool (*g_gpu_work_refused)();
+	void wait_while_gpu_work_refused();
+#endif
+
 	template<class T>
 	T* get_compute_task();
 
