@@ -221,6 +221,8 @@ namespace psf
 		for (u32 i = 0; i < header.entries_num; ++i)
 		{
 			PSF_CHECK(indices[i].key_off < header.off_data_table - header.off_key_table, error::corrupt);
+			PSF_CHECK(indices[i].param_len <= indices[i].param_max, error::corrupt);
+			PSF_CHECK(indices[i].param_max > (indices[i].param_fmt == format::string ? 1 : 0), error::corrupt);
 
 			// Get key name (null-terminated string)
 			std::string key(keys.data() + indices[i].key_off);
@@ -255,6 +257,11 @@ namespace psf
 					// Find null terminator
 					if (usz nts = value.find_first_of('\0'); nts != umax)
 					{
+						// Anything after the terminator is ignored. Upstream #20034 rejected such files as
+						// corrupt, but the EU discs of God of War III (BCES00510) and Ascension (BCES01741)
+						// ship PARAM.SFO strings with bytes after the NUL, and the check hid those games
+						// (RPCS3 #20075). The length checks above, which keep a bad file from crashing the
+						// loader, stay.
 						value.resize(nts);
 					}
 				}
