@@ -21,6 +21,13 @@ namespace rsx
 		RSX_SHADER_CONTROL_PROGRAMMABLE_BLENDING |
 		RSX_SHADER_CONTROL_EMULATE_DEPTH_RANGE;
 
+	// Programmable blending was wanted for the last draw but left off because not every color target
+	// the fragment program exports was bound (graph_engine::get_fragment_program_export_config). Kept
+	// here rather than as a graph_engine member: RSXGraphEngine.h reaches the SPU compiler's units,
+	// which android/spu_codegen_identity.py hashes preprocessed, so a member there would throw away
+	// every player's compiled SPU code for an RSX change. One RSX thread drives the graph engine.
+	static bool s_programmable_blending_held = false;
+
 	static bool evaluate_programmable_blending_state(rsx::context* ctx, u32& fragment_ctrl)
 	{
 		const bool is_blend_config_dirty = ctx->graphics_state.test(rsx::blend_config_dirty);
@@ -937,7 +944,7 @@ namespace rsx
 		{
 			expected_ctrl = m_ctx->program.fragment_program.ctrl & RSX_SHADER_CONTROL_PROGRAMMABLE_BLENDING;
 
-			if (m_ctx->graphics_state.test(rsx::pipeline_config_dirty) || m_programmable_blending_held)
+			if (m_ctx->graphics_state.test(rsx::pipeline_config_dirty) || s_programmable_blending_held)
 			{
 				evaluate_programmable_blending_state(m_ctx, expected_ctrl);
 			}
@@ -949,7 +956,7 @@ namespace rsx
 			// check), a target that fails the pitch check, or one aliasing the depth buffer. Such a draw
 			// blends in fixed function, and the next draw evaluates the state again, so the setting comes
 			// back once the targets do (pipeline_config_dirty is cleared at the end of this draw).
-			m_programmable_blending_held = false;
+			s_programmable_blending_held = false;
 
 			if (expected_ctrl & RSX_SHADER_CONTROL_PROGRAMMABLE_BLENDING)
 			{
@@ -964,7 +971,7 @@ namespace rsx
 				if (bound != rsx::utility::get_mrt_buffers_count(REGS(m_ctx)->surface_color_target()))
 				{
 					expected_ctrl &= ~RSX_SHADER_CONTROL_PROGRAMMABLE_BLENDING;
-					m_programmable_blending_held = true;
+					s_programmable_blending_held = true;
 				}
 			}
 		}
