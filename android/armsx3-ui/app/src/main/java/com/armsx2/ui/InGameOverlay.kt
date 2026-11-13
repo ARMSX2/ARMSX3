@@ -89,6 +89,19 @@ object InGameOverlay {
             MainActivityRuntime.eState.value != EmuState.STOPPED
         ) runCatching { ConfigStore.resolveForGame(currentSerial.value) }.getOrNull() else null
         settingsState.value = updated
+        // The overlay's own settings (its switch, Detail Level and the two graphs, in All Settings >
+        // On-Screen, the Performance tab and the XMB menu) are what the OSD mode's Custom shows. Changed
+        // while the mode was Full, Minimal or Off, they showed at once and the preset put itself back on
+        // the next resume or launch, so the OSD followed neither control (issue #279). A change here now
+        // makes the mode Custom, which every OSD mode selector then reads back.
+        if (osdMode.value != OsdMode.Custom && (
+                previous.ps3.overlayEnabled != updated.ps3.overlayEnabled ||
+                previous.ps3.overlayDetail != updated.ps3.overlayDetail ||
+                previous.ps3.overlayFramerateGraph != updated.ps3.overlayFramerateGraph ||
+                previous.ps3.overlayFrametimeGraph != updated.ps3.overlayFrametimeGraph)
+        ) {
+            runCatching { setOsdMode(OsdMode.Custom) }
+        }
         if (previous.shaderChainEnabled != updated.shaderChainEnabled || previous.shaderChainPreset != updated.shaderChainPreset) {
             android.util.Log.i(
                 "ARMSX3-Shader",
@@ -244,8 +257,15 @@ object InGameOverlay {
         // it the last word: MainActivityRuntime calls applyTo() and then applyStoredOsdMode().
         // The switch was therefore inert, and only that one key was affected, because
         // osdApplyFlags returns early when nothing is on and never reaches the graph settings.
+        //
+        // The rest of the overlay's own settings go with it. The twelve flags have had no rows since
+        // the overlay became RPCS3's, so they are all off and osdApplyFlags returns early before the
+        // detail level: Custom showed whatever level a preset had last left in the core (#279).
         if (s.ps3.overlayEnabled) {
             com.armsx3.Rpcs3Settings.setOverlayEnabled(true)
+            com.armsx3.Rpcs3Settings.setOverlayDetailIndex(s.ps3.overlayDetail)
+            com.armsx3.Rpcs3Settings.setOverlayFramerateGraph(s.ps3.overlayFramerateGraph)
+            com.armsx3.Rpcs3Settings.setOverlayFrametimeGraph(s.ps3.overlayFrametimeGraph)
         }
     }
 
