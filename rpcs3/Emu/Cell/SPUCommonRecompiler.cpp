@@ -192,6 +192,19 @@ static void spu_reset_async_compiles()
 	s_spu_async_logged = false;
 }
 
+// True while old_interpreter runs a range that spu_async_dispatch sent it, as opposed to a block
+// that failed to compile: only the first can become compiled code while it runs. Each path into
+// the interpreter sets it, so an escape that skips the reset cannot carry it into the other path.
+static thread_local bool t_spu_async_interp = false;
+static thread_local u32 t_spu_async_backedges = 0;
+
+// Whether a range sent to the interpreter is still compiling
+static bool spu_async_range_pending(u32 begin, u32 end)
+{
+	reader_lock lock(s_spu_async_mutex);
+	return std::find(s_spu_async_pending.begin(), s_spu_async_pending.end(), std::pair<u32, u32>{begin, end}) != s_spu_async_pending.end();
+}
+
 #endif
 // The fallback is spu_recompiler_base::old_interpreter, which reads the opcode table, the thread
 // and the local store and nothing else -- see spu_thread::cpu_task. It is always linked, so on the
@@ -396,6 +409,11 @@ static void spu_run_interp_fallback(spu_thread& spu, u32 lower_bound = 0, u32 si
 	// exactly the paths the flag is set for. cpu_task's loop is where control lands afterwards,
 	// and it runs on both the normal and the escaping path.
 	spu.allow_interrupts_in_cpu_work = true;
+
+#ifdef SPU_ASYNC_COMPILE
+	// A block that failed to compile stays interpreted until execution leaves it
+	t_spu_async_interp = false;
+#endif
 
 	spu_recompiler_base::old_interpreter(spu, spu._ptr<u8>(0), nullptr);
 
@@ -3593,6 +3611,9 @@ static bool spu_async_dispatch(spu_thread& spu, std::unique_ptr<spu_recompiler_b
 	spu.interp_fallback = true;
 	// As spu_run_interp_fallback: cpu_task clears it, and an escape skips anything after the interpreter
 	spu.allow_interrupts_in_cpu_work = true;
+	// This range becomes compiled code while it runs: see old_interpreter
+	t_spu_async_interp = true;
+	t_spu_async_backedges = 0;
 	spu_recompiler_base::old_interpreter(spu, spu._ptr<u8>(0), nullptr);
 	spu_runtime::g_escape(&spu);
 	return true;
@@ -3921,8 +3942,29 @@ void spu_recompiler_base::old_interpreter(spu_thread& spu, void* ls, u8* /*rip*/
 		}
 
 		const u32 op = *reinterpret_cast<const be_t<u32>*>(base + spu.pc);
+#ifdef SPU_ASYNC_COMPILE
+		const u32 pc_before = spu.pc;
+#endif
 		if (table.decode(op)(spu, {op}))
 			spu.pc += 4;
+
+#ifdef SPU_ASYNC_COMPILE
+		// A loop that started here while its range compiled in the background leaves at a loop head
+		// once that compile is done, and the dispatcher takes it from there with compiled code (it
+		// compiles the loop head as a program of its own first if it has to). Without this the
+		// interpreter kept a loop until execution left the range, so a job whose main loop began
+		// a moment before its code was ready ran all of it ten to fifty times slower, however soon
+		// the compile finished. Checked on every 256th backward branch: the lookup takes a lock.
+		if (spu.pc <= pc_before && t_spu_async_interp && spu.interp_fallback) [[unlikely]]
+		{
+			if ((++t_spu_async_backedges & 255) == 0 && !spu_async_range_pending(spu.interp_fallback_begin, spu.interp_fallback_end))
+			{
+				spu.interp_fallback = false;
+				t_spu_async_interp = false;
+				break;
+			}
+		}
+#endif
 	}
 }
 
