@@ -7,6 +7,9 @@
 #include "Emu/IdManager.h"
 #include "Emu/RSX/RSXOffload.h"
 #include "Emu/RSX/RSXThread.h"
+#ifdef __APPLE__
+#include "Emu/System.h"
+#endif
 #include "Emu/system_config.h"
 
 namespace vk
@@ -24,10 +27,36 @@ namespace vk
 		g_submit_mutex.unlock();
 	}
 
+#ifdef __APPLE__
+	bool (*g_gpu_work_refused)() = nullptr;
+
+	// Every submit and present waits here, since paused-loop flushes and mid-frame submits never reach the frame's flip
+	void wait_while_gpu_work_refused()
+	{
+		if (!g_gpu_work_refused || !g_gpu_work_refused())
+		{
+			return;
+		}
+
+		const u64 start = get_system_time();
+		rsx_log.notice("GPU work held: the scene is inactive, and Metal refuses work from the background.");
+
+		while (g_gpu_work_refused() && !Emu.IsStopped())
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+
+		rsx_log.notice("GPU work released after %u ms.", (get_system_time() - start) / 1000);
+	}
+
+#endif
 	FORCE_INLINE
 	static void queue_submit_impl(const queue_submit_t& submit_info)
 	{
 		ensure(submit_info.pfence);
+#ifdef __APPLE__
+		wait_while_gpu_work_refused();
+#endif
 		acquire_global_submit_lock();
 		VkSubmitInfo info
 		{
