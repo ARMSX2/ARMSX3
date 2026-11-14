@@ -179,6 +179,8 @@ final class ControllerPrompt {
     private(set) var request: Request?
 
     func ask(_ title: String, message: String, actions: [Action]) {
+        // A question already up is cancelled first, so its owner's binding is cleared and can ask again.
+        if request != nil { answer(nil) }
         request = Request(title: title, message: message, actions: actions)
     }
 
@@ -1026,6 +1028,10 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: JitNoticeModel.openJitDeviceNotification)) { _ in
             selectedMenuTab = 2
             settingsMenuNavigationPath = [.jitDevice]
+        }
+        // A prompt shown over a running game takes the pad once its menu opens.
+        .onChange(of: menuControllerInput.isMenuActive) { _, _ in
+            if activeControllerAlertKind != nil { updateRootAlertNavigationCapture(isPresented: true) }
         }
         .onChange(of: activeControllerAlertKind, initial: true) { previous, kind in
             rootControllerAlertSelection = 0
