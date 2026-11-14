@@ -26,6 +26,7 @@
 #include "LsfgVkCompat.h"
 
 #include "../vkutils/device.h"
+#include "../VKFrameGen.h"
 #include "FrameGenConfig.h"
 #include "util/logs.hpp"
 
@@ -293,7 +294,12 @@ void FrameGen::WaitForIdle() {
     // wrong thing to do halfway through a present.
     // PCSX2 called GSDeviceVK::WaitForGPUIdle() here. RPCS3 has no equivalent wrapper, and the
     // renderer's own teardown at VKGSRender.cpp:859 uses the plain Vulkan call, so use that.
-    vkDeviceWaitIdle(static_cast<VkDevice>(*gs_device));
+    //
+    // PORT: under the renderer's global submit lock (wait_device_idle in VKFrameGen.cpp).
+    // vkDeviceWaitIdle needs every queue of the device externally synchronised, and other threads
+    // submit to this one: with Multithreaded RSX the offloader may be inside vkQueueSubmit with the
+    // frame just handed to it, and a guest thread flushing the texture cache submits too.
+    ::vk::frame_gen::wait_device_idle(static_cast<VkDevice>(*gs_device));
 }
 
 u32 FrameGen::TargetIndex(VkImageView view) {

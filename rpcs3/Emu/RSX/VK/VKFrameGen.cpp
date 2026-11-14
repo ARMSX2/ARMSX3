@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "VKFrameGen.h"
+#include "VKHelpers.h"
 
 #include "Emu/system_config.h"
 #include "vkutils/device.h"
@@ -23,6 +24,19 @@ LOG_CHANNEL(framegen_log, "FRAMEGEN");
 
 namespace vk::frame_gen
 {
+	void wait_device_idle(VkDevice device)
+	{
+		// No caller holds the lock already: generate() takes it only around its own submit, after
+		// Process, which is where the pass chain is rebuilt or torn down, and the renderer's
+		// destructor, which releases the chain at shutdown or when the renderer is replaced, never
+		// takes it. Nor can the wait need a submission that is held up by the lock: a binary
+		// semaphore's signal has to be submitted before any wait on it, so nothing already on the
+		// queue waits for work that is not.
+		vk::acquire_global_submit_lock();
+		vkDeviceWaitIdle(device);
+		vk::release_global_submit_lock();
+	}
+
 #ifdef __ANDROID__
 	namespace
 	{
@@ -1545,7 +1559,7 @@ namespace vk::frame_gen
 		}
 	}
 
-	u32 generate(const vk::render_device& dev)
+	u32 generate(const vk::render_device& dev, const std::function<void()>& before_submit)
 	{
 		// The whole of frame generation, in one command buffer of its own: Process the frame the
 		// present path just handed us, ask the pacer how many to make from it, make them, submit.
@@ -1774,7 +1788,18 @@ namespace vk::frame_gen
 
 		vkResetFences(dev, 1, &g_native.fence[slot]);
 
-		if (vkQueueSubmit(g_native.queue, 1, &submit, g_native.fence[slot]) != VK_SUCCESS)
+		// Wait first and lock after, never the other way round: what before_submit waits for is
+		// submitted by the offloader, under this same lock.
+		if (before_submit)
+		{
+			before_submit();
+		}
+
+		vk::acquire_global_submit_lock();
+		const VkResult submit_result = vkQueueSubmit(g_native.queue, 1, &submit, g_native.fence[slot]);
+		vk::release_global_submit_lock();
+
+		if (submit_result != VK_SUCCESS)
 		{
 			disable("frame generation submit failed");
 			return 0;
@@ -1823,7 +1848,7 @@ namespace vk::frame_gen
 	u32 generated_width() { return 0; }
 	u32 generated_height() { return 0; }
 	u32 generated_frame_count() { return 0; }
-	u32 generate(const vk::render_device&) { return 0; }
+	u32 generate(const vk::render_device&, const std::function<void()>&) { return 0; }
 	VkImage generated_image(u32) { return VK_NULL_HANDLE; }
 	f32 display_fps() { return 0.f; }
 	std::string status_text() { return {}; }

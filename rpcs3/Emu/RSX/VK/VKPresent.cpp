@@ -1029,8 +1029,9 @@ void VKGSRender::queue_swap_request()
 	//
 	// Nothing may interpolate from it before this point. The capture becomes readable when the
 	// command buffer carrying it is submitted, and queue submission order -- not a cross-device
-	// handshake -- is what orders the interpolation after it. (See the note ~20 lines below: the
-	// passes run on OUR device and OUR graphics queue.)
+	// handshake -- is what orders the interpolation after it. (See the notes below: the passes run
+	// on OUR device and OUR graphics queue, and with Multithreaded RSX the submit above has only
+	// handed this frame to the offloader thread so far.)
 	vk::frame_gen::commit_capture();
 
 	if (framegen_frames && !m_framegen_pipelined)
@@ -1049,8 +1050,31 @@ void VKGSRender::queue_swap_request()
 		// that same queue. Vulkan orders submissions on a queue, so the interpolation cannot
 		// begin before the frame it reads has finished -- the guarantee the wait was buying is
 		// now free.
+		//
+		// That needs this frame's command buffer on the queue first, and with Multithreaded RSX the
+		// submit above has only handed it to the offloader thread, while generate() calls
+		// vkQueueSubmit itself, on this thread. Its passes could then reach the queue first and read
+		// the image before this frame was drawn into it. So generate() waits for this command buffer
+		// to reach the queue right before its own submit, once its passes are recorded, and then
+		// submits under the global submit lock, like every other thread that submits to this queue.
+		// The capture is in this command buffer or in one handed over ahead of it, and the offloader
+		// submits in order, so this one covers it. Without Multithreaded RSX it went out inline, and
+		// flush() returns at once.
+		//
+		// The wait is not a new one: present() below, or the flush after the first generated frame's
+		// blit, waits for the offloader to get past this command buffer anyway; it only moves ahead
+		// of the passes' submit. Nor does it depend on this thread: close_and_submit_command_buffer
+		// drained the offloader's copy jobs before handing the buffer over (dma_manager::sync; when
+		// it could not, it submitted inline), so what is left for the offloader is vkQueueSubmit
+		// under the global submit lock, which is only ever held around queue and device calls.
 		retire_generated_blits();
-		generated = vk::frame_gen::generate(*m_device);
+
+		const auto wait_for_frame_submit = [cb = m_current_frame->swap_command_buffer]()
+		{
+			cb->flush();
+		};
+
+		generated = vk::frame_gen::generate(*m_device, wait_for_frame_submit);
 	}
 
 	// Present the generated frames before the real one.

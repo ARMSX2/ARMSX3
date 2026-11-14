@@ -15,6 +15,7 @@
 #include "util/types.hpp"
 #include "VulkanAPI.h"
 
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -221,7 +222,20 @@ namespace vk::frame_gen
 	// submitting the command buffer that carries this frame's capture, since that capture
 	// overwrites one of the two images being read. Doing it the other way round is the race the
 	// caller used to pay a full frame-completion wait to avoid.
-	u32 generate(const vk::render_device& dev);
+	//
+	// The passes are submitted under vk::acquire_global_submit_lock(), which every thread that
+	// submits to the graphics queue takes: the offloader with Multithreaded RSX, and a guest thread
+	// that flushes the texture cache after an access violation. [before_submit], when set, runs on
+	// the calling thread just before that, once everything is recorded and before the lock is
+	// taken. The present path waits there for the frame the passes read to reach the queue
+	// (VKGSRender::queue_swap_request).
+	u32 generate(const vk::render_device& dev, const std::function<void()>& before_submit = {});
+
+	// vkDeviceWaitIdle under the global submit lock, for FrameGen::WaitForIdle ahead of a pass chain
+	// rebuild or teardown: it needs every queue of the device externally synchronised, and the
+	// offloader or a guest thread may be inside vkQueueSubmit at that moment. The caller must not
+	// hold the lock.
+	void wait_device_idle(VkDevice device);
 
 	// Handle of generated image i, for blitting into a swapchain image.
 	VkImage generated_image(u32 index);
