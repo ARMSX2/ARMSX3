@@ -11252,9 +11252,45 @@ public:
 		{
 			// Interrupts-disable pattern
 			m_ir->CreateStore(m_ir->getFalse(), spu_ptr(&spu_thread::interrupts_enabled));
+#ifdef __ANDROID__
+
+			// ARMSX3: SPU Inline Interrupt Idioms. The analyser leaves this single target for each idiom
+			// it takes in line with the setting on, and also, on or off, when the next instruction starts
+			// a block anyway; there stock code falls through unchecked. With the setting on, go on to the
+			// next instruction only when the register holds its address, and take the indirect branch
+			// otherwise: the analyser read the target off an immediate, and compiled code also runs where
+			// the same bytes turn up at another address (see BRA)
+			if (g_cfg.core.spu_inline_interrupt_idioms)
+			{
+				const auto exit = add_block_indirect(op, addr);
+				m_ir->CreateCondBr(m_ir->CreateICmpEQ(addr.value, get_pc(m_pos + 4)), add_block(spu_branch_target(m_pos, 1)), exit, m_md_likely);
+			}
+
+#endif
 			return;
 		}
 
+#ifdef __ANDROID__
+		if (op.e && !op.d && tfound != m_targets.end() && tfound->second.size() == 2 && tfound->second[0] == spu_branch_target(m_pos, 1) &&
+			tfound->second[1] == SPU_LS_SIZE && g_cfg.core.spu_inline_interrupt_idioms && g_cfg.core.spu_block_size == spu_block_size_type::mega)
+		{
+			// ARMSX3: interrupts-enable pattern, with SPU Inline Interrupt Idioms on (with SPU Block Size
+			// Mega the analyser leaves these two targets only then; Giga leaves them as well). With no
+			// busy-checked event in the mask and no masked event pending (ch_events: mask in bits 32-63,
+			// count in bit 31), all exec_check_interrupts does is set the flag: do that here and go on
+			// to the next instruction. Anything else, or a register that does not hold the next address
+			// (as in the pattern above), takes the branch as with the setting off, call included, which
+			// sets the flag again
+			const auto events = m_ir->CreateLoad(get_type<u64>(), spu_ptr(&spu_thread::ch_events), true);
+			const auto quiet = m_ir->CreateICmpEQ(m_ir->CreateAnd(events, m_ir->getInt64(u64{SPU_EVENT_INTR_BUSY_CHECK} << 32 | u64{1} << 31)), m_ir->getInt64(0));
+			const auto here = m_ir->CreateICmpEQ(addr.value, get_pc(m_pos + 4));
+			m_ir->CreateStore(m_ir->getInt8(1), spu_ptr(&spu_thread::interrupts_enabled));
+			const auto exit = add_block_indirect(op, addr);
+			m_ir->CreateCondBr(m_ir->CreateAnd(quiet, here), add_block(spu_branch_target(m_pos, 1)), exit, m_md_likely);
+			return;
+		}
+
+#endif
 		if (!op.d && !op.e && tfound != m_targets.end() && tfound->second.size() > 1)
 		{
 			// Shift aligned address for switch

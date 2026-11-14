@@ -1249,7 +1249,18 @@ void spu_cache::initialize(bool build_existing_cache)
 	}
 
 	// SPU cache file (version + block size type)
+#ifdef __ANDROID__
+	// ARMSX3: a list of its own with SPU Inline Interrupt Idioms on. With it the functions that run are
+	// not the ones a stock list holds (the code after a bid or bie no longer starts a function), and a
+	// list is rebuilt at every boot on a fake local store that holds one function at a time, so a shared
+	// list would keep feeding each side the other's functions. For bie it is what makes the setting act
+	// at all: a listed function that ends at its bie is rebuilt just as short, and where one function is
+	// the beginning of another the dispatcher runs the shorter one. A new list starts empty, like the
+	// first one after a change of SPU Block Size.
+	const std::string filename = "spu-" + fmt::to_lower(g_cfg.core.spu_block_size.to_string()) + (g_cfg.core.spu_inline_interrupt_idioms ? "-inline" : "") + "-v1-tane.dat";
+#else
 	const std::string filename = "spu-" + fmt::to_lower(g_cfg.core.spu_block_size.to_string()) + "-v1-tane.dat";
+#endif
 	const std::string loc = ppu_cache + filename;
 	const std::string loc_debug = fs::get_cache_dir() + "DEBUG/" + filename;
 
@@ -1964,7 +1975,11 @@ static u64 spu_obj_cache_settings()
 		static_cast<u64>(g_cfg.core.mfc_debug.get()) << 33 |
 		static_cast<u64>(g_cfg.core.rsx_accurate_res_access.get()) << 34 |
 		static_cast<u64>(g_cfg.savestate.compatible_mode.get()) << 35 |
-		static_cast<u64>(g_cfg.core.spu_debug.get()) << 36;
+		static_cast<u64>(g_cfg.core.spu_debug.get()) << 36
+#ifdef __ANDROID__
+		| static_cast<u64>(g_cfg.core.spu_inline_interrupt_idioms.get()) << 37
+#endif
+		;
 }
 
 const std::string& spu_runtime::get_obj_cache_path() const
@@ -1988,6 +2003,14 @@ const std::string& spu_runtime::get_obj_cache_path() const
 #endif
 spu_runtime::spu_runtime()
 {
+#ifdef __ANDROID__
+	if (g_cfg.core.spu_inline_interrupt_idioms && g_cfg.core.spu_decoder == spu_decoder_type::llvm)
+	{
+		spu_log.notice("SPU Inline Interrupt Idioms: on, %s", g_cfg.core.spu_block_size == spu_block_size_type::mega ?
+			"bid and bie compiled in line" : "bid compiled in line (bie only with SPU Block Size Mega)");
+	}
+
+#endif
 	// Drop the previous session's failed-block set.
 	//
 	// It is keyed on local-store offsets, which are per-thread 18-bit addresses that every SPU
@@ -2188,6 +2211,14 @@ spu_runtime::spu_runtime()
 		fold(sve_bits);
 		const u32 spu_debug = static_cast<u32>(g_cfg.core.spu_debug.get());
 		fold(spu_debug);
+
+		// SPU Inline Interrupt Idioms changes the code built for the same SPU program. Folded only when
+		// on, so with it off the key is made of what it was made of before the setting existed.
+		if (g_cfg.core.spu_inline_interrupt_idioms)
+		{
+			const u32 inline_idioms = 1;
+			fold(inline_idioms);
+		}
 #ifdef ARMSX3_ANDROID_SPU_CODEGEN_IDENTITY
 		spu_log.notice("SPU object cache key: codegen %s", ARMSX3_ANDROID_SPU_CODEGEN_IDENTITY);
 #else
@@ -4551,6 +4582,21 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 				spu_log.error("[0x%x] Invalid interrupt flags (DE)", pos);
 			}
 
+#ifdef __ANDROID__
+			if (type == spu_itype::BI && (op.d || (op.e && g_cfg.core.spu_block_size == spu_block_size_type::mega)) && g_cfg.core.spu_inline_interrupt_idioms)
+			{
+				// ARMSX3: SPU Inline Interrupt Idioms. A block that starts inside the one holding this
+				// branch gets the branch analysed again, maybe without the constant or after a SYNC: drop
+				// the edge to the next instruction that the idiom paths below may have made on an earlier
+				// pass. They make it again if they still apply; otherwise the next block would keep a
+				// predecessor that does not branch to it
+				if (const auto found = m_preds.find(pos + 4); found != m_preds.end())
+				{
+					std::erase(found->second, pos);
+				}
+			}
+
+#endif
 			const auto af = vflags[op.ra];
 			const auto av = values[op.ra];
 			const bool sl = type == spu_itype::BISL || type == spu_itype::BISLED;
@@ -4604,7 +4650,19 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 				if (type == spu_itype::BI && target == pos + 4 && op.d)
 				{
 					// Disable interrupts idiom
-#ifdef __APPLE__
+#ifdef __ANDROID__
+					// ARMSX3: with SPU Inline Interrupt Idioms on, Android takes the Apple path below, and the
+					// LLVM recompiler then checks the address at run time (BI). Not after a SYNC in the same
+					// block, after which the analyser follows no indirect branch (jump tables, Giga calls)
+					// either, nor with the E flag set as well (invalid, logged above), whose branch also
+					// checks for interrupts. Otherwise the branch leaves the function as before
+					if (!g_cfg.core.spu_inline_interrupt_idioms || sync || op.e)
+					{
+						break;
+					}
+
+#endif
+#if defined(__APPLE__) || defined(__ANDROID__)
 					// Both recompilers take this path only when m_targets holds pos+4, and pos+4 must be a block for the target prune to keep it
 					m_targets[pos].push_back(target);
 					add_block(target);
@@ -4613,6 +4671,22 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 					break;
 				}
 
+#ifdef __ANDROID__
+				if (type == spu_itype::BI && target == pos + 4 && op.e && !sync && g_cfg.core.spu_inline_interrupt_idioms && g_cfg.core.spu_block_size == spu_block_size_type::mega)
+				{
+					// ARMSX3: enable interrupts idiom, with SPU Inline Interrupt Idioms on. The function is
+					// not cut at the next instruction: to the rest of the analysis this is a conditional
+					// indirect branch, as a biz is, that goes on to the next instruction or leaves (for the
+					// interrupt handler, or where the register points). The LLVM recompiler decides at run
+					// time (BI). Mega only: Giga already keeps the code after it in the function, as an entry
+					m_targets[pos].push_back(target);
+					m_targets[pos].push_back(SPU_LS_SIZE);
+					add_block(target);
+					next_block();
+					break;
+				}
+
+#endif
 				m_targets[pos].push_back(target);
 
 				if (g_cfg.core.spu_block_size == spu_block_size_type::giga)
