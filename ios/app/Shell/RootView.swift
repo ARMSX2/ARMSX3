@@ -451,7 +451,9 @@ struct RootView: View {
     @State private var settings = SettingsStore.shared
     @State private var frameRates = UIFrameRateSettings.shared
     @State private var gameCoverThemePreview = GameCoverThemePreviewStore.shared
-    @State private var showBootSplash = !AppState.shared.automaticGameStartupPending
+    // XMB mode brings itself up from black, as the console does, in place of the intro. Setup's cover would hide it.
+    @State private var showBootSplash = !AppState.shared.automaticGameStartupPending && !SettingsStore.shared.xmbMode
+        && SettingsStore.shared.setupFinished && !SetupRules.steps.contains(SettingsStore.shared.setupStep)
     @State private var rootControllerAlertSelection = 0
     // Set by the initialiser, so a caller can hand in the router.
     @State private var menuControllerInput: MenuControllerInputRouter
@@ -470,10 +472,16 @@ struct RootView: View {
     @State private var backgroundHost = PersistentMenuBackgroundHost()
     // Handed in by the app root or made here; the router too, so its controller focus is observable outside.
     @State private var library: LibraryModel
+    // The XMB's state lives here so its focus survives the library's grid and a game.
+    @State private var xmbHost: XmbHost
+    // The real shape from the first frame, so a landscape iPad never mounts the library for a frame before the XMB.
+    @State private var menuLandscape = UIApplication.shared.appWindowScene
+        .map { $0.coordinateSpace.bounds.width > $0.coordinateSpace.bounds.height } ?? false
 
     @MainActor init(library: LibraryModel? = nil, controllerInput: MenuControllerInputRouter? = nil) {
         _library = State(initialValue: library ?? LibraryModel())
         _menuControllerInput = State(initialValue: controllerInput ?? MenuControllerInputRouter())
+        _xmbHost = State(initialValue: XmbHost(library: _library.wrappedValue, controllerInput: _menuControllerInput.wrappedValue))
     }
 
     // ARMSX2's theme gallery preview, not built in this app.
@@ -491,6 +499,25 @@ struct RootView: View {
         }
         return false
     }
+
+    /// The console's menu has no status bar, whatever the library's setting says.
+    private var menuHidesStatusBar: Bool { settings.hideMenuStatusBar || xmbShown }
+
+    /// The iPhone holds the XMB in landscape. iPadOS cannot hold a resizable window's shape, so an upright iPad window shows
+    /// the library instead, and a game or sheet the XMB opened keeps it up through a turn.
+    private var xmbShown: Bool {
+        settings.xmbMode && !XmbLibraryCover.shared.presenting
+            && (UIDevice.current.userInterfaceIdiom != .pad || menuLandscape || xmbHost.covered)
+    }
+
+    /// Free while any game screen is up, and across Change Disc's swap so the screen does not turn between discs.
+    private var xmbHoldsLandscape: Bool {
+        xmbShown && menuScreenActive && xmbHost.playing == nil && !xmbHost.changingDisc && !XmbInGame.shared.screenUp
+            && XmbInGame.shared.nextDisc == nil && !XmbLibraryCover.shared.setupUp
+    }
+
+    /// A game the XMB did not open, such as one from a boot link, stands in front of it, also while it changes discs.
+    private var xmbBehindGame: Bool { (XmbInGame.shared.screenUp || XmbInGame.shared.nextDisc != nil) && !xmbHost.gameUp }
 
     private var menuPresentationActive: Bool {
         // Keep library layout, covers and dynamic background
@@ -636,6 +663,10 @@ struct RootView: View {
             // Install that split once so Settings, Per-Game Settings, Quick
             // Menu, context menus, and standard prompts stay consistent.
             .labelStyle(UIAccentIconLabelStyle())
+            // The XMB holds the screen in landscape; the library's grid and a game turn freely.
+            .onChange(of: xmbHoldsLandscape, initial: true) { _, held in
+                ARMSX3AppDelegate.landscapeOnly = held
+            }
     }
 
     private var baseContent: some View {
@@ -670,13 +701,31 @@ struct RootView: View {
             // library fades behind the live SwiftUI card instead of vanishing
             // on the same update that starts the VM.
             if menuPresentationActive || appState.gameplayLaunchTransition != nil {
-                MenuTabView(
-                    backgroundHost: backgroundHost,
-                    controllerInput: menuControllerInput,
-                    library: library,
-                    selectedTab: $selectedMenuTab,
-                    settingsNavigationPath: $settingsMenuNavigationPath
-                )
+                ZStack {
+                    if settings.xmbMode {
+                        // The XMB draws its own wave and its theme's picture.
+                        XmbHomeView(host: xmbHost, visible: xmbShown && !xmbBehindGame && !XmbLibraryCover.shared.setupUp)
+                            .opacity(xmbShown ? 1 : 0)
+                            .allowsHitTesting(xmbShown)
+                            .accessibilityHidden(!xmbShown)
+                            // The library's background would keep drawing unseen under the XMB; MenuTabView turns it back on.
+                            .onChange(of: xmbShown, initial: true) { _, shown in
+                                guard shown else { return }
+                                backgroundHost.setMenuBackgroundAvailable(false)
+                                backgroundHost.setPresentationVisible(false)
+                            }
+                    }
+                    if !xmbShown {
+                        MenuTabView(
+                            backgroundHost: backgroundHost,
+                            controllerInput: menuControllerInput,
+                            library: library,
+                            selectedTab: $selectedMenuTab,
+                            settingsNavigationPath: $settingsMenuNavigationPath
+                        )
+                    }
+                }
+                    .onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height } action: { menuLandscape = $0 }
                     .opacity(menuScreenActive && !themeGalleryPreviewing ? 1 : 0)
                     .animation(
                         .easeOut(duration: 0.34),
@@ -723,6 +772,19 @@ struct RootView: View {
                 .zIndex(100)
             }
 
+            // Leaving XMB mode fades to black and outlives the XMB itself.
+            XmbShutdownView(clock: XmbBootClock.shared)
+                .zIndex(101)
+                // The library is mounted under the black from the moment XMB mode ends, so until the black has lifted
+                // a press only ends the intro, as at launch.
+                .onChange(of: XmbBootClock.shared.isShuttingDown) { _, leaving in
+                    if leaving {
+                        menuControllerInput.setLaunchInputInterceptor { XmbBootClock.shared.introFinished() }
+                    } else {
+                        menuControllerInput.setLaunchInputInterceptor(nil)
+                    }
+                }
+
             if appState.automaticGameStartupPending {
                 ZStack {
                     Color.black.ignoresSafeArea()
@@ -753,7 +815,8 @@ struct RootView: View {
                     menuControllerInput.isMenuActive
                         && menuControllerInput.isControllerNavigationEnabled
                         && menuControllerInput.pendingNavigationModeSwitchRequest == nil
-                        && frameRates.asksBeforeTouchNavigation,
+                        && frameRates.asksBeforeTouchNavigation
+                        && !menuControllerInput.isPadFirstCaptured,
                 onTouch: {
                     menuControllerInput.noteTouchInput()
                 },
@@ -797,7 +860,7 @@ struct RootView: View {
         .statusBarHidden(
             showBootSplash
                 ? settings.hideIntroStatusBar
-                : (menuScreenActive && settings.hideMenuStatusBar)
+                : (menuScreenActive && menuHidesStatusBar)
         )
     }
 
@@ -815,7 +878,7 @@ struct RootView: View {
             // preference as soon as the root hierarchy appears.
             appState.hideStatusBar = showBootSplash
                 ? settings.hideIntroStatusBar
-                : (menuScreenActive && settings.hideMenuStatusBar)
+                : (menuScreenActive && menuHidesStatusBar)
             // ARMSX2's UI audio packs, not built in this app.
             #if ARMSX3_PHASE10
             MenuAudioPackManager.shared.setAutomaticGameStartupActive(
@@ -872,7 +935,7 @@ struct RootView: View {
             guard showBootSplash else { return }
             appState.hideStatusBar = hideStatusBar
         }
-        .onChange(of: settings.hideMenuStatusBar) { _, hideStatusBar in
+        .onChange(of: menuHidesStatusBar) { _, hideStatusBar in
             guard !showBootSplash, menuScreenActive else { return }
             appState.hideStatusBar = hideStatusBar
         }
@@ -948,7 +1011,17 @@ struct RootView: View {
         #endif
         // An armsx3://library or armsx3://settings link switches the tab.
         .onReceive(NotificationCenter.default.publisher(for: DeepLink.openTabNotification)) { note in
-            if let tab = note.object as? Int { selectedMenuTab = tab }
+            guard let tab = note.object as? Int else { return }
+            // The XMB has no tabs: the settings link opens its Settings column, and the library link changes nothing.
+            if xmbShown {
+                // Not behind a game or a sheet, where it would move the XMB unseen.
+                if tab == 2, xmbHost.playing == nil, xmbHost.presented == nil, !XmbInGame.shared.screenUp,
+                   let column = xmbHost.state.columns.firstIndex(where: { $0.id == "settings" }) {
+                    xmbHost.perform(.column(column))
+                }
+                return
+            }
+            selectedMenuTab = tab
         }
         .onReceive(NotificationCenter.default.publisher(for: JitNoticeModel.openJitDeviceNotification)) { _ in
             selectedMenuTab = 2
@@ -996,7 +1069,7 @@ struct RootView: View {
                 for: EmulatorSession.menuBackgroundReturnNotification
             )
         ) { _ in
-            backgroundHost.reactivateForMenu(isAvailable: settings.hasCustomBackground)
+            backgroundHost.reactivateForMenu(isAvailable: settings.hasCustomBackground && !xmbShown)
         }
     }
 
@@ -1017,7 +1090,7 @@ struct RootView: View {
             guard !Task.isCancelled,
                   !showBootSplash,
                   appState.currentScreen == .menu else { return }
-            appState.hideStatusBar = settings.hideMenuStatusBar
+            appState.hideStatusBar = menuHidesStatusBar
         }
         scheduleGameplayControllerHelpIfReady()
 
@@ -1099,7 +1172,7 @@ struct RootView: View {
             return
         }
         if !showBootSplash {
-            appState.hideStatusBar = settings.hideMenuStatusBar
+            appState.hideStatusBar = menuHidesStatusBar
         }
         gameplayHelpBanner.clear()
         updateRootAlertNavigationCapture(
@@ -1214,7 +1287,7 @@ struct RootView: View {
         case .upRight, .right, .downRight, .down:
             moveControllerAlertSelection(by: 1, kind: kind, command: command)
         case .toggleFavorite, .showContextMenu,
-             .previousTab, .nextTab:
+             .previousTab, .nextTab, .start, .select:
             menuControllerInput.playFeedback(.boundary)
         }
     }
@@ -2118,7 +2191,7 @@ struct MenuTabView: View {
             } else {
                 controllerInput.playFeedback(.boundary)
             }
-        case .toggleFavorite, .showContextMenu:
+        case .toggleFavorite, .showContextMenu, .start, .select:
             controllerInput.playFeedback(.boundary)
         }
     }

@@ -130,6 +130,12 @@ import UIKit
 
     func openSession() async {
         guard !sessionHeld else { return }
+        // Without a prepared core the client logs in with no password, which the server answers as a wrong one.
+        if EmulatorSession.shared.browsing {
+            session = 3
+            notice = EmulatorSession.browsingRefusal
+            return
+        }
         sessionHeld = true
         session = 1
         notice = nil
@@ -418,6 +424,7 @@ import UIKit
                 screen: RpcnState.AccountScreen) async -> Bool {
         let name = typed.trimmingCharacters(in: .whitespacesAndNewlines)
         if let missing = RpcnState.missingInput(username: name, password: password) { notice = missing; return false }
+        if EmulatorSession.shared.browsing { notice = EmulatorSession.browsingRefusal; return false }
         let previous = accountName
         let token = typedToken ?? RpcnKeychain.load(npid: name)?.token ?? ""
         busy = true

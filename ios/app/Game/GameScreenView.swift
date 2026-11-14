@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // The game screen: render view, touch pad, quick menu, saves, recording and RPCN banners. Reproduces ARMSX2 PR 757's look.
 
+import AVFoundation
 import Combine
 import GameController
 import SwiftUI
@@ -44,6 +45,8 @@ struct GameScreenView: View {
     // Files picks keep their access until the game stops, because the game keeps reading the disc.
     @State private var discSwap = 0
     @State private var discPicker = false
+    // True while the picker is for Change Disc, which starts the picked disc in place of this game.
+    @State private var discBoots = false
     @State private var discChanging = false
     @State private var discAccess: [URL] = []
     @State private var portalSheet = false
@@ -159,6 +162,9 @@ struct GameScreenView: View {
             }
             .overlay { menuLayer }
             .overlay {
+                if SettingsStore.shared.xmbMode { XmbGameNotices() }
+            }
+            .overlay {
                 if session.restartPending || exitSaving { restartOverlay }
             }
             .overlay {
@@ -166,7 +172,11 @@ struct GameScreenView: View {
             }
             .alert("Couldn't save. Stop anyway?", isPresented: $exitFailed) {
                 Button("Stop anyway", role: .destructive) { stop() }
-                Button("Keep playing", role: .cancel) {}
+                Button("Keep playing", role: .cancel) {
+                    // The disc Change Disc picked is not started after all, and the app stays on.
+                    XmbInGame.shared.nextDisc = nil
+                    XmbInGame.shared.turnOffAfterExit = false
+                }
             } message: {
                 exitFailureStatus == EmulatorSession.savestateSpuBusy
                     ? spuBusyText : Text("The game was not saved (status \(exitFailureStatus)).")
@@ -255,7 +265,7 @@ struct GameScreenView: View {
             .sheet(isPresented: $discPicker) {
                 DiscPicker(onPick: { path, url in
                     discPicker = false
-                    Task { await swapDisc(path: path, filesURL: url) }
+                    Task { if discBoots { await bootInstead(path: path) } else { await swapDisc(path: path, filesURL: url) } }
                 }, onCancel: { discPicker = false })
             }
             // The menu stays open beneath, so the game stays paused.
@@ -316,7 +326,9 @@ struct GameScreenView: View {
             .onChange(of: bootStatus == 0 && !stopping && !menuOpen && scenePhase == .active, initial: true) { _, awake in
                 UIApplication.shared.isIdleTimerDisabled = awake
             }
+            .onAppear { XmbInGame.shared.screenUp = true }
             .onDisappear {
+                XmbInGame.shared.screenUp = false
                 UIApplication.shared.isIdleTimerDisabled = false
                 // The screen closing finishes a running recording's file.
                 stopRecordingAutomatically()
@@ -329,9 +341,15 @@ struct GameScreenView: View {
                 discAccess = []
                 session.quickMenuOpen = false
                 controllerInput?.setNavigationCaptured(false, owner: QuickMenuView.controllerScope, priority: 300)
+                XmbInGame.shared.end()
                 session.inputOwner = .menu
                 // Reactivating a background that was never released is a no-op.
                 NotificationCenter.default.post(name: EmulatorSession.menuBackgroundReturnNotification, object: nil)
+                // A chosen power-off, so the next launch does not take it for a crash.
+                if XmbInGame.shared.turnOffAfterExit {
+                    DiagnosticsSession.shared.mark(.background)
+                    _exit(0)
+                }
             }
             .onReceive(Publishers.MergeMany(GamepadPoller.controllerChanges.map { NotificationCenter.default.publisher(for: $0) })) { _ in
                 controllerConnected = GamepadPoller.playerOneHasController
@@ -339,6 +357,11 @@ struct GameScreenView: View {
             // A restarted game has a new video provider that holds no recording, so the file is finished first.
             .onChange(of: session.state == EmulatorSession.stateStopped || session.restartPending) { _, ended in
                 if ended { stopRecordingAutomatically() }
+            }
+            // In XMB mode a halt is also the console's error dialog, in the XMB over the stopped game; the banner keeps Close ARMSX3.
+            .onChange(of: stopStatus) { _, status in
+                guard SettingsStore.shared.xmbMode, let status, XmbInGame.shared.gameError(status, jitReason: session.jitReason) else { return }
+                showMenu(true)
             }
             .onChange(of: showPad) { _, shown in
                 if !shown { PadSnapshot.shared.reset() }
@@ -510,9 +533,40 @@ struct GameScreenView: View {
     @ViewBuilder private var menuLayer: some View {
         if menuOpen, let layoutEditor {
             PadLayoutEditorView(editor: layoutEditor, overGame: true, onClose: { self.layoutEditor = nil })
+        } else if menuOpen, SettingsStore.shared.xmbMode, slotPanel == nil, !settingsOpen, !friendsOpen {
+            // In XMB mode the pause menu is the XMB; its save slots, settings and friends stay the app's panels.
+            XmbGameMenu(game: game, busy: session.restartPending || stopping, calls: xmbCalls, controllerInput: controllerInput,
+                        discSwap: discSwap != 0 && !discChanging, recording: RecordingStore.shared.active, invites: rpcnInvites,
+                        sheetUp: report != nil || discPicker || portalSheet || controllersSheet != nil || jitDeviceSheet != nil)
         } else if menuOpen {
             menuPanel
         }
+    }
+
+    private var menuActions: QuickMenuView.Actions {
+        QuickMenuView.Actions(
+            resume: { setMenu(open: false) },
+            saveState: { slotPanel = .save },
+            loadState: { slotPanel = .load },
+            exit: { exitWithAutosave() },
+            settings: { settingsOpen = true },
+            report: { openReport() },
+            screenshot: { Task { await captureScreenshot(fromMenu: true) } },
+            controllers: { controllersSheet = ControllersSheetRequest(serial: game.serial) },
+            changeDisc: { discBoots = false; discPicker = true },
+            bootDisc: { discBoots = true; discPicker = true },
+            record: { Task { await toggleRecording(fromMenu: true) } },
+            portal: { portalSheet = true },
+            friends: { friendsOpen = true },
+            touchLayout: controllerConnected ? nil : {
+                layoutEditor = PadEditor(serial: game.serial, library: PadLayoutStore.shared.library)
+            })
+    }
+
+    // The XMB asks before a restart and before overwriting a slot, so these act at once.
+    private var xmbCalls: XmbInGame.Calls {
+        XmbInGame.Calls(actions: menuActions, restart: { resetGame() }, saveSlot: { saveSlot($0) }, loadState: { loadState(at: $0) },
+                        declined: { id in rpcnInvites.removeAll { $0.id == id } })
     }
 
     private var menuPanel: some View {
@@ -523,22 +577,7 @@ struct GameScreenView: View {
                 title: game.title,
                 canLoad: hasStates,
                 busy: session.restartPending || stopping,
-                actions: QuickMenuView.Actions(
-                    resume: { setMenu(open: false) },
-                    saveState: { slotPanel = .save },
-                    loadState: { slotPanel = .load },
-                    exit: { exitWithAutosave() },
-                    settings: { settingsOpen = true },
-                    report: { openReport() },
-                    screenshot: { Task { await captureScreenshot(fromMenu: true) } },
-                    controllers: { controllersSheet = ControllersSheetRequest(serial: game.serial) },
-                    changeDisc: { discPicker = true },
-                    record: { Task { await toggleRecording(fromMenu: true) } },
-                    portal: { portalSheet = true },
-                    friends: { friendsOpen = true },
-                    touchLayout: controllerConnected ? nil : {
-                        layoutEditor = PadEditor(serial: game.serial, library: PadLayoutStore.shared.library)
-                    }),
+                actions: menuActions,
                 controllerInput: controllerInput,
                 slotPanel: slotPanelView,
                 settingsPanel: settingsOpen
@@ -574,9 +613,12 @@ struct GameScreenView: View {
         }
         guard status == 0, let json else { return }
         let current = RpcnSession.invites(json)
+        let xmb = SettingsStore.shared.xmbMode
         for invite in RpcnSession.inviteChanges(previous: rpcnSeenInvites, current: current) {
-            rpcnBanner(RpcnSession.inviteBanner(invite), seconds: 8)
+            if xmb { XmbNotices.shared.invited(by: invite.from) } else { rpcnBanner(RpcnSession.inviteBanner(invite), seconds: 8) }
         }
+        // In XMB mode a friend request is told over the game too, as the console tells it.
+        if xmb { await XmbNotices.shared.readRequests() }
         rpcnSeenInvites.formUnion(current.map(\.id))
         rpcnInvites = current
     }
@@ -783,7 +825,10 @@ struct GameScreenView: View {
     private func captureScreenshot(fromMenu: Bool) async {
         if fromMenu { await leaveMenuUntilRunning() }
         let (_, file) = await ScreenshotStore.capture(serial: game.serial)
-        if fromMenu {
+        if fromMenu, SettingsStore.shared.xmbMode {
+            // The XMB says nothing for a shot, which shows in its Photo column; a miss is one of its notices.
+            if file == nil { XmbNotices.shared.post(String(localized: "Couldn't capture a frame")) }
+        } else if fromMenu {
             if let file { shotFile = file } else { shotFailed = true }
         } else {
             shotBanner.present(file != nil ? String(localized: "Screenshot saved") : String(localized: "Couldn't capture a frame"))
@@ -811,7 +856,14 @@ struct GameScreenView: View {
             return
         }
         let file = await store.stop()
-        if fromMenu {
+        if fromMenu, SettingsStore.shared.xmbMode {
+            // An alert over the XMB would leave its pad on the menu behind, so the XMB says it as a notice.
+            if file != nil {
+                XmbNotices.shared.post(String(localized: "Recording saved"), detail: String(localized: "Files › ARMSX3 › Recordings"))
+            } else {
+                XmbNotices.shared.post(String(localized: "Couldn't save the recording"))
+            }
+        } else if fromMenu {
             if let file { recordingFile = file } else { recordingFailed = true }
         } else {
             shotBanner.present(file != nil ? String(localized: "Recording saved") : String(localized: "Couldn't save the recording"))
@@ -838,6 +890,17 @@ struct GameScreenView: View {
         let (status, result) = await session.changeDisc(path: path)
         discChanging = false
         shotBanner.present(DiscPicker.message(for: status == 0 ? result : 2))
+    }
+
+    // The bridge boots only what the library scanned, so a disc from elsewhere is refused before the game closes.
+    private func bootInstead(path: String) async {
+        let picked = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        let games = await Rpcs3Bridge.scanLibrary().0
+        guard let disc = games.first(where: { URL(fileURLWithPath: $0.bootPath).resolvingSymlinksInPath().path == picked }) else {
+            return shotBanner.present(String(localized: "Only a disc in the library can be started here"))
+        }
+        XmbInGame.shared.nextDisc = disc.bootPath
+        exitWithAutosave()
     }
 
     private func leaveMenu() async {
@@ -888,6 +951,7 @@ struct GameScreenView: View {
     }
 
     private func showMenu(_ open: Bool) {
+        let wasOpen = menuOpen
         menuOpen = open
         if !open { layoutEditor = nil }
         if bootStatus == 0 { session.inputOwner = open ? .menu : .game }
@@ -895,7 +959,11 @@ struct GameScreenView: View {
         KeyboardMouseFeed.shared.refreshPointerLock()
         // The router navigates the open quick menu, and captures navigation from the library under it.
         session.quickMenuOpen = open && bootStatus == 0
-        controllerInput?.setNavigationCaptured(session.quickMenuOpen, owner: QuickMenuView.controllerScope, priority: 300)
+        // An open in-game XMB already holds its capture, or has let it go to a sheet, when a dropped pad opens the menu again.
+        if !(wasOpen && open && SettingsStore.shared.xmbMode) {
+            controllerInput?.setNavigationCaptured(session.quickMenuOpen, owner: QuickMenuView.controllerScope, priority: 300,
+                                                   padFirst: open && SettingsStore.shared.xmbMode)
+        }
         if open {
             // Change Disc is offered only while the game takes a swap, read now.
             discSwap = 0
@@ -918,18 +986,22 @@ struct GameScreenView: View {
         guard !bootRequested else { return }
         bootRequested = true
         // A title with an exit autosave asks first, and never resumes without an answer.
-        var autosave = await session.slotFile(fileSlot: EmulatorSession.autoFileSlot, serial: game.serial)
+        // A state picked in the XMB's Load / Manage Saves is the one to start from, with nothing to ask.
+        let picked = XmbToolsStore.shared.takeState(serial: game.serial)
+        var autosave = if let picked { picked } else { await session.slotFile(fileSlot: EmulatorSession.autoFileSlot, serial: game.serial) }
         // An exit autosave from before the USB bus returned cannot be resumed, so the game boots fresh and says so once.
         let oldAutosave = autosave.map { EmulatorSession.stateEpoch(path: $0) < SaveStateFiles.formatEpoch } ?? false
         if oldAutosave {
             autosave = nil
         }
-        var resume = false
-        if autosave != nil {
+        var resume = picked != nil
+        if autosave != nil, picked == nil {
             guard let answer = await askResume() else { return }
             resume = answer
         }
         // Activated first, so the core's Cubeb stream opens against an active session. A refusal does not stop the boot.
+        // The XMB's music and videos may have left the session mixable, and the game's own setup runs once a run.
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
         _ = await session.activateAudio()
         let status: Int
         if let autosave, resume {
@@ -977,7 +1049,8 @@ struct GameScreenView: View {
             // A Stop in flight or a save or load restart skips the tick; a Stop that timed out lets the record carry on.
             if stopping || session.restartPending { continue }
             // The dual map latches at most one offer per game session; the read clears it.
-            if stopStatus == nil, jitOffer == nil {
+            // An open XMB leaves the offer latched, so its alert never comes up over the XMB, which keeps the pad.
+            if stopStatus == nil, jitOffer == nil, !(menuOpen && SettingsStore.shared.xmbMode) {
                 let taken = await withCheckedContinuation { continuation in
                     Rpcs3Bridge.takeJitSecondPassOffer { continuation.resume(returning: $0) }
                 }
@@ -1016,6 +1089,8 @@ struct GameScreenView: View {
                 GamepadPoller.shared.onPlayerLost = nil
                 await SessionRecord.shared.finish(stopStatus: status)
                 DiagnosticsSession.shared.mark(.menu)
+                // Music picked in the open XMB is held before the screen goes; the home's cover hands it back after.
+                if menuOpen, SettingsStore.shared.xmbMode { XmbMedia.shared.stop() }
                 dismiss()
             } else {
                 stopStatus = status
@@ -1073,6 +1148,8 @@ struct GameScreenView: View {
         await SessionRecord.shared.finish(stopStatus: 0)
         DiagnosticsSession.shared.mark(.menu)
         await session.deactivateAudio()
+        // Music picked in the open XMB is held before the screen goes; the home's cover hands it back after.
+        if menuOpen, SettingsStore.shared.xmbMode { XmbMedia.shared.stop() }
         dismiss()
     }
 

@@ -75,6 +75,36 @@ import SwiftUI
 
     var hasCustomBackground: Bool { dynamicBackgroundsEnabled || backgroundPrimaryAsset != nil }
 
+    /// The console's XrossMediaBar in place of the library tabs, kept across launches.
+    var xmbMode: Bool {
+        didSet { defaults.set(xmbMode, forKey: Self.key("xmbMode")) }
+    }
+
+    /// The XMB's colour: -1 follows the month as the console's Original does, 0 to 11 is a month, 12 cycles through them.
+    var xmbThemeColor: Int {
+        didSet { defaults.set(xmbThemeColor, forKey: Self.key("xmbThemeColor")) }
+    }
+
+    /// A focused game's PIC1 behind the XMB.
+    var xmbGameBackgrounds: Bool {
+        didSet { defaults.set(xmbGameBackgrounds, forKey: Self.key("xmbGameBackgrounds")) }
+    }
+
+    /// A focused game's ICON1 playing in place of its icon.
+    var xmbAnimatedIcons: Bool {
+        didSet { defaults.set(xmbAnimatedIcons, forKey: Self.key("xmbAnimatedIcons")) }
+    }
+
+    /// A focused game's SND0 playing.
+    var xmbGameMusic: Bool {
+        didSet { defaults.set(xmbGameMusic, forKey: Self.key("xmbGameMusic")) }
+    }
+
+    /// The XMB's theme, a saved theme's folder name, or nil for Original. The library's background is its own.
+    var xmbTheme: String? {
+        didSet { defaults.set(xmbTheme, forKey: Self.key("xmbTheme")) }
+    }
+
     // MARK: - Glass
 
     var clearLiquidGlassUIQuickMenu: Bool {
@@ -259,6 +289,12 @@ import SwiftUI
         func double(_ member: String, _ fallback: Double) -> Double { defaults.object(forKey: Self.key(member)) as? Double ?? fallback }
 
         dynamicBackgroundsEnabled = bool("dynamicBackgroundsEnabled", true)
+        xmbMode = bool("xmbMode", false)
+        xmbThemeColor = min(max(defaults.object(forKey: Self.key("xmbThemeColor")) as? Int ?? -1, -1), 12)
+        xmbGameBackgrounds = bool("xmbGameBackgrounds", true)
+        xmbAnimatedIcons = bool("xmbAnimatedIcons", true)
+        xmbGameMusic = bool("xmbGameMusic", true)
+        xmbTheme = defaults.string(forKey: Self.key("xmbTheme"))
         dynamicAppearancePreferences = defaults.data(forKey: Self.key("dynamicAppearancePreferences"))
             .flatMap { try? JSONDecoder().decode(DynamicAppearancePreferences.self, from: $0) } ?? .standard
         backgroundDim = min(max(double("backgroundDim", 0), 0), 1)

@@ -36,8 +36,18 @@ struct BackgroundPaneView: View {
     private static let themeIDPrefix = "settings.background.theme."
 
     var body: some View {
-        // The toggle stays first whichever way it is set, and only the rows beneath it change.
+        // The two switches stay first whichever way they are set, and only the rows beneath them change.
         Form {
+            Section {
+                // Switching mid-game would take away the screen the running game belongs to.
+                Toggle("XMB Mode", isOn: $settings.xmbMode)
+                    .disabled(EmulatorSession.shared.isRunning)
+                    .controllerAccessibilityTargetID("settings.appearance.xmb-mode")
+            } footer: {
+                Text(EmulatorSession.shared.isRunning
+                     ? "Quit the game to switch XMB Mode."
+                     : "The console's menu in place of the library. Leave it from Users, Exit XMB Mode.")
+            }
             Section {
                 Toggle("Moving background", isOn: $settings.dynamicBackgroundsEnabled)
                     .controllerAccessibilityTargetID("settings.appearance.dynamic-background")

@@ -13,10 +13,12 @@ struct GameListView: View {
     @State private var sheet: LibrarySheet?
     @State private var pickingFolder = false
     @State private var gridWidth: CGFloat = 0
+    /// True while a game, Change Disc's next disc or a launch waiting for an update holds the screen, so the library stays.
+    @State private var gameCovered = false
     // iPhone Duo half open like a book: the fold's edges in the grid's space, nil otherwise.
     @State private var gridFold: ClosedRange<CGFloat>?
     @State private var query = ""
-    @AppStorage("ARMSX3LibrarySortRecent") private var sortRecent = false
+    @AppStorage(GameListView.sortRecentKey) private var sortRecent = false
     // The last title touched; the backdrop follows it, else the first title.
     @State private var selected: String?
     @State private var contextEntry: LibraryCache.Entry?
@@ -84,26 +86,15 @@ struct GameListView: View {
                 // The drawer keeps the search field off the app's tab bar.
                 .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search games")
                 .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
+                    ToolbarItemGroup(placement: .topBarLeading) {
                         if updates.pillText != nil {
-                            UpdatesPill(inTabs: menuTabIsActive, openSheet: { sheet = .install })
+                            UpdatesPill(inTabs: menuTabIsActive, openSheet: { sheet = .install }, narrow: gridWidth > 0 && gridWidth < 390)
                         } else if model.phase == .loading && !model.entries.isEmpty {
                             ProgressView()
                         }
                     }
-                    ToolbarItemGroup(placement: .topBarTrailing) {
-                        Menu {
-                            Picker("Sort", selection: $sortRecent) {
-                                Text("Name").tag(false)
-                                Text("Recently Played").tag(true)
-                            }
-                        } label: { Image(systemName: "arrow.up.arrow.down") }
-                            .accessibilityLabel("Sort")
-                        Button { sheet = .folders } label: { Image(systemName: "folder") }
-                            .accessibilityLabel("Game Folders")
-                        Button { pickingFolder = true } label: { Image(systemName: "plus") }
-                            .accessibilityLabel("Add Game Folder")
-                    }
+                    // With games these join the grid's own bar, where the pad can reach the XMB button.
+                    ToolbarItemGroup(placement: .topBarTrailing) { if !showsGrid { barButtons } }
                 }
         }
         .preferredColorScheme(.dark)
@@ -135,6 +126,17 @@ struct GameListView: View {
             }
         }
         .preference(key: LibraryMenuOpenKey.self, value: contextEntry != nil)
+        // XMB mode switched on meanwhile would take this view away with what it presents.
+        .onChange(of: playing != nil) { _, up in if up { gameCovered = true } }
+        // Another tab takes this page away during a launch wait, so the wait ends and the XMB may come back.
+        .onDisappear {
+            guard playing == nil, gameCovered else { return }
+            cancelLaunchWait()
+            XmbLibraryCover.shared.presenting = false
+        }
+        .onChange(of: gameCovered || sheet != nil || pickingFolder || pickingCoverPhoto || pickingCoverFile, initial: true) { _, up in
+            XmbLibraryCover.shared.presenting = up
+        }
         // The capture's events are the menu's; every other event belongs to the grid's scope.
         .onChange(of: controllerInput?.latestEvent) { _, event in
             guard let event, event.captureOwner == MenuControllerNavigationCaptureOwner.gameLibraryPresentation else { return }
@@ -167,7 +169,18 @@ struct GameListView: View {
             finishCover(CustomCovers.set(data ?? Data(), serial: entry.serial, fallback: entry.iconPath))
         }
         // A boot that failed never changes the running state, so closing the screen lets the update queue go on.
-        .fullScreenCover(item: $playing, onDismiss: { updates.gameStateChanged() }) { request in
+        .fullScreenCover(item: $playing, onDismiss: {
+            updates.gameStateChanged()
+            // The XMB's Change Disc closed the game to start another disc; the library stays until it has started.
+            guard let disc = XmbInGame.shared.takeNextDisc() else {
+                gameCovered = false
+                return
+            }
+            Task {
+                if let entry = await model.entry(bootPath: disc), open(entry) { return }
+                gameCovered = false
+            }
+        }) { request in
             GameScreenView(game: request.game)
         }
         .sheet(item: $sheet) { which in
@@ -207,6 +220,49 @@ struct GameListView: View {
         }
     }
 
+    private var showsGrid: Bool {
+        if case .error = model.phase { return false }
+        return !model.entries.isEmpty
+    }
+
+    /// The bar's buttons: the way into XMB mode first, then Sort and Game Folders in one menu so the update pill keeps
+    /// its room, then Add.
+    @ViewBuilder private var barButtons: some View {
+        xmbButton
+        Menu {
+            Picker("Sort", selection: $sortRecent) {
+                Label("Name", systemImage: "textformat").tag(false)
+                Label("Recently Played", systemImage: "clock").tag(true)
+            }
+            Section {
+                Button("Game Folders", systemImage: "folder") { sheet = .folders }
+            }
+        } label: { Image(systemName: "ellipsis") }
+            .accessibilityLabel("More")
+        Button { pickingFolder = true } label: { Image(systemName: "plus") }
+            .accessibilityLabel("Add Game Folder")
+    }
+
+    /// XMB mode replaces this whole screen, so its way in leads the bar.
+    @ViewBuilder private var xmbButton: some View {
+        if !settings.xmbMode {
+            Button { switchToXmb() } label: { XmbWaveGlyph().frame(width: 27, height: 27) }
+                .accessibilityLabel("Switch to XMB Mode")
+                .controllerAccessibilityActionTarget(id: "library.xmb-mode", label: String(localized: "Switch to XMB Mode")) {
+                    switchToXmb()
+                }
+        }
+    }
+
+    private func switchToXmb() {
+        settings.xmbMode = true
+        // An upright iPad keeps the library, so the tap says where the XMB went.
+        let size = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.coordinateSpace.bounds.size ?? .zero
+        if UIDevice.current.userInterfaceIdiom == .pad, size.width <= size.height {
+            licenceNotice = String(localized: "The XMB shows when the iPad is in landscape.")
+        }
+    }
+
     @ViewBuilder private var content: some View {
         if case .error(let status) = model.phase {
             errorState(status).inLeftLeafInBookPose()
@@ -238,17 +294,7 @@ struct GameListView: View {
     }
 
     private var shown: [LibraryCache.Entry] {
-        var list = model.entries
-        if sortRecent {
-            let played = PlayTime.shared
-            list.sort { a, b in
-                let fa = model.isFavourite(a), fb = model.isFavourite(b)
-                if fa != fb { return fa }
-                let da = played.lastPlayed(for: a.serial), db = played.lastPlayed(for: b.serial)
-                if da != db { return (da ?? .distantPast) > (db ?? .distantPast) }
-                return a.title.localizedStandardCompare(b.title) == .orderedAscending
-            }
-        }
+        let list = sortRecent ? Self.recentFirst(model.entries, favourite: model.isFavourite) : model.entries
         let needle = query.trimmingCharacters(in: .whitespaces)
         guard !needle.isEmpty else { return list }
         return list.filter { $0.title.localizedCaseInsensitiveContains(needle) || $0.serial.localizedCaseInsensitiveContains(needle) }
@@ -314,6 +360,8 @@ struct GameListView: View {
         .onAppear { Task { await installs.refreshVersion() } }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { gridWidth = $0 }
         .onBookFoldChange { gridFold = $0 }
+        // Inside the pad's scope, so a controller can focus the XMB button as well as the cards.
+        .toolbar { ToolbarItemGroup(placement: .topBarTrailing) { barButtons } }
         .controllerAccessibilityNavigation(
             controllerInput: controllerInput,
             scopeKey: Self.controllerScope,
@@ -324,7 +372,10 @@ struct GameListView: View {
             },
             onPreviousTab: onPreviousTab,
             onNextTab: onNextTab,
-            onBoundary: onBoundary
+            onBoundary: onBoundary,
+            // The bar sits above the cards, so without this a pad would start on the XMB button.
+            // The game last opened, so coming back from it lands there; otherwise the first card, never the bar.
+            preferredInitialFocusLabel: (shown.first { $0.bootPath == selected } ?? shown.first).map(Self.targetID)
         )
     }
 
@@ -420,42 +471,77 @@ struct GameListView: View {
         }
     }
 
-    private func open(_ entry: LibraryCache.Entry) {
-        guard contextEntry == nil else { return }
+    /// True when the game started or waits for an install to finish.
+    @discardableResult private func open(_ entry: LibraryCache.Entry) -> Bool {
+        guard contextEntry == nil else { return false }
         selected = entry.bootPath
-        if entry.locked == true {
+        switch Self.launchBlock(entry) {
+        case .locked?:
             lockedEntry = entry
-            return
+            return false
+        case .explained(let why)?:
+            licenceNotice = why
+            return false
+        case nil:
+            break
         }
-        // A title the core can't read is not booted, and no licence is offered because one would not help.
-        if entry.unreadable == true {
-            licenceNotice = String(localized: "This game can't be read, and a licence won't help. It may be built for a PS3 running CFW or HEN.")
-            return
-        }
-        // An ISO whose image is no longer there would boot into a core failure, so say so instead.
-        if let gone = LibraryRelocation.goneMessage(bootPath: entry.bootPath, isISO: entry.isISO) {
-            licenceNotice = gone
-            return
-        }
-        guard let game = model.game(for: entry) else { return }
+        guard let game = model.game(for: entry) else { return false }
         updates.holdForLaunch()
         guard updates.installingSerial != nil else {
             playing = PlayRequest(game: game)
-            return
+            return true
         }
-        // The core's one queue is busy installing; the game starts once that package is done.
+        // The core's one queue is busy installing; the game starts once that package is done, and the library stays for it.
+        gameCovered = true
         controllerInput?.setNavigationCaptured(
             true, owner: MenuControllerNavigationCaptureOwner.gameLibraryPresentation, priority: 200)
         Task {
             let started = await updates.waitForInstall()
             controllerInput?.setNavigationCaptured(
                 false, owner: MenuControllerNavigationCaptureOwner.gameLibraryPresentation, priority: 200)
-            if started { playing = PlayRequest(game: game) }
+            if started { playing = PlayRequest(game: game) } else { gameCovered = false }
         }
+        return true
     }
 
     private func cancelLaunchWait() {
         updates.cancelWait()
+    }
+
+    /// Why a game is not booted now, shared by the grid and the XMB.
+    enum LaunchBlock {
+        /// It needs a licence first.
+        case locked
+        /// Said instead of booting it.
+        case explained(String)
+    }
+
+    static func launchBlock(_ entry: LibraryCache.Entry) -> LaunchBlock? {
+        if EmulatorSession.shared.browsing {
+            return .explained(String(localized: "Games need JIT. This test build is only showing the menus."))
+        }
+        if entry.locked == true { return .locked }
+        // A title the core can't read is not booted, and no licence is offered because one would not help.
+        if entry.unreadable == true {
+            return .explained(String(localized: "This game can't be read, and a licence won't help. It may be built for a PS3 running CFW or HEN."))
+        }
+        // An ISO whose image is no longer there would boot into a core failure, so say so instead.
+        if let gone = LibraryRelocation.goneMessage(bootPath: entry.bootPath, isISO: entry.isISO) { return .explained(gone) }
+        return nil
+    }
+
+    static let sortRecentKey = "ARMSX3LibrarySortRecent"
+
+    /// The Recent sort: favourites first, then the most recently played, then by name.
+    static func recentFirst(_ entries: [LibraryCache.Entry], favourite: (LibraryCache.Entry) -> Bool) -> [LibraryCache.Entry] {
+        let played = PlayTime.shared
+        return entries.sorted { a, b in
+            let fa = favourite(a), fb = favourite(b)
+            if fa != fb { return fa }
+            let da = played.lastPlayed(for: a.serial), db = played.lastPlayed(for: b.serial)
+            if da != db { return (da ?? .distantPast) > (db ?? .distantPast) }
+            return a.title.localizedStandardCompare(b.title) == .orderedAscending
+        }
     }
 
     static func targetID(_ entry: LibraryCache.Entry) -> String { "library.card.\(entry.bootPath)" }

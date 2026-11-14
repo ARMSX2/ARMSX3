@@ -50,6 +50,12 @@ targets:
       # The Android patch asset itself, so the two cannot drift; BundledPatches.swift installs it at launch.
       - path: ../android/armsx3-ui/app/src/main/assets/canary_patches.yml
         buildPhase: resources
+      # The XMB wave's starting state, the Android asset itself for the same reason.
+      - path: ../android/armsx3-ui/app/src/main/assets/xmb/wave_state.bin
+        buildPhase: resources
+      # The boot intro, Android's own file; BootSplashView plays it at launch and when the XMB is left.
+      - path: ../android/armsx3-ui/app/src/main/res/raw/boot_intro.mp4
+        buildPhase: resources
 
     settings:
       base:
