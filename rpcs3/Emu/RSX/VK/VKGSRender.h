@@ -141,6 +141,14 @@ private:
 	u32 m_draws_since_submit = 0;         // Draws recorded into the open primary command buffer
 	u32 m_early_submit_check_at = umax;   // Draw count at which to ask the GPU next; umax when off
 
+	// Fence poll completion markers ("Fence Poll Completion Markers"), see arm_completion_marker.
+	// One mapped u32 per primary command buffer, written by the GPU; null while the setting is off.
+	std::unique_ptr<vk::buffer> m_cb_done_markers;
+	u32* m_cb_done_marker_map = nullptr;
+	u32 m_cb_done_slots = 0;              // Slots handed out to command buffers so far
+	u32 m_cb_done_seq = 0;                // Last value written; every armed submission gets its own
+	void arm_completion_marker(vk::command_buffer_chunk* cmd);
+
 	std::unique_ptr<vk::buffer> m_host_object_data;
 	vk::framebuffer_holder* m_draw_fbo = nullptr;
 

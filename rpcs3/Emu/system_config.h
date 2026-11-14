@@ -292,6 +292,12 @@ struct cfg_root : cfg::node
 			// and the GPU has finished the previous submit, submit it early instead of leaving the GPU
 			// idle until the next flush point. Values 1-255 count as 256. Read when the renderer starts.
 			cfg::uint<0, 65535> early_submit_draw_threshold{ this, "Early Submit Draw Threshold", 0 };
+			// ARMSX3: off by default; the config database turns it on per title. Read when the renderer
+			// starts. The last command of every primary command buffer a fence poll can ask about (not
+			// those submitted with the caller's own fence) writes a number to mapped memory, and a poll
+			// answers "not yet" from that word, without asking the driver, while the GPU has not reached
+			// it (VKGSRender::arm_completion_marker).
+			cfg::_bool fence_poll_completion_markers{ this, "Fence Poll Completion Markers", false };
 #ifdef __ANDROID__
 			// ARMSX3: left on. Android has no Re-BAR; the name only fits desktop cards. RPCS3 counts any
 			// device-local, host-visible, coherent memory type as "BAR", and on a phone that is plain

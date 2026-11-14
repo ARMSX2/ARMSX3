@@ -58,11 +58,27 @@ namespace vk
 		std::optional<std::tuple<VkDeviceSize, VkIndexType>> index_info;
 	};
 
+	// Set when a fence signalled while its completion marker was still unwritten: the markers are then
+	// ignored until the next renderer creates them and clears this. Atomic because wait(), which sets
+	// it, does not only run on the RSX thread: on_descriptor_pool_fragmentation() waits for every
+	// primary command buffer from whichever thread ran out of descriptors. Only read where a marker
+	// exists, so never with the setting off.
+	inline atomic_t<bool> g_completion_marker_failed = false;
+
 	struct command_buffer_chunk : public vk::command_buffer
 	{
 		u64 eid_tag = 0;
 		u64 reset_id = 0;
 		shared_mutex guard_mutex;
+
+		// Completion marker ("Fence Poll Completion Markers", see VKGSRender::arm_completion_marker).
+		//
+		// The last command of the pending submission writes done_value into *done_marker, a word of
+		// mapped memory, so "has the GPU reached the end of this buffer" is a memory read. Null
+		// while the pending submission has no marker, which is always the case with the setting off.
+		const volatile u32* done_marker = nullptr;
+		u32 done_value = 0;
+		u32 done_slot = umax; // This buffer's word, handed out the first time it is armed
 
 		// Ring memory that was allocated before this buffer was submitted.
 		//
@@ -93,6 +109,9 @@ namespace vk
 				wait(FRAME_PRESENT_TIMEOUT);
 			}
 
+			// The marker belonged to the submission retired above
+			done_marker = nullptr;
+
 			++reset_id;
 			vk::command_buffer::reset();
 		}
@@ -108,6 +127,19 @@ namespace vk
 
 			if (!m_submit_fence->flushed)
 			{
+				return false;
+			}
+
+			if (done_marker && !g_completion_marker_failed.observe() && *done_marker != done_value &&
+				!pool->get_owner().is_lost())
+			{
+				// The GPU has not executed this buffer's last command, so its fence cannot have
+				// signalled: "not yet", without the query below, which waits instead of polling on
+				// some Turnip builds (see VKGSRender::arm_completion_marker).
+				//
+				// Not on a lost device: its GPU never writes the marker, and the query below is what
+				// retires the buffer then (die_with_error). A hard sync loops on
+				// check_present_status() until that happens.
 				return false;
 			}
 
@@ -194,6 +226,18 @@ namespace vk
 			if (!is_pending)
 			{
 				return ret;
+			}
+
+			if (ret == VK_SUCCESS && done_marker && *done_marker != done_value && !pool->get_owner().is_lost()) [[unlikely]]
+			{
+				// The fence signals after every command of the buffer, the marker write included.
+				// If that does not hold on this driver, poke() must not rely on the marker. A device
+				// already known to be lost does not count: its fences can report signalled without
+				// its GPU having run the buffer.
+				if (!g_completion_marker_failed.exchange(true))
+				{
+					rsx_log.error("VK: a fence signalled before its completion marker was written (driver ordering, or a lost device). Completion markers are ignored from here on.");
+				}
 			}
 
 			m_submit_fence->reset();

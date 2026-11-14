@@ -535,6 +535,9 @@ vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src, bool 
 			VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, range);
 	}
 
+	// present_after_generated polls this buffer from right after the flip, long before it is done
+	arm_completion_marker(cmd);
+
 	cmd->end();
 
 	// The overlays drawn above uploaded into the renderer's flushable heaps. Where those are
