@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// First-run setup: six pages, each skippable. The current step is saved so a relaunch for JIT resumes there.
+// First-run setup: seven pages, each skippable. The current step is saved so a relaunch for JIT resumes there.
 
 import GameController
 import SwiftUI
@@ -61,6 +61,8 @@ struct SetupFlow: View {
             return
         }
         let store = SettingsStore.shared
+        // Run Setup Again can come up over a game, and switching the menu would close that game's screen with it.
+        if action == .finish, let xmb = steps.menuXmb, !EmulatorSession.shared.isRunning { store.xmbMode = xmb }
         store.setupFinished = true
         store.setupStep = 0
         onEnd()
@@ -91,6 +93,8 @@ struct SetupFlow: View {
     let installs = InstallModel()
     private(set) var firmwareResult: String?
     private(set) var controllerName: String?
+    /// The menu picked on the last step, kept until Finish so the screen does not turn under setup.
+    var menuXmb: Bool?
 
     init(library: LibraryModel) {
         self.library = library
@@ -315,6 +319,7 @@ struct SetupStepPage: View {
         case 4: firmwareCard
         case 5: gamesCard
         case 6: controllerCard
+        case 7: menuCard
         default: EmptyView()
         }
     }
@@ -360,6 +365,66 @@ struct SetupStepPage: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .GCControllerDidDisconnect)) { _ in steps.refreshController() }
+    }
+
+    // The choice takes effect when setup ends, and Appearance can change it later.
+    private var menuCard: some View {
+        let xmb = steps.menuXmb ?? SettingsStore.shared.xmbMode
+        return VStack(spacing: 12) {
+            HStack(spacing: 12) {
+                menuChoice(false, selected: !xmb, title: String(localized: "Library")) { Self.libraryPicture }
+                menuChoice(true, selected: xmb, title: String(localized: "XMB")) { XmbWaveIcon(cornerFraction: 0) }
+            }
+            Self.caption(xmb
+                ? String(localized: "The PS3's own menu, shown in landscape, with its music and themes. Leave it from Users, Exit XMB Mode.")
+                : String(localized: "A grid of your games with covers, in either orientation. The wave button at the top of the library switches over."))
+        }
+    }
+
+    private func menuChoice(_ value: Bool, selected: Bool, title: String, @ViewBuilder picture: () -> some View) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 14)
+        return Button { steps.menuXmb = value } label: {
+            VStack(spacing: 8) {
+                picture()
+                    .aspectRatio(4 / 3, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                HStack(spacing: 6) {
+                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(selected ? AnyShapeStyle(.tint) : AnyShapeStyle(OverlayTheme.textSecondary))
+                    Text(title).font(.headline).foregroundStyle(OverlayTheme.textPrimary)
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity)
+            .background(.white.opacity(selected ? 0.10 : 0.04), in: shape)
+            .overlay(shape.strokeBorder(selected ? AnyShapeStyle(.tint) : AnyShapeStyle(.white.opacity(0.12)), lineWidth: selected ? 2 : 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .controllerAccessibilityActionTarget(id: "setup.menu." + (value ? "xmb" : "library"), label: title) { steps.menuXmb = value }
+    }
+
+    /// A few covers in a grid, the library as it looks.
+    private static var libraryPicture: some View {
+        let hues: [Double] = [0.58, 0.02, 0.33, 0.12, 0.75, 0.48]
+        return ZStack {
+            Color(red: 0.11, green: 0.12, blue: 0.15)
+            Grid(horizontalSpacing: 6, verticalSpacing: 6) {
+                ForEach(0..<2) { row in
+                    GridRow {
+                        ForEach(0..<3) { column in
+                            let hue = hues[row * 3 + column]
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(LinearGradient(colors: [Color(hue: hue, saturation: 0.55, brightness: 0.75),
+                                                              Color(hue: hue, saturation: 0.65, brightness: 0.40)],
+                                                     startPoint: .top, endPoint: .bottom))
+                                .aspectRatio(0.86, contentMode: .fit)
+                        }
+                    }
+                }
+            }
+            .padding(10)
+        }
     }
 
     private var gamesCard: some View {
@@ -424,7 +489,8 @@ struct SetupStepPage: View {
         case 3: return String(localized: "JIT")
         case 4: return String(localized: "PS3 Firmware")
         case 5: return String(localized: "Your Games")
-        default: return String(localized: "Controller")
+        case 6: return String(localized: "Controller")
+        default: return String(localized: "Menu Style")
         }
     }
 
@@ -435,18 +501,20 @@ struct SetupStepPage: View {
         case 3: return "bolt"
         case 4: return "arrow.down.circle"
         case 5: return "folder"
-        default: return "gamecontroller"
+        case 6: return "gamecontroller"
+        default: return "sparkles.tv"
         }
     }
 
     static func sentence(_ step: Int) -> String {
         switch step {
-        case 1: return String(localized: "Setup checks this device, turns on JIT, installs PS3 firmware and adds your games. Skip any step you don't need, and run setup again from Settings › JIT and Device.")
+        case 1: return String(localized: "Setup checks this device, turns on JIT, installs PS3 firmware, adds your games and picks the menu. Skip any step you don't need, and run setup again from Settings › JIT and Device.")
         case 2: return String(localized: "ARMSX3 reads these from iOS and from how it was signed. A missing entitlement is fixed by signing again, not in the app.")
         case 3: return JitNextStep.severity
         case 4: return String(localized: "Games need PS3 firmware, the file PS3UPDAT.PUP from PlayStation's website.")
         case 5: return String(localized: "Add the folder that holds your PS3 games. They stay where they are and are not copied.")
-        default: return String(localized: "Pair a controller in the Settings app under Bluetooth. Without one, games show touch controls.")
+        case 6: return String(localized: "Pair a controller in the Settings app under Bluetooth. Without one, games show touch controls.")
+        default: return String(localized: "Pick how ARMSX3 opens: the library, or the PS3's XMB.")
         }
     }
 }
