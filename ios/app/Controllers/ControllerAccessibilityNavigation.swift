@@ -901,7 +901,7 @@ final class ControllerAccessibilityNavigationSession {
                 controllerInput?.playFeedback(.boundary)
             }
             return true
-        case .toggleFavorite:
+        case .toggleFavorite, .start, .select:
             return false
         case .left, .right:
             if let focusedKey {

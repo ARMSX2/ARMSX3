@@ -23,6 +23,9 @@ enum MenuControllerCommand: Hashable, Sendable {
     case showContextMenu
     case previousTab
     case nextTab
+    /// Start and Select, sent only to a pad-first capture: the XMB keyboard's Done and Paste.
+    case start
+    case select
 }
 
 extension MenuControllerCommand {
@@ -32,7 +35,7 @@ extension MenuControllerCommand {
              .down, .downLeft, .left, .upLeft:
             true
         case .activate, .back, .toggleFavorite, .showContextMenu,
-             .previousTab, .nextTab:
+             .previousTab, .nextTab, .start, .select:
             false
         }
     }
@@ -470,6 +473,7 @@ final class MenuControllerInputRouter {
     private struct ManualNavigationCapture {
         let priority: Int
         let registrationOrder: UInt64
+        let padFirst: Bool
     }
 
     private struct PendingNavigationSessionCommand {
@@ -497,6 +501,8 @@ final class MenuControllerInputRouter {
         case nextTab
         case previousTheme
         case nextTheme
+        case start
+        case select
     }
 
     private(set) var latestEvent: MenuControllerInputEvent?
@@ -525,6 +531,8 @@ final class MenuControllerInputRouter {
             && (!EmulatorSession.shared.isRunning || EmulatorSession.shared.quickMenuOpen)
     }
     private(set) var isNavigationCaptured = false
+    /// The frontmost capture is a pad-first screen, the XMB: a press acts at once and a touch keeps the pad.
+    private(set) var isPadFirstCaptured = false
     private(set) var hasNavigationSession = false
     private(set) var hasConnectedController = false
     private(set) var isControllerNavigationEnabled = false
@@ -738,13 +746,15 @@ final class MenuControllerInputRouter {
     func setNavigationCaptured(
         _ captured: Bool,
         owner: String,
-        priority: Int
+        priority: Int,
+        padFirst: Bool = false
     ) {
         if captured, isMenuActive {
             manualNavigationCaptureSequence &+= 1
             manualNavigationCaptures[owner] = ManualNavigationCapture(
                 priority: priority,
-                registrationOrder: manualNavigationCaptureSequence
+                registrationOrder: manualNavigationCaptureSequence,
+                padFirst: padFirst
             )
             pendingNavigationSessionCommands.removeAll(keepingCapacity: true)
         } else {
@@ -775,6 +785,8 @@ final class MenuControllerInputRouter {
     /// the same screen.
     func noteTouchInput() {
         guard isMenuActive else { return }
+        // The XMB draws its own cursor and takes touch and pad alike, as Android's does.
+        guard !isPadFirstCaptured else { return }
         guard pendingNavigationModeSwitchRequest == nil else { return }
         guard isControllerNavigationEnabled else { return }
         if isControllerNavigationEnabled, hasConnectedController,
@@ -840,7 +852,7 @@ final class MenuControllerInputRouter {
     private func prepareControllerNavigationForInput() -> Bool {
         if isControllerNavigationEnabled { return true }
         guard pendingNavigationModeSwitchRequest == nil else { return false }
-        if UIFrameRateSettings.shared.asksBeforeControllerNavigation {
+        if UIFrameRateSettings.shared.asksBeforeControllerNavigation, !isPadFirstCaptured {
             publishNavigationModeSwitchRequest(.controller)
             return false
         }
@@ -891,8 +903,9 @@ final class MenuControllerInputRouter {
             self.pendingNavigationSessionCommands.removeAll(keepingCapacity: false)
             self.navigationSessions.removeAll(keepingCapacity: false)
             self.hasNavigationSession = false
-            self.manuallyCapturedNavigation = false
-            self.manualNavigationCaptures.removeAll(keepingCapacity: false)
+            // The XMB takes touch and pad alike, so its capture outlives a pad that disconnects.
+            self.manualNavigationCaptures = self.manualNavigationCaptures.filter { $0.value.padFirst }
+            self.manuallyCapturedNavigation = !self.manualNavigationCaptures.isEmpty
             self.rightStickRedispatchTask?.cancel()
             self.rightStickRedispatchTask = nil
             self.rightStickTargets.removeAll(keepingCapacity: false)
@@ -1052,6 +1065,8 @@ final class MenuControllerInputRouter {
         // The same owner emit() picks when no screen holds a manual capture.
         let inputSession = manualNavigationCaptures.isEmpty ? frontmostNavigationSessionEntry?.key : nil
         if navigationInputSessionID != inputSession { navigationInputSessionID = inputSession }
+        let padFirst = frontmostManualNavigationCapture?.value.padFirst == true
+        if padFirst != isPadFirstCaptured { isPadFirstCaptured = padFirst }
         let next = isMenuActive
             && isControllerNavigationEnabled
             && activeNavigationInputMode == .controller
@@ -1441,6 +1456,10 @@ final class MenuControllerInputRouter {
             updateButton(.previousTab, pressed: gamepad.leftShoulder.isPressed, command: .previousTab, profileID: profileID)
         } else if element === gamepad.rightShoulder {
             updateButton(.nextTab, pressed: gamepad.rightShoulder.isPressed, command: .nextTab, profileID: profileID)
+        } else if element === gamepad.buttonMenu {
+            updateButton(.start, pressed: gamepad.buttonMenu.isPressed, command: .start, profileID: profileID)
+        } else if let select = gamepad.buttonOptions, element === select {
+            updateButton(.select, pressed: select.isPressed, command: .select, profileID: profileID)
         } else if element === gamepad.leftTrigger {
             updateThemePresetButton(.previousTheme, pressed: gamepad.leftTrigger.isPressed, step: -1, profileID: profileID)
         } else if element === gamepad.rightTrigger {
@@ -1601,6 +1620,13 @@ final class MenuControllerInputRouter {
         let dpadY = gamepad.dpad.yAxis.value
         if abs(dpadX) >= 0.5 || abs(dpadY) >= 0.5 {
             return direction(x: dpadX, y: dpadY)
+        }
+        let stickX = gamepad.leftThumbstick.xAxis.value
+        let stickY = gamepad.leftThumbstick.yAxis.value
+        // The XMB reads the stick by its stronger axis, as Android does; its D-pad still sends corners.
+        if isPadFirstCaptured, max(abs(stickX), abs(stickY)) >= 0.58 {
+            if abs(stickX) >= abs(stickY) { return stickX < 0 ? .left : .right }
+            return stickY < 0 ? .down : .up
         }
         return direction(
             x: gamepad.leftThumbstick.xAxis.value,
@@ -1983,6 +2009,8 @@ final class MenuControllerInputRouter {
         repeatAcceleration: Double = 1
     ) {
         guard isMenuActive else { return }
+        // Start and Select mean nothing to the rest of the app.
+        if command == .start || command == .select, !isPadFirstCaptured { return }
         guard prepareControllerNavigationForInput() else { return }
         if command.isSpatialDirection, !isRepeat {
             let now = ProcessInfo.processInfo.systemUptime
@@ -2120,6 +2148,8 @@ final class MenuControllerInputRouter {
     }
 
     private func updateRightStick(x: Float, y: Float) {
+        // Now Playing's Valley and Gaia read the raw stick, up negative as on Android.
+        if isPadFirstCaptured { XmbVisualizerChooser.shared.stick(x: x, y: -y) }
         let vector = MenuControllerScrollVector(
             x: normalizedRightStickAxis(x),
             y: normalizedRightStickAxis(y)
@@ -2171,7 +2201,8 @@ final class MenuControllerInputRouter {
     /// Route them into the same graph while custom navigation owns the menu;
     /// controller-originated UIKit duplicates are consumed by the event host.
     func handleKeyboardDirectionalPress(_ command: MenuControllerCommand) {
-        guard isMenuActive, command.isSpatialDirection else { return }
+        // Return and Escape come only while the XMB holds the pad.
+        guard isMenuActive, command.isSpatialDirection || isPadFirstCaptured else { return }
         emit(command)
     }
 

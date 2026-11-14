@@ -61,9 +61,15 @@ import Observation
         await refresh()
     }
 
-    func refresh() async {
+    /// `probeKnown` false asks the licence probe only about titles new to this scan, as a quick rescan on return does.
+    func refresh(probeKnown: Bool = true) async {
         refreshGeneration += 1
         let generation = refreshGeneration
+        // Without JIT the core is never prepared, so the cached list is all there is.
+        guard !EmulatorSession.shared.browsing else {
+            phase = .ready
+            return
+        }
         phase = .loading
         let (hostErrno, initStatus) = await Rpcs3Bridge.prepare()
         guard generation == refreshGeneration else { return }
@@ -106,7 +112,7 @@ import Observation
         guard generation == refreshGeneration else { return }
         publish(scanned)
         phase = .ready
-        probeLocks(generation)
+        probeLocks(generation, known: probeKnown)
     }
 
     func reprobe(serial: String) async {
@@ -115,8 +121,9 @@ import Observation
         apply([serial: answer])
     }
 
-    private func probeLocks(_ generation: Int) {
-        let eligible = entries.filter { entry in !entry.fromGamesYml && entry.category == "HG" }.map(\.serial)
+    private func probeLocks(_ generation: Int, known: Bool = true) {
+        let eligible = entries.filter { entry in !entry.fromGamesYml && entry.category == "HG" && (known || entry.locked == nil) }
+            .map(\.serial)
         guard !eligible.isEmpty else { return }
         Task {
             let result = await Self.probe(eligible)
@@ -258,6 +265,13 @@ import Observation
 
     /// The bootable façade object for a shown entry, or nil while only the cache has it.
     func game(for entry: LibraryCache.Entry) -> Rpcs3GameEntry? { live[entry.bootPath] }
+
+    /// The entry at a boot path, read again from the folders when a disc copied in since the last refresh is missing.
+    func entry(bootPath: String) async -> LibraryCache.Entry? {
+        if let entry = entries.first(where: { $0.bootPath == bootPath }) { return entry }
+        await refresh()
+        return entries.first { $0.bootPath == bootPath }
+    }
 
     func isFavourite(_ entry: LibraryCache.Entry) -> Bool { favourites.contains(entry.serial) }
 

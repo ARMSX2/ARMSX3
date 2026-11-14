@@ -98,8 +98,12 @@ IDENTITY = re.compile(r"\b(identifierForVendor|UIDevice)\b")
 SPDX_LINE = "// SPDX-License-Identifier: GPL-2.0-only"
 LIFECYCLE = re.compile(r"\.(task|onAppear)\b")
 UNPROMPTED = ("buildReport", "summary(", "UIPasteboard", "shareZip(", "copySummary(")
-# The one clipboard write the share check lets through, removed once.
-COPY_LAUNCH_LINK = ("Library/GameListView.swift", "UIPasteboard.general.string = DeepLink.copyLink(serial: entry.serial)")
+# The clipboard uses the share check lets through, each removed once: copying a launch link, and the XMB keyboard's
+# Paste key and Select, which read the clipboard when pressed.
+CLIPBOARD_USES = {
+    "Library/GameListView.swift": "UIPasteboard.general.string = DeepLink.copyLink(serial: entry.serial)",
+    "Xmb/XmbKeyboard.swift": "static func clipboard() -> String { UIPasteboard.general.string ?? \"\" }",
+}
 STORE_CALL = re.compile(r"\bstore\.(buildReport|summary)\(")
 ORDER = ("installLifecycleObservers", "DiagnosticsSession.shared.begin", "startDiagnostics(inDirectory:",
          "CrashDiagnostics.shared.start()", "checkJIT", "DiagnosticsSession.shared.recordLaunch()",
@@ -1223,8 +1227,8 @@ def sheet_problems(raw_sheet, swift):
             if token in closure:
                 problems.append("share: a .{0} closure in ProblemReportView.swift names {1}".format(match.group(1), token))
     for path, text in sorted(swift.items()):
-        if path == COPY_LAUNCH_LINK[0]:
-            text = text.replace(COPY_LAUNCH_LINK[1], "", 1)
+        if path in CLIPBOARD_USES:
+            text = text.replace(CLIPBOARD_USES[path], "", 1)
         if path != "Diagnostics/ProblemReportView.swift" and "UIPasteboard" in text:
             problems.append("share: {0} names UIPasteboard; only ProblemReportView's Copy Summary may".format(path))
     spans = detached_spans(code)
@@ -2156,12 +2160,13 @@ class Mutations(unittest.TestCase):
                            "share")
 
     def test_mutation_share_a_second_pasteboard_in_the_library(self):
-        swift = frontend_swift()
-        path, line = COPY_LAUNCH_LINK
-        self.assertIn(line, swift[path])
-        swift[path] = swift[path].replace(line, line + "\n            " + line, 1)
-        problems = problems_of(self.raw, swift)
-        self.assertTrue(any(p.startswith("share:") for p in problems), problems)
+        for path, line in CLIPBOARD_USES.items():
+            with self.subTest(path=path):
+                swift = frontend_swift()
+                self.assertIn(line, swift[path])
+                swift[path] = swift[path].replace(line, line + "\n            " + line, 1)
+                problems = problems_of(self.raw, swift)
+                self.assertTrue(any(p.startswith("share:") for p in problems), problems)
 
     def test_mutation_offmain_the_build_on_the_main_actor(self):
         self.assertFlagged(self.edited("ProblemReportView.swift", "Task.detached(priority: .userInitiated)",

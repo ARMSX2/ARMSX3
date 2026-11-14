@@ -35,14 +35,45 @@ struct ARMSX3FrontendRoot: View {
             // Without a tint here, switches outside the Settings and overlay kits drew iOS green.
             .tint(Color.blue)
             .onReceive(NotificationCenter.default.publisher(for: SetupFlow.runAgainNotification)) { _ in
+                // The XMB's sheet closes first and asks again.
+                guard !XmbHost.sheetUp else { return }
                 SettingsStore.shared.setupStep = 1
                 setup = SetupRequest(step: 1)
             }
             .task { await start() }
-            .fullScreenCover(item: $autoboot) { request in
+            .fullScreenCover(item: $autoboot, onDismiss: {
+                // The XMB's Change Disc closed the game to start another disc. The disc stays named until its screen is
+                // up, so the XMB behind stays asleep and the screen keeps its way up between the discs.
+                guard let disc = XmbInGame.shared.nextDisc else { return }
+                Task {
+                    guard let entry = await library.entry(bootPath: disc), let game = library.game(for: entry) else {
+                        XmbInGame.shared.nextDisc = nil
+                        return
+                    }
+                    // The launch rules the library and the XMB apply: a licence, an unreadable disc, an install running.
+                    if let block = GameListView.launchBlock(entry) {
+                        XmbInGame.shared.nextDisc = nil
+                        switch block {
+                        case .locked: linkMessage = String(localized: "That game needs a licence first. Open it from the library to add one.")
+                        case .explained(let why): linkMessage = why
+                        }
+                    } else if InstallModel.installInFlight || UpdateStore.shared.installingSerial != nil {
+                        XmbInGame.shared.nextDisc = nil
+                        linkMessage = String(localized: "Another install is running. Wait for it to finish.")
+                    } else {
+                        UpdateStore.shared.holdForLaunch()
+                        autoboot = AutobootRequest(game: game)
+                    }
+                }
+            }) { request in
                 GameScreenView(game: request.game)
                     .tint(Color.blue)
                     .environment(\.menuControllerInputRouter, controllerInput)
+                    .onAppear { XmbInGame.shared.nextDisc = nil }
+            }
+            .onChange(of: setup != nil, initial: true) { _, up in XmbLibraryCover.shared.setupUp = up }
+            .onChange(of: crashOffer || report != nil || linkMessage != nil, initial: true) { _, up in
+                XmbLibraryCover.shared.rootModal = up
             }
             .fullScreenCover(item: $setup) { request in
                 SetupFlow(start: request.step, library: library, controllerInput: controllerInput, onEnd: { setup = nil })
@@ -161,6 +192,9 @@ struct ARMSX3FrontendRoot: View {
                 linkMessage = String(localized: "A backup is being restored. Close and reopen ARMSX3, then open the link again.")
             } else if EmulatorSession.shared.isRunning || autoboot != nil {
                 linkMessage = String(localized: "Stop the current game before opening another.")
+            } else if InstallModel.installInFlight || UpdateStore.shared.installingSerial != nil {
+                // An install holds the core's one queue and the library is scanned again after it, so the boot waits.
+                linkMessage = String(localized: "Another install is running. Wait for it to finish.")
             } else if entry?.locked == true {
                 linkMessage = String(localized: "That game needs a licence first. Open it from the library to add one.")
             } else if entry?.unreadable == true {

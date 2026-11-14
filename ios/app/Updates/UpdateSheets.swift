@@ -359,6 +359,7 @@ struct UpdateConfirmSheet: View {
         let short = FreeSpace.shortfall(available: available, sizes: sizes)
         let onMobileData = store.network.expensive || store.network.constrained
         let removesDLC = request.isRollback && request.dlc
+        let browsing = EmulatorSession.shared.browsing
         let go = goLabel(onMobileData: onMobileData)
         NavigationStack {
             Form {
@@ -397,12 +398,15 @@ struct UpdateConfirmSheet: View {
                     if short > 0 {
                         Text(UpdateText.shortfall(short)).monospacedDigit().foregroundStyle(OverlayTheme.warm)
                     }
+                    if browsing {
+                        Text(EmulatorSession.browsingRefusal).foregroundStyle(OverlayTheme.warm)
+                    }
                 }
                 Section {
                     Button(go, role: removesDLC ? .destructive : nil) { start(allowsCellular: onMobileData) }
-                        .disabled(short > 0)
+                        .disabled(short > 0 || browsing)
                         .controllerAccessibilityActionTarget(id: "updates.confirm.go", label: go) {
-                            if short == 0 { start(allowsCellular: onMobileData) }
+                            if short == 0, !browsing { start(allowsCellular: onMobileData) }
                         }
                     Button("Cancel", role: .cancel) { dismiss() }
                         .controllerAccessibilityActionTarget(id: "updates.confirm.cancel", label: String(localized: "Cancel")) {
@@ -417,7 +421,7 @@ struct UpdateConfirmSheet: View {
             // A destructive or disabled go button never takes the first focus.
             .controllerAccessibilityNavigation(controllerInput: controllerInput, scopeKey: "updates.sheet.confirm", priority: 210,
                                                onBack: { dismiss(); return true },
-                                               preferredInitialFocusLabel: removesDLC || short > 0 ? "updates.confirm.cancel"
+                                               preferredInitialFocusLabel: removesDLC || short > 0 || browsing ? "updates.confirm.cancel"
                                                    : "updates.confirm.go")
             .onAppear { _ = controllerInput?.requestNavigationSessionEntry(preferLast: false, matchingScopePrefix: "updates.sheet.confirm") }
         }

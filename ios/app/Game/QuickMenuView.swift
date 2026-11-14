@@ -14,6 +14,8 @@ struct QuickMenuView: View {
         var screenshot: () -> Void
         var controllers: () -> Void
         var changeDisc: () -> Void
+        // The XMB's Change Disc: this game closes and another disc starts. The quick menu has only the swap.
+        var bootDisc: () -> Void = {}
         var record: () -> Void
         var portal: () -> Void
         // A menu that never shows the row (the smoke scenes' own menus) leaves it empty.

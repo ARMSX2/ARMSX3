@@ -585,8 +585,8 @@ struct ControllersRumbleRows: View {
 
     init(slot: Int) {
         self.slot = slot
-        _enabled = AppStorage(wrappedValue: true, "armsx3.rumble.enabled.\(slot)")
-        _strength = AppStorage(wrappedValue: 100, "armsx3.rumble.strength.\(slot)")
+        _enabled = AppStorage(wrappedValue: true, RumbleFeed.enabledKey(slot))
+        _strength = AppStorage(wrappedValue: 100, RumbleFeed.strengthKey(slot))
     }
 
     var body: some View {

@@ -1,6 +1,16 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%1 Tracks" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1 Tracks"
+          }
+        }
+      }
+    },
     "%@  %@" : {
       "localizations" : {
         "en" : {
@@ -91,12 +101,32 @@
         }
       }
     },
+    "%@ invited you to play" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ invited you to play"
+          }
+        }
+      }
+    },
     "%@ invited you to play. Open the menu, then Friends, to join." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@ invited you to play. Open the menu, then Friends, to join."
+          }
+        }
+      }
+    },
+    "%@ is now online" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ is now online"
           }
         }
       }
@@ -117,6 +147,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@ pt"
+          }
+        }
+      }
+    },
+    "%@ sent you a friend request" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ sent you a friend request"
           }
         }
       }
@@ -177,6 +217,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@ wants to be your friend"
+          }
+        }
+      }
+    },
+    "%@ will be deleted. Content it unlocks will stop working until the licence is installed again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ will be deleted. Content it unlocks will stop working until the licence is installed again."
           }
         }
       }
@@ -311,12 +361,44 @@
         }
       }
     },
+    "%lld installed" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld installed"
+          }
+        }
+      }
+    },
     "%lld invites" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld invites"
+          }
+        }
+      }
+    },
+    "%lld licences" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld licence"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld licences"
+                }
+              }
+            }
           }
         }
       }
@@ -361,12 +443,78 @@
         }
       }
     },
-    "%lld settings" : {
+    "%lld patches" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld patch"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld patches"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld on" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld settings"
+            "value" : "%lld on"
+          }
+        }
+      }
+    },
+    "%lld pictures" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld picture"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld pictures"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld settings" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld setting"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld settings"
+                }
+              }
+            }
           }
         }
       }
@@ -407,6 +555,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld settings this version doesn't have were left out."
+          }
+        }
+      }
+    },
+    "%lld tracks" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld track"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld tracks"
+                }
+              }
+            }
           }
         }
       }
@@ -457,6 +627,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%1$lld. %2$@"
+          }
+        }
+      }
+    },
+    "(saved on exit)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "(saved on exit)"
           }
         }
       }
@@ -851,6 +1031,36 @@
         }
       }
     },
+    ": Back" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : ": Back"
+          }
+        }
+      }
+    },
+    ": Back to Game Screen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : ": Back to Game Screen"
+          }
+        }
+      }
+    },
+    ": Options" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : ": Options"
+          }
+        }
+      }
+    },
     "A backup is being restored. Close and reopen ARMSX3, then open the link again." : {
       "localizations" : {
         "en" : {
@@ -881,6 +1091,16 @@
         }
       }
     },
+    "A reset code is on its way to your email." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A reset code is on its way to your email."
+          }
+        }
+      }
+    },
     "A save with this name is already here" : {
       "localizations" : {
         "en" : {
@@ -901,12 +1121,242 @@
         }
       }
     },
+    "About app" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "About app"
+          }
+        }
+      }
+    },
     "Accepted" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Accepted"
+          }
+        }
+      }
+    },
+    "Accessory Settings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Accessory Settings"
+          }
+        }
+      }
+    },
+    "Account created. RPCN emailed you a code to activate it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account created. RPCN emailed you a code to activate it."
+          }
+        }
+      }
+    },
+    "Account Management" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account Management"
+          }
+        }
+      }
+    },
+    "Account saved" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account saved"
+          }
+        }
+      }
+    },
+    "Add a figure" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add a figure"
+          }
+        }
+      }
+    },
+    "Add a folder or a .zip of songs, covers and all" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add a folder or a .zip of songs, covers and all"
+          }
+        }
+      }
+    },
+    "Add a Friend" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add a Friend"
+          }
+        }
+      }
+    },
+    "Add a game folder in System Settings, or install a package from Utilities." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add a game folder in System Settings, or install a package from Utilities."
+          }
+        }
+      }
+    },
+    "Add a PS3 theme (.p3t) from this device." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add a PS3 theme (.p3t) from this device."
+          }
+        }
+      }
+    },
+    "Add a server" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add a server"
+          }
+        }
+      }
+    },
+    "Add figure files" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add figure files"
+          }
+        }
+      }
+    },
+    "Add Folder" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add Folder"
+          }
+        }
+      }
+    },
+    "Add Pictures" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add Pictures"
+          }
+        }
+      }
+    },
+    "Add Songs" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add Songs"
+          }
+        }
+      }
+    },
+    "Add songs to the music folder" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add songs to the music folder"
+          }
+        }
+      }
+    },
+    "Add to Playlist" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add to Playlist"
+          }
+        }
+      }
+    },
+    "Add-ons installed for your games" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add-ons installed for your games"
+          }
+        }
+      }
+    },
+    "Added before its icons and sounds were read: install the theme again to use them." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Added before its icons and sounds were read: install the theme again to use them."
+          }
+        }
+      }
+    },
+    "Added to %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Added to %@."
+          }
+        }
+      }
+    },
+    "All %lld Packages Here" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All %lld Packages Here"
+          }
+        }
+      }
+    },
+    "All (%lld)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All (%lld)"
+          }
+        }
+      }
+    },
+    "All Core Settings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All Core Settings"
           }
         }
       }
@@ -927,6 +1377,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Also remove its update and DLC"
+          }
+        }
+      }
+    },
+    "An ISO, or any file inside a disc folder" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "An ISO, or any file inside a disc folder"
+          }
+        }
+      }
+    },
+    "Animated Icons" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Animated Icons"
+          }
+        }
+      }
+    },
+    "App version" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "App version"
+          }
+        }
+      }
+    },
+    "Architecture" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Architecture"
           }
         }
       }
@@ -1027,6 +1517,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "ARMSX3 has no pairing file, so StikDebug turned on JIT instead. Add one, and ARMSX3 turns on JIT itself."
+          }
+        }
+      }
+    },
+    "ARMSX3 is built on the open-source RPCS3 emulator." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ARMSX3 is built on the open-source RPCS3 emulator."
           }
         }
       }
@@ -1599,6 +2099,26 @@
         }
       }
     },
+    "Aspect Ratio" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aspect Ratio"
+          }
+        }
+      }
+    },
+    "Assign each controller to a player. An assignment is remembered per controller and kept when it reconnects." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Assign each controller to a player. An assignment is remembered per controller and kept when it reconnects."
+          }
+        }
+      }
+    },
     "Attach Crash File" : {
       "localizations" : {
         "en" : {
@@ -1666,6 +2186,56 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Azure Horizon"
+          }
+        }
+      }
+    },
+    "Back to the official server (np.rpcs3.net)." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Back to the official server (np.rpcs3.net)."
+          }
+        }
+      }
+    },
+    "Back to the regular library" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Back to the regular library"
+          }
+        }
+      }
+    },
+    "Backup" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup"
+          }
+        }
+      }
+    },
+    "Backup · %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Backup · %lld"
+          }
+        }
+      }
+    },
+    "Bind physical buttons (back paddles work too) to in-game actions. Tap an action, then press the button." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bind physical buttons (back paddles work too) to in-game actions. Tap an action, then press the button."
           }
         }
       }
@@ -1878,6 +2448,16 @@
         }
       }
     },
+    "Build information" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Build information"
+          }
+        }
+      }
+    },
     "Built from source for the JIT enabler." : {
       "localizations" : {
         "en" : {
@@ -1938,6 +2518,26 @@
         }
       }
     },
+    "Built-in Track" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Built-in Track"
+          }
+        }
+      }
+    },
+    "Button Mapping" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Button Mapping"
+          }
+        }
+      }
+    },
     "Button Opacity" : {
       "localizations" : {
         "en" : {
@@ -1948,12 +2548,112 @@
         }
       }
     },
+    "Camera" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Camera"
+          }
+        }
+      }
+    },
+    "Cancelled your request to %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancelled your request to %@."
+          }
+        }
+      }
+    },
+    "Centre pad" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Centre pad"
+          }
+        }
+      }
+    },
+    "Change Cover" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Change Cover"
+          }
+        }
+      }
+    },
+    "Change Disc" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Change Disc"
+          }
+        }
+      }
+    },
+    "Change disc without closing" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Change disc without closing"
+          }
+        }
+      }
+    },
+    "Changes are remembered for every game" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Changes are remembered for every game"
+          }
+        }
+      }
+    },
+    "Changes are remembered for this game only" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Changes are remembered for this game only"
+          }
+        }
+      }
+    },
     "CHD" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "CHD"
+          }
+        }
+      }
+    },
+    "Check another title" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Check another title"
+          }
+        }
+      }
+    },
+    "Check sign-in" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Check sign-in"
           }
         }
       }
@@ -1978,6 +2678,36 @@
         }
       }
     },
+    "Choose a Disc File…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose a Disc File…"
+          }
+        }
+      }
+    },
+    "Choose a new password" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose a new password"
+          }
+        }
+      }
+    },
+    "Choose Music File…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose Music File…"
+          }
+        }
+      }
+    },
     "Clear" : {
       "localizations" : {
         "en" : {
@@ -1998,6 +2728,16 @@
         }
       }
     },
+    "Clear PPU/SPU/shader cache" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear PPU/SPU/shader cache"
+          }
+        }
+      }
+    },
     "Clear this game's cache?" : {
       "localizations" : {
         "en" : {
@@ -2008,12 +2748,162 @@
         }
       }
     },
+    "Close this game, start another disc" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Close this game, start another disc"
+          }
+        }
+      }
+    },
+    "Code from the email" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Code from the email"
+          }
+        }
+      }
+    },
+    "Color" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Color"
+          }
+        }
+      }
+    },
+    "Connect a controller to change buttons." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect a controller to change buttons."
+          }
+        }
+      }
+    },
+    "Content folder" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Content folder"
+          }
+        }
+      }
+    },
+    "Contributors" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Contributors"
+          }
+        }
+      }
+    },
+    "Controller mapping" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Controller mapping"
+          }
+        }
+      }
+    },
+    "Controllers" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Controllers"
+          }
+        }
+      }
+    },
+    "Copy videos into ARMSX3's video folder" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copy videos into ARMSX3's video folder"
+          }
+        }
+      }
+    },
+    "Could not copy: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not copy: %@"
+          }
+        }
+      }
+    },
+    "Could not create %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not create %@."
+          }
+        }
+      }
+    },
+    "Could not remove the licence file." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not remove the licence file."
+          }
+        }
+      }
+    },
+    "Couldn't delete that save state." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't delete that save state."
+          }
+        }
+      }
+    },
     "Couldn't delete the file. Try again." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Couldn't delete the file. Try again."
+          }
+        }
+      }
+    },
+    "Couldn't load that slot." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't load that slot."
+          }
+        }
+      }
+    },
+    "CPU cores" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "CPU cores"
           }
         }
       }
@@ -3041,6 +3931,16 @@
         }
       }
     },
+    "Couldn't remove that add-on." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't remove that add-on."
+          }
+        }
+      }
+    },
     "Couldn't reset the server list (code %lld). Try again." : {
       "localizations" : {
         "en" : {
@@ -3244,6 +4144,16 @@
         }
       }
     },
+    "Create a save state while a game is running, then manage or back it up here." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create a save state while a game is running, then manage or back it up here."
+          }
+        }
+      }
+    },
     "Create Account" : {
       "localizations" : {
         "en" : {
@@ -3254,12 +4164,92 @@
         }
       }
     },
+    "Create an account" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create an account"
+          }
+        }
+      }
+    },
+    "Create an account, reset a password or choose a server" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create an account, reset a password or choose a server"
+          }
+        }
+      }
+    },
+    "Create figure" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create figure"
+          }
+        }
+      }
+    },
+    "Files › ARMSX3 › Recordings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Files › ARMSX3 › Recordings"
+          }
+        }
+      }
+    },
+    "No PS3 firmware is installed, so games can't start. Install it in Settings › System Update." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No PS3 firmware is installed, so games can't start. Install it in Settings › System Update."
+          }
+        }
+      }
+    },
+    "Removed." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Removed."
+          }
+        }
+      }
+    },
+    "The XMB shows when the iPad is in landscape." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The XMB shows when the iPad is in landscape."
+          }
+        }
+      }
+    },
     "created %@" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "created %@"
+          }
+        }
+      }
+    },
+    "Created %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Created %@."
           }
         }
       }
@@ -3320,6 +4310,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cycle Save Slot"
+          }
+        }
+      }
+    },
+    "Cycle Through Months" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cycle Through Months"
           }
         }
       }
@@ -3417,6 +4417,16 @@
         }
       }
     },
+    "Debug Settings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Debug Settings"
+          }
+        }
+      }
+    },
     "Decline" : {
       "localizations" : {
         "en" : {
@@ -3457,6 +4467,16 @@
         }
       }
     },
+    "Declined the request from %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Declined the request from %@."
+          }
+        }
+      }
+    },
     "Deep Teal" : {
       "localizations" : {
         "en" : {
@@ -3473,6 +4493,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Default"
+          }
+        }
+      }
+    },
+    "Default changes with the month, as on the console." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Default changes with the month, as on the console."
           }
         }
       }
@@ -3507,6 +4537,26 @@
         }
       }
     },
+    "Delete all save states" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete all save states"
+          }
+        }
+      }
+    },
+    "Delete every save state?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete every save state?"
+          }
+        }
+      }
+    },
     "Delete File" : {
       "localizations" : {
         "en" : {
@@ -3523,6 +4573,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Delete Game"
+          }
+        }
+      }
+    },
+    "Delete Playlist" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete Playlist"
           }
         }
       }
@@ -3547,12 +4607,42 @@
         }
       }
     },
+    "Delete synced trophies" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete synced trophies"
+          }
+        }
+      }
+    },
     "Delete the rejected pairing file?" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Delete the rejected pairing file?"
+          }
+        }
+      }
+    },
+    "Delete the save state in slot %lld? This can't be undone." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete the save state in slot %lld? This can't be undone."
+          }
+        }
+      }
+    },
+    "Delete this game's compiled PPU modules, with the SPU and shader caches stored inside them? Its next boot recompiles from scratch and takes a while." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete this game's compiled PPU modules, with the SPU and shader caches stored inside them? Its next boot recompiles from scratch and takes a while."
           }
         }
       }
@@ -3613,6 +4703,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Delete “%@”?"
+          }
+        }
+      }
+    },
+    "Deleted %lld files, %@ freed." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Deleted %lld file, %@ freed."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Deleted %lld files, %@ freed."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld could not be removed." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld could not be removed."
           }
         }
       }
@@ -3702,6 +4824,26 @@
         }
       }
     },
+    "Device" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Device"
+          }
+        }
+      }
+    },
+    "Device information" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Device information"
+          }
+        }
+      }
+    },
     "Diagnostics" : {
       "localizations" : {
         "en" : {
@@ -3784,12 +4926,42 @@
         }
       }
     },
+    "Display" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Display"
+          }
+        }
+      }
+    },
     "Display rate" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Display rate"
+          }
+        }
+      }
+    },
+    "Display Settings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Display Settings"
+          }
+        }
+      }
+    },
+    "DLC" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DLC"
           }
         }
       }
@@ -3801,6 +4973,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Do Not Ask Again"
+          }
+        }
+      }
+    },
+    "Do you want to quit the game?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Do you want to quit the game?"
+          }
+        }
+      }
+    },
+    "Do you want to restart the game?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Do you want to restart the game?"
+          }
+        }
+      }
+    },
+    "Do you want to turn off the system?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Do you want to turn off the system?"
           }
         }
       }
@@ -4060,6 +5262,36 @@
         }
       }
     },
+    "Edit Layout…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edit Layout…"
+          }
+        }
+      }
+    },
+    "Edit Touch Layout" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edit Touch Layout"
+          }
+        }
+      }
+    },
+    "Editing" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Editing"
+          }
+        }
+      }
+    },
     "Electric Lime" : {
       "localizations" : {
         "en" : {
@@ -4080,6 +5312,16 @@
         }
       }
     },
+    "Email address" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Email address"
+          }
+        }
+      }
+    },
     "Email Me a Code" : {
       "localizations" : {
         "en" : {
@@ -4096,6 +5338,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Email the Code Again"
+          }
+        }
+      }
+    },
+    "Email the code again" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Email the code again"
           }
         }
       }
@@ -4140,6 +5392,16 @@
         }
       }
     },
+    "Emulator version" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Emulator version"
+          }
+        }
+      }
+    },
     "Enable %@" : {
       "localizations" : {
         "en" : {
@@ -4166,6 +5428,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Enable particles"
+          }
+        }
+      }
+    },
+    "Enter a username to add." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enter a username to add."
           }
         }
       }
@@ -4311,6 +5583,16 @@
         }
       }
     },
+    "Every core setting, section by section" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Every core setting, section by section"
+          }
+        }
+      }
+    },
     "Every setting in this section is advanced. Turn on Show advanced settings to see it." : {
       "localizations" : {
         "en" : {
@@ -4351,6 +5633,36 @@
         }
       }
     },
+    "Exit XMB Mode" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exit XMB Mode"
+          }
+        }
+      }
+    },
+    "Exit XMB Mode and go back to the regular library?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exit XMB Mode and go back to the regular library?"
+          }
+        }
+      }
+    },
+    "Experimental IPv6" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Experimental IPv6"
+          }
+        }
+      }
+    },
     "Experimental. Leave it off unless your server asks for it." : {
       "localizations" : {
         "en" : {
@@ -4377,6 +5689,86 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Export This Game's Settings"
+          }
+        }
+      }
+    },
+    "Fast, modern PlayStation 3 emulation for iPhone and iPad." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fast, modern PlayStation 3 emulation for iPhone and iPad."
+          }
+        }
+      }
+    },
+    "Favorites (%lld)" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Favorites (%lld)"
+          }
+        }
+      }
+    },
+    "Figure files added: %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Figure files added: %lld"
+          }
+        }
+      }
+    },
+    "Find a setting by name" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Find a setting by name"
+          }
+        }
+      }
+    },
+    "Find a setting in this list" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Find a setting in this list"
+          }
+        }
+      }
+    },
+    "Forget all" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Forget all"
+          }
+        }
+      }
+    },
+    "Forget every setting remembered here? Each one goes back to its default." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Forget every setting remembered here? Each one goes back to its default."
+          }
+        }
+      }
+    },
+    "Forgot password?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Forgot password?"
           }
         }
       }
@@ -4745,6 +6137,16 @@
         }
       }
     },
+    "Friend request sent to %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Friend request sent to %@."
+          }
+        }
+      }
+    },
     "Friends" : {
       "localizations" : {
         "en" : {
@@ -4815,6 +6217,16 @@
         }
       }
     },
+    "Front" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Front"
+          }
+        }
+      }
+    },
     "Frosted Pearl" : {
       "localizations" : {
         "en" : {
@@ -4835,12 +6247,62 @@
         }
       }
     },
+    "Full Screen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Full Screen"
+          }
+        }
+      }
+    },
+    "Gaia" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gaia"
+          }
+        }
+      }
+    },
+    "Game" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Game"
+          }
+        }
+      }
+    },
+    "Game Backgrounds" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Game Backgrounds"
+          }
+        }
+      }
+    },
     "Game cache cleared. It is built again the next time the game boots." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Game cache cleared. It is built again the next time the game boots."
+          }
+        }
+      }
+    },
+    "Game Music" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Game Music"
           }
         }
       }
@@ -4871,6 +6333,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Get the pairing file from SideStore. ARMSX3 opens SideStore, which sends the file back."
+          }
+        }
+      }
+    },
+    "GitHub repository" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GitHub repository"
           }
         }
       }
@@ -5058,6 +6530,16 @@
         }
       }
     },
+    "GPU" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GPU"
+          }
+        }
+      }
+    },
     "Gradient bottom multiplier" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5138,6 +6620,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Harvest Gold"
+          }
+        }
+      }
+    },
+    "Have an activation code?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Have an activation code?"
           }
         }
       }
@@ -5293,6 +6785,26 @@
         }
       }
     },
+    "Import Album" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import Album"
+          }
+        }
+      }
+    },
+    "Import Music" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import Music"
+          }
+        }
+      }
+    },
     "Import pairing file" : {
       "localizations" : {
         "en" : {
@@ -5329,6 +6841,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Import skin…"
+          }
+        }
+      }
+    },
+    "Import Sound Pack…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import Sound Pack…"
+          }
+        }
+      }
+    },
+    "Import Theme…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import Theme…"
+          }
+        }
+      }
+    },
+    "Import Video" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Import Video"
           }
         }
       }
@@ -5494,12 +7036,32 @@
         }
       }
     },
+    "Install %@?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Install %@?"
+          }
+        }
+      }
+    },
     "Install Avatars" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Install Avatars"
+          }
+        }
+      }
+    },
+    "Install avatars" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Install avatars"
           }
         }
       }
@@ -5524,6 +7086,26 @@
         }
       }
     },
+    "Install Package Files" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Install Package Files"
+          }
+        }
+      }
+    },
+    "Install packages and licences, game updates and DLC" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Install packages and licences, game updates and DLC"
+          }
+        }
+      }
+    },
     "Installed" : {
       "localizations" : {
         "en" : {
@@ -5540,6 +7122,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Installed from PSN, so an older version can't be put back."
+          }
+        }
+      }
+    },
+    "Installed licences" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Installed licences"
+          }
+        }
+      }
+    },
+    "Installed titles" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Installed titles"
           }
         }
       }
@@ -5604,6 +7206,16 @@
         }
       }
     },
+    "Installing. Large packages can take a few minutes." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Installing. Large packages can take a few minutes."
+          }
+        }
+      }
+    },
     "Install…" : {
       "localizations" : {
         "en" : {
@@ -5614,12 +7226,92 @@
         }
       }
     },
+    "Internet Browser" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Internet Browser"
+          }
+        }
+      }
+    },
+    "Invert Left Stick X" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invert Left Stick X"
+          }
+        }
+      }
+    },
+    "Invert Left Stick Y" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invert Left Stick Y"
+          }
+        }
+      }
+    },
+    "Invert Right Stick X" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invert Right Stick X"
+          }
+        }
+      }
+    },
+    "Invert Right Stick Y" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invert Right Stick Y"
+          }
+        }
+      }
+    },
+    "Invert Tilt X" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invert Tilt X"
+          }
+        }
+      }
+    },
+    "Invert Tilt Y" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invert Tilt Y"
+          }
+        }
+      }
+    },
     "Invite from %@" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Invite from %@"
+          }
+        }
+      }
+    },
+    "iOS version" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iOS version"
           }
         }
       }
@@ -5640,6 +7332,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "It isn't a settings file ARMSX3 can read. Pick a .yml settings file from RPCS3 or ARMSX3."
+          }
+        }
+      }
+    },
+    "Its buttons, deadzones and sensitivities go back to the defaults." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Its buttons, deadzones and sensitivities go back to the defaults."
           }
         }
       }
@@ -5704,6 +7406,16 @@
         }
       }
     },
+    "Its icons: %d   Its sounds: %d" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Its icons: %d   Its sounds: %d"
+          }
+        }
+      }
+    },
     "its saves and save states" : {
       "localizations" : {
         "en" : {
@@ -5750,6 +7462,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Join Game"
+          }
+        }
+      }
+    },
+    "Join it from RPCN in the XMB." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Join it from RPCN in the XMB."
           }
         }
       }
@@ -5816,6 +7538,16 @@
         }
       }
     },
+    "L2 and R2 press at RPCS3's default point." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L2 and R2 press at RPCS3's default point."
+          }
+        }
+      }
+    },
     "Landscape" : {
       "localizations" : {
         "en" : {
@@ -5866,6 +7598,36 @@
         }
       }
     },
+    "Left pad, spot %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Left pad, spot %lld"
+          }
+        }
+      }
+    },
+    "Left Stick Deadzone" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Left Stick Deadzone"
+          }
+        }
+      }
+    },
+    "Left Stick Sensitivity" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Left Stick Sensitivity"
+          }
+        }
+      }
+    },
     "Length" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5883,6 +7645,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Less"
+          }
+        }
+      }
+    },
+    "Library Music" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Library Music"
+          }
+        }
+      }
+    },
+    "Library Music Volume" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Library Music Volume"
           }
         }
       }
@@ -5927,12 +7709,42 @@
         }
       }
     },
+    "Licence file" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Licence file"
+          }
+        }
+      }
+    },
     "Licence installed" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Licence installed"
+          }
+        }
+      }
+    },
+    "Licence removed." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Licence removed."
+          }
+        }
+      }
+    },
+    "Lift off" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lift off"
           }
         }
       }
@@ -5953,6 +7765,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Lighter when the device is hot"
+          }
+        }
+      }
+    },
+    "Lines" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lines"
           }
         }
       }
@@ -6049,6 +7871,26 @@
         }
       }
     },
+    "Load / Manage Saves" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Load / Manage Saves"
+          }
+        }
+      }
+    },
+    "Load save state" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Load save state"
+          }
+        }
+      }
+    },
     "Load State" : {
       "localizations" : {
         "en" : {
@@ -6079,6 +7921,16 @@
         }
       }
     },
+    "Load this save state?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Load this save state?"
+          }
+        }
+      }
+    },
     "Load this state?" : {
       "localizations" : {
         "en" : {
@@ -6095,6 +7947,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Loading a game state has no hotkey."
+          }
+        }
+      }
+    },
+    "Loading release notes…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Loading release notes…"
           }
         }
       }
@@ -6183,6 +8045,16 @@
         }
       }
     },
+    "Looking for games…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Looking for games…"
+          }
+        }
+      }
+    },
     "Low Power Mode is on, so live themes show a still picture." : {
       "localizations" : {
         "en" : {
@@ -6243,6 +8115,16 @@
         }
       }
     },
+    "Make a playlist, then add to it" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Make a playlist, then add to it"
+          }
+        }
+      }
+    },
     "Manage" : {
       "localizations" : {
         "en" : {
@@ -6264,12 +8146,42 @@
         }
       }
     },
+    "Memory" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Memory"
+          }
+        }
+      }
+    },
+    "Memory page" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Memory page"
+          }
+        }
+      }
+    },
     "Menu" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Menu"
+          }
+        }
+      }
+    },
+    "Microphone" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Microphone"
           }
         }
       }
@@ -6310,6 +8222,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "More JIT memory needed"
+          }
+        }
+      }
+    },
+    "Most people play on the official server. Add another to switch between them; the official one always stays." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Most people play on the official server. Add another to switch between them; the official one always stays."
           }
         }
       }
@@ -6376,6 +8298,26 @@
         }
       }
     },
+    "Music" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Music"
+          }
+        }
+      }
+    },
+    "Music Settings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Music Settings"
+          }
+        }
+      }
+    },
     "Mute Video" : {
       "localizations" : {
         "en" : {
@@ -6392,6 +8334,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Name"
+          }
+        }
+      }
+    },
+    "Name for this server" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Name for this server"
           }
         }
       }
@@ -6447,12 +8399,42 @@
         }
       }
     },
+    "Network Settings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Network Settings"
+          }
+        }
+      }
+    },
     "New Password" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "New Password"
+          }
+        }
+      }
+    },
+    "New password" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New password"
+          }
+        }
+      }
+    },
+    "New Playlist" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New Playlist"
           }
         }
       }
@@ -6478,12 +8460,102 @@
         }
       }
     },
+    "Next Category" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Next Category"
+          }
+        }
+      }
+    },
     "No" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "No"
+          }
+        }
+      }
+    },
+    "No add-ons installed." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No add-ons installed."
+          }
+        }
+      }
+    },
+    "No avatars yet. The PS3 firmware brings its own user icons, and Install avatars adds PSN avatars you own, with their licences." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No avatars yet. The PS3 firmware brings its own user icons, and Install avatars adds PSN avatars you own, with their licences."
+          }
+        }
+      }
+    },
+    "No favorites yet. Press Y (Triangle) on an avatar, or hold it, to add it here." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No favorites yet. Press Y (Triangle) on an avatar, or hold it, to add it here."
+          }
+        }
+      }
+    },
+    "No figures yet. Create one or add figure files above, or put them in Files › ARMSX3 › Figures › %@ and open this again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No figures yet. Create one or add figure files above, or put them in Files › ARMSX3 › Figures › %@ and open this again."
+          }
+        }
+      }
+    },
+    "No firmware installed" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No firmware installed"
+          }
+        }
+      }
+    },
+    "No menu sounds were found. Use RPCS3's names, such as snd_cursor.wav." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No menu sounds were found. Use RPCS3's names, such as snd_cursor.wav."
+          }
+        }
+      }
+    },
+    "No notes for this release." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No notes for this release."
+          }
+        }
+      }
+    },
+    "No patches yet" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No patches yet"
           }
         }
       }
@@ -6608,6 +8680,26 @@
         }
       }
     },
+    "No RPCN account yet" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No RPCN account yet"
+          }
+        }
+      }
+    },
+    "No save states yet" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No save states yet"
+          }
+        }
+      }
+    },
     "No saves yet for this game" : {
       "localizations" : {
         "en" : {
@@ -6628,6 +8720,16 @@
         }
       }
     },
+    "No settings match “%@”." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No settings match “%@”."
+          }
+        }
+      }
+    },
     "No shader presets installed yet." : {
       "localizations" : {
         "en" : {
@@ -6644,6 +8746,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No skins available yet."
+          }
+        }
+      }
+    },
+    "No sound set, so trophies unlock silently." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No sound set, so trophies unlock silently."
+          }
+        }
+      }
+    },
+    "No trophies for this game" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No trophies for this game"
+          }
+        }
+      }
+    },
+    "No trophies yet" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No trophies yet"
           }
         }
       }
@@ -6688,6 +8820,16 @@
         }
       }
     },
+    "Normal" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Normal"
+          }
+        }
+      }
+    },
     "Normal Quality (75%)" : {
       "localizations" : {
         "en" : {
@@ -6705,6 +8847,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Normalize gain"
+          }
+        }
+      }
+    },
+    "Not default" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not default"
+          }
+        }
+      }
+    },
+    "Not earned" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not earned"
+          }
+        }
+      }
+    },
+    "Not figure files, so not added: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not figure files, so not added: %@"
           }
         }
       }
@@ -6779,6 +8951,16 @@
         }
       }
     },
+    "Not set up" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not set up"
+          }
+        }
+      }
+    },
     "Not tried yet" : {
       "localizations" : {
         "en" : {
@@ -6795,6 +8977,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Nothing downloads until you tap Browse."
+          }
+        }
+      }
+    },
+    "Nothing is remembered here." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing is remembered here."
           }
         }
       }
@@ -6835,6 +9027,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Nothing was shared. Try again."
+          }
+        }
+      }
+    },
+    "Now Playing" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Now Playing"
           }
         }
       }
@@ -6972,6 +9174,16 @@
         }
       }
     },
+    "On My %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On My %@"
+          }
+        }
+      }
+    },
     "On My iPad" : {
       "localizations" : {
         "en" : {
@@ -6988,6 +9200,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "On My iPhone"
+          }
+        }
+      }
+    },
+    "On the portal: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On the portal: %@"
+          }
+        }
+      }
+    },
+    "On-Screen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On-Screen"
           }
         }
       }
@@ -7073,6 +9305,16 @@
         }
       }
     },
+    "Only a disc in the library can be started here" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only a disc in the library can be started here"
+          }
+        }
+      }
+    },
     "Only Quick Menu, Quick Save and Quick Load keep a hotkey, with their original buttons." : {
       "localizations" : {
         "en" : {
@@ -7134,6 +9376,26 @@
         }
       }
     },
+    "Open the source code, releases, and issue tracker." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open the source code, releases, and issue tracker."
+          }
+        }
+      }
+    },
+    "Open-source licenses" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open-source licenses"
+          }
+        }
+      }
+    },
     "Opened full screen" : {
       "localizations" : {
         "en" : {
@@ -7184,6 +9446,16 @@
         }
       }
     },
+    "Options" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Options"
+          }
+        }
+      }
+    },
     "Or put a file named pairingFile.plist in ARMSX3's folder in Files, then open ARMSX3 again." : {
       "localizations" : {
         "en" : {
@@ -7215,12 +9487,32 @@
         }
       }
     },
+    "Original" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Original"
+          }
+        }
+      }
+    },
     "Original (RGB Sliders)" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Original (RGB Sliders)"
+          }
+        }
+      }
+    },
+    "Original Cover" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Original Cover"
           }
         }
       }
@@ -7243,6 +9535,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Original Full Quality uses native resolution, full geometry and effect density. During serious or critical thermal pressure, the main screen temporarily uses the lightweight resolution and effect settings until the device cools."
+          }
+        }
+      }
+    },
+    "Original, or a PS3 theme with its own background, icons and sounds." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Original, or a PS3 theme with its own background, icons and sounds."
           }
         }
       }
@@ -7274,6 +9576,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Outer top/bottom dispersion"
+          }
+        }
+      }
+    },
+    "Overwrite the state saved in this slot?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Overwrite the state saved in this slot?"
+          }
+        }
+      }
+    },
+    "Packages and licences on this device's storage" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Packages and licences on this device's storage"
           }
         }
       }
@@ -7344,6 +9666,246 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Passed"
+          }
+        }
+      }
+    },
+    "Paste" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paste"
+          }
+        }
+      }
+    },
+    "Photo" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Photo"
+          }
+        }
+      }
+    },
+    "PKG/Data Manager" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PKG/Data Manager"
+          }
+        }
+      }
+    },
+    "Play a game's animated icon while it is selected." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Play a game's animated icon while it is selected."
+          }
+        }
+      }
+    },
+    "Play a game's music while it is selected." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Play a game's music while it is selected."
+          }
+        }
+      }
+    },
+    "Play All" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Play All"
+          }
+        }
+      }
+    },
+    "Play ambient music on the game library screen, like a console dashboard. Stops automatically when a game starts, and stays quiet if something else is already playing audio." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Play ambient music on the game library screen, like a console dashboard. Stops automatically when a game starts, and stays quiet if something else is already playing audio."
+          }
+        }
+      }
+    },
+    "Play from Beginning" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Play from Beginning"
+          }
+        }
+      }
+    },
+    "Play set or power disc" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Play set or power disc"
+          }
+        }
+      }
+    },
+    "Play the songs in a folder on this device or a drive, without copying them" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Play the songs in a folder on this device or a drive, without copying them"
+          }
+        }
+      }
+    },
+    "Played when you unlock a trophy." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Played when you unlock a trophy."
+          }
+        }
+      }
+    },
+    "Player %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Player %lld"
+          }
+        }
+      }
+    },
+    "Player %lld, first ability" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Player %lld, first ability"
+          }
+        }
+      }
+    },
+    "Player %lld, second ability" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Player %lld, second ability"
+          }
+        }
+      }
+    },
+    "Player 1 vibrates the phone when it plays on the touch pad or its controller has no rumble." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Player 1 vibrates the phone when it plays on the touch pad or its controller has no rumble."
+          }
+        }
+      }
+    },
+    "Playing the built-in track." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Playing the built-in track."
+          }
+        }
+      }
+    },
+    "Playing: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Playing: %@"
+          }
+        }
+      }
+    },
+    "Playlist Name" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Playlist Name"
+          }
+        }
+      }
+    },
+    "Playlists" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Playlists"
+          }
+        }
+      }
+    },
+    "Portal" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Portal"
+          }
+        }
+      }
+    },
+    "Power disc %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Power disc %lld"
+          }
+        }
+      }
+    },
+    "Pre-release" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pre-release"
+          }
+        }
+      }
+    },
+    "Previous Category" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Previous Category"
+          }
+        }
+      }
+    },
+    "PS Eye Camera" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PS Eye Camera"
           }
         }
       }
@@ -8157,12 +10719,72 @@
         }
       }
     },
+    "Quit Game" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quit Game"
+          }
+        }
+      }
+    },
+    "Reading trophy data…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reading trophy data…"
+          }
+        }
+      }
+    },
+    "Record" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Record"
+          }
+        }
+      }
+    },
+    "Refresh" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Refresh"
+          }
+        }
+      }
+    },
+    "Reinstall" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reinstall"
+          }
+        }
+      }
+    },
     "Rejected" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Rejected"
+          }
+        }
+      }
+    },
+    "Release notes are unavailable right now." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Release notes are unavailable right now."
           }
         }
       }
@@ -8207,6 +10829,76 @@
         }
       }
     },
+    "Remove from Music" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove from Music"
+          }
+        }
+      }
+    },
+    "Remove from Playlist" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove from Playlist"
+          }
+        }
+      }
+    },
+    "Remove from Video" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove from Video"
+          }
+        }
+      }
+    },
+    "Remove this game's update and go back to the disc version?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove this game's update and go back to the disc version?"
+          }
+        }
+      }
+    },
+    "Remove update" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove update"
+          }
+        }
+      }
+    },
+    "Remove: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove: %@"
+          }
+        }
+      }
+    },
+    "Removes every trophy this account has uploaded to RPCN. Your trophies on this device are not touched." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Removes every trophy this account has uploaded to RPCN. Your trophies on this device are not touched."
+          }
+        }
+      }
+    },
     "Replaced. ARMSX3 uses the new file the next time it opens." : {
       "localizations" : {
         "en" : {
@@ -8217,12 +10909,102 @@
         }
       }
     },
+    "Reset code" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reset code"
+          }
+        }
+      }
+    },
+    "Reset Player %lld to the default buttons?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reset Player %lld to the default buttons?"
+          }
+        }
+      }
+    },
+    "Reset to Default" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reset to Default"
+          }
+        }
+      }
+    },
+    "Reset to official" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reset to official"
+          }
+        }
+      }
+    },
+    "Restart" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restart"
+          }
+        }
+      }
+    },
+    "Right pad, spot %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Right pad, spot %lld"
+          }
+        }
+      }
+    },
+    "Right Stick Deadzone" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Right Stick Deadzone"
+          }
+        }
+      }
+    },
+    "Right Stick Sensitivity" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Right Stick Sensitivity"
+          }
+        }
+      }
+    },
     "RPCN" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "RPCN"
+          }
+        }
+      }
+    },
+    "RPCN Account Settings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "RPCN Account Settings"
           }
         }
       }
@@ -8323,6 +11105,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "RPCN sent a reset code to your email."
+          }
+        }
+      }
+    },
+    "RPCN username" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "RPCN username"
           }
         }
       }
@@ -9152,6 +11944,36 @@
         }
       }
     },
+    "RPCS3 project" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "RPCS3 project"
+          }
+        }
+      }
+    },
+    "Rumble" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rumble"
+          }
+        }
+      }
+    },
+    "Rumble Strength" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rumble Strength"
+          }
+        }
+      }
+    },
     "Sage Midnight" : {
       "localizations" : {
         "en" : {
@@ -9392,6 +12214,16 @@
         }
       }
     },
+    "Saved servers" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved servers"
+          }
+        }
+      }
+    },
     "Saved, but the game has stopped." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9399,6 +12231,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Saved, but the game has stopped."
+          }
+        }
+      }
+    },
+    "Saves a picture of the game to Photo" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saves a picture of the game to Photo"
           }
         }
       }
@@ -9509,6 +12351,16 @@
         }
       }
     },
+    "Screen Mode" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Screen Mode"
+          }
+        }
+      }
+    },
     "Screenshot" : {
       "localizations" : {
         "en" : {
@@ -9535,6 +12387,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Screenshot saved to Files › ARMSX3 › Screenshots."
+          }
+        }
+      }
+    },
+    "Screenshots" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Screenshots"
+          }
+        }
+      }
+    },
+    "Search" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search"
           }
         }
       }
@@ -9624,6 +12496,26 @@
         }
       }
     },
+    "Select the official PS3UPDAT.PUP firmware file. It is installed into dev_flash, which games need in order to boot. Download it from Sony's support site; it is not included." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select the official PS3UPDAT.PUP firmware file. It is installed into dev_flash, which games need in order to boot. Download it from Sony's support site; it is not included."
+          }
+        }
+      }
+    },
+    "Select your picture to change it" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select your picture to change it"
+          }
+        }
+      }
+    },
     "Send Request" : {
       "localizations" : {
         "en" : {
@@ -9654,6 +12546,16 @@
         }
       }
     },
+    "Server address" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server address"
+          }
+        }
+      }
+    },
     "Server removed." : {
       "localizations" : {
         "en" : {
@@ -9670,6 +12572,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Server removed. ARMSX3 now uses the official server."
+          }
+        }
+      }
+    },
+    "Server saved to the list." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server saved to the list."
+          }
+        }
+      }
+    },
+    "Server: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server: %@"
           }
         }
       }
@@ -9720,6 +12642,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Settings"
+          }
+        }
+      }
+    },
+    "Settings remembered here" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Settings remembered here"
           }
         }
       }
@@ -9820,6 +12752,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Show %lld Removed Games"
+          }
+        }
+      }
+    },
+    "Show a game's own background behind the XMB while it is selected." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show a game's own background behind the XMB while it is selected."
           }
         }
       }
@@ -9994,6 +12936,16 @@
         }
       }
     },
+    "Show the videos in a folder on this device or a drive" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show the videos in a folder on this device or a drive"
+          }
+        }
+      }
+    },
     "Show wave bundle" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -10104,6 +13056,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Sign In"
+          }
+        }
+      }
+    },
+    "Sign in" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign in"
           }
         }
       }
@@ -10341,6 +13303,56 @@
         }
       }
     },
+    "Sound effects imported: %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sound effects imported: %lld"
+          }
+        }
+      }
+    },
+    "Sound Effects Volume" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sound Effects Volume"
+          }
+        }
+      }
+    },
+    "Sound Settings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sound Settings"
+          }
+        }
+      }
+    },
+    "Sounds play only from files you import. Use RPCS3's names (snd_cursor.wav and the others)." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sounds play only from files you import. Use RPCS3's names (snd_cursor.wav and the others)."
+          }
+        }
+      }
+    },
+    "Space" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Space"
+          }
+        }
+      }
+    },
     "Spacing" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -10489,6 +13501,16 @@
         }
       }
     },
+    "Sticks" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sticks"
+          }
+        }
+      }
+    },
     "StikDebug can turn on JIT for ARMSX3 this time." : {
       "localizations" : {
         "en" : {
@@ -10571,6 +13593,16 @@
         }
       }
     },
+    "Stop Recording" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stop Recording"
+          }
+        }
+      }
+    },
     "Stop the current game before opening another." : {
       "localizations" : {
         "en" : {
@@ -10607,6 +13639,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Stop the game first."
+          }
+        }
+      }
+    },
+    "Stopped" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stopped"
           }
         }
       }
@@ -10723,6 +13765,86 @@
         }
       }
     },
+    "Swap Disc" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Swap Disc"
+          }
+        }
+      }
+    },
+    "Swap Sticks" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Swap Sticks"
+          }
+        }
+      }
+    },
+    "Switch account" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switch account"
+          }
+        }
+      }
+    },
+    "Switched server. Check sign-in to try it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switched server. Check sign-in to try it."
+          }
+        }
+      }
+    },
+    "System Settings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "System Settings"
+          }
+        }
+      }
+    },
+    "System Update" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "System Update"
+          }
+        }
+      }
+    },
+    "Take Screenshot" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Take Screenshot"
+          }
+        }
+      }
+    },
+    "Tap an action, then press a physical controller button." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tap an action, then press a physical controller button."
+          }
+        }
+      }
+    },
     "Tap it, tap Share, then Save to Files." : {
       "localizations" : {
         "en" : {
@@ -10755,6 +13877,16 @@
         }
       }
     },
+    "Test" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Test"
+          }
+        }
+      }
+    },
     "Test JIT Setup" : {
       "localizations" : {
         "en" : {
@@ -10771,6 +13903,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Test JIT Setup checks it."
+          }
+        }
+      }
+    },
+    "Test Rumble" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Test Rumble"
           }
         }
       }
@@ -10871,6 +14013,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "That file couldn't be used as a background."
+          }
+        }
+      }
+    },
+    "That file couldn't be used. Pick a .wav of 4 MB or less." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "That file couldn't be used. Pick a .wav of 4 MB or less."
           }
         }
       }
@@ -11075,6 +14227,36 @@
         }
       }
     },
+    "The console's menu in place of the library. Leave it from Users, Exit XMB Mode." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The console's menu in place of the library. Leave it from Users, Exit XMB Mode."
+          }
+        }
+      }
+    },
+    "The copy on RPCN cannot be recovered. Trophies on this device stay." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The copy on RPCN cannot be recovered. Trophies on this device stay."
+          }
+        }
+      }
+    },
+    "The data type is not supported." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The data type is not supported."
+          }
+        }
+      }
+    },
     "The Developer Disk Image isn't mounted, so StikDebug turned on JIT instead. Mount it, and ARMSX3 turns on JIT itself next time." : {
       "localizations" : {
         "en" : {
@@ -11095,12 +14277,32 @@
         }
       }
     },
+    "The folders the library reads games from" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The folders the library reads games from"
+          }
+        }
+      }
+    },
     "The game ran out of JIT memory. Built-in JIT prepares more. Set it up in Settings › JIT and Device, then open ARMSX3 again." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "The game ran out of JIT memory. Built-in JIT prepares more. Set it up in Settings › JIT and Device, then open ARMSX3 again."
+          }
+        }
+      }
+    },
+    "The game stopped\n%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The game stopped\n%@"
           }
         }
       }
@@ -11575,6 +14777,16 @@
         }
       }
     },
+    "The third-party software inside ARMSX3 and its licenses." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The third-party software inside ARMSX3 and its licenses."
+          }
+        }
+      }
+    },
     "The update keeps installing." : {
       "localizations" : {
         "en" : {
@@ -11615,12 +14827,52 @@
         }
       }
     },
+    "Theme Settings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Theme Settings"
+          }
+        }
+      }
+    },
     "Themes" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Themes"
+          }
+        }
+      }
+    },
+    "There are no images." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "There are no images."
+          }
+        }
+      }
+    },
+    "There are no titles." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "There are no titles."
+          }
+        }
+      }
+    },
+    "There is no track available." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "There is no track available."
           }
         }
       }
@@ -11685,6 +14937,36 @@
         }
       }
     },
+    "This also removes the game's updates (version %@). They would have to be downloaded again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This also removes the game's updates (version %@). They would have to be downloaded again."
+          }
+        }
+      }
+    },
+    "This also removes the game's updates. They would have to be downloaded again." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This also removes the game's updates. They would have to be downloaded again."
+          }
+        }
+      }
+    },
+    "This deletes %@ and everything installed with it. Save data stored separately is not touched. This cannot be undone." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This deletes %@ and everything installed with it. Save data stored separately is not touched. This cannot be undone."
+          }
+        }
+      }
+    },
     "This device didn't accept the pairing file, so StikDebug turned on JIT instead. Make a new pairing file and add it." : {
       "localizations" : {
         "en" : {
@@ -11725,6 +15007,16 @@
         }
       }
     },
+    "This game either has no trophy set, or has not opened it yet; many games only do that once you reach a menu or start playing. Check again later in the session." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This game either has no trophy set, or has not opened it yet; many games only do that once you reach a menu or start playing. Check again later in the session."
+          }
+        }
+      }
+    },
     "This game is in a folder the app doesn't own, so its files stay where they are. It only leaves the library; Game Folders can show it again." : {
       "localizations" : {
         "en" : {
@@ -11761,6 +15053,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "This LiveContainer is %@. Update it to 3.8.13 or later, then install ARMSX3 in it again."
+          }
+        }
+      }
+    },
+    "This playlist is empty." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This playlist is empty."
           }
         }
       }
@@ -11925,6 +15227,16 @@
         }
       }
     },
+    "This removes the whole save state folder, including files the manager cannot list. It cannot be undone." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This removes the whole save state folder, including files the manager cannot list. It cannot be undone."
+          }
+        }
+      }
+    },
     "This restores every dynamic background control and selected palette to its default value." : {
       "localizations" : {
         "en" : {
@@ -11965,6 +15277,26 @@
         }
       }
     },
+    "This state was saved by a different version of ARMSX3 and can't be loaded in this one." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This state was saved by a different version of ARMSX3 and can't be loaded in this one."
+          }
+        }
+      }
+    },
+    "This trophy is hidden" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This trophy is hidden"
+          }
+        }
+      }
+    },
     "This update needs its game installed first, at the right version" : {
       "localizations" : {
         "en" : {
@@ -11981,6 +15313,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Tidal Abyss"
+          }
+        }
+      }
+    },
+    "Tilt" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tilt"
           }
         }
       }
@@ -12057,6 +15399,16 @@
         }
       }
     },
+    "Tracks imported: %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tracks imported: %lld"
+          }
+        }
+      }
+    },
     "Travel amplitude 1" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -12121,6 +15473,46 @@
         }
       }
     },
+    "Trophies appear here once you play a game that has them. The game installs its trophy set the first time it runs, and this reads the same data the console would. A game with no trophy set never adds one." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trophies appear here once you play a game that has them. The game installs its trophy set the first time it runs, and this reads the same data the console would. A game with no trophy set never adds one."
+          }
+        }
+      }
+    },
+    "Trophy Sound" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trophy Sound"
+          }
+        }
+      }
+    },
+    "Trophy Sound Volume" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trophy Sound Volume"
+          }
+        }
+      }
+    },
+    "Trophy Sound: Choose Sound…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trophy Sound: Choose Sound…"
+          }
+        }
+      }
+    },
     "Try %@ again" : {
       "localizations" : {
         "en" : {
@@ -12171,6 +15563,16 @@
         }
       }
     },
+    "Turn Off System" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Turn Off System"
+          }
+        }
+      }
+    },
     "Turn on Online Play to see your friends." : {
       "localizations" : {
         "en" : {
@@ -12213,6 +15615,16 @@
         }
       }
     },
+    "Unattributed" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unattributed"
+          }
+        }
+      }
+    },
     "Unavailable" : {
       "localizations" : {
         "en" : {
@@ -12249,6 +15661,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Uninstall %@?"
+          }
+        }
+      }
+    },
+    "Uninstalled." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uninstalled."
+          }
+        }
+      }
+    },
+    "Uninstalling %@. A large game can take a few minutes." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uninstalling %@. A large game can take a few minutes."
           }
         }
       }
@@ -12384,12 +15816,32 @@
         }
       }
     },
+    "Update via Storage Media" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Update via Storage Media"
+          }
+        }
+      }
+    },
     "Updates" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Updates"
+          }
+        }
+      }
+    },
+    "Updates published for the games in your library" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Updates published for the games in your library"
           }
         }
       }
@@ -12410,6 +15862,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Updating %lld · offline"
+          }
+        }
+      }
+    },
+    "Use a picture" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use a picture"
           }
         }
       }
@@ -12435,6 +15897,16 @@
         }
       }
     },
+    "Use default" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use default"
+          }
+        }
+      }
+    },
     "Use Dynamic Background" : {
       "localizations" : {
         "en" : {
@@ -12455,12 +15927,32 @@
         }
       }
     },
+    "Use IPv6 for RPCN where available. Experimental upstream; leave off unless the server asks for it." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use IPv6 for RPCN where available. Experimental upstream; leave off unless the server asks for it."
+          }
+        }
+      }
+    },
     "Use It" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Use It"
+          }
+        }
+      }
+    },
+    "Use Keyboard as Player %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use Keyboard as Player %lld"
           }
         }
       }
@@ -12483,6 +15975,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Use Original Full Quality Live Wallpapers"
+          }
+        }
+      }
+    },
+    "Use This Avatar" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use This Avatar"
           }
         }
       }
@@ -12608,12 +16110,62 @@
         }
       }
     },
+    "Users" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Users"
+          }
+        }
+      }
+    },
     "Uses this avatar." : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Uses this avatar."
+          }
+        }
+      }
+    },
+    "Using: %@.wav" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Using: %@.wav"
+          }
+        }
+      }
+    },
+    "Utilities" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Utilities"
+          }
+        }
+      }
+    },
+    "Valley" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Valley"
+          }
+        }
+      }
+    },
+    "Various Artists" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Various Artists"
           }
         }
       }
@@ -12634,6 +16186,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Version"
+          }
+        }
+      }
+    },
+    "Version %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Version %@"
+          }
+        }
+      }
+    },
+    "Version %@  %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Version %@  %@"
           }
         }
       }
@@ -12692,6 +16264,36 @@
         }
       }
     },
+    "Vibrate on Press" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vibrate on Press"
+          }
+        }
+      }
+    },
+    "Video" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Video"
+          }
+        }
+      }
+    },
+    "Videos imported: %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Videos imported: %lld"
+          }
+        }
+      }
+    },
     "Vignette intensity" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -12720,6 +16322,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Visibility"
+          }
+        }
+      }
+    },
+    "Visualizer" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Visualizer"
           }
         }
       }
@@ -12760,6 +16372,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Waiting for SideStore…"
+          }
+        }
+      }
+    },
+    "Waiting for them to accept" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting for them to accept"
           }
         }
       }
@@ -12894,6 +16516,26 @@
         }
       }
     },
+    "Waves" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waves"
+          }
+        }
+      }
+    },
+    "Welcome Back!" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Welcome Back!"
+          }
+        }
+      }
+    },
     "What happened?" : {
       "localizations" : {
         "en" : {
@@ -12904,12 +16546,32 @@
         }
       }
     },
+    "What's new" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What's new"
+          }
+        }
+      }
+    },
     "Where in the game?" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Where in the game?"
+          }
+        }
+      }
+    },
+    "Which player's buttons, sticks and tilt you are editing." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Which player's buttons, sticks and tilt you are editing."
           }
         }
       }
@@ -13001,6 +16663,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "X-Axis gradient"
+          }
+        }
+      }
+    },
+    "XMB Mode" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "XMB Mode"
           }
         }
       }
@@ -13462,6 +17134,16 @@
         }
       }
     },
+    "Zoom" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zoom"
+          }
+        }
+      }
+    },
     "·" : {
       "localizations" : {
         "en" : {
@@ -13488,6 +17170,256 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Storage is almost full. Free some space or the game may close."
+          }
+        }
+      }
+    },
+    "Switch to XMB Mode" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switch to XMB Mode"
+          }
+        }
+      }
+    },
+    "Menu Style" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Menu Style"
+          }
+        }
+      }
+    },
+    "Pick how ARMSX3 opens: the library, or the PS3's XMB." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pick how ARMSX3 opens: the library, or the PS3's XMB."
+          }
+        }
+      }
+    },
+    "Library" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Library"
+          }
+        }
+      }
+    },
+    "XMB" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "XMB"
+          }
+        }
+      }
+    },
+    "The PS3's own menu, shown in landscape, with its music and themes. Leave it from Users, Exit XMB Mode." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The PS3's own menu, shown in landscape, with its music and themes. Leave it from Users, Exit XMB Mode."
+          }
+        }
+      }
+    },
+    "A grid of your games with covers, in either orientation. The wave button at the top of the library switches over." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A grid of your games with covers, in either orientation. The wave button at the top of the library switches over."
+          }
+        }
+      }
+    },
+    "From %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "From %@"
+          }
+        }
+      }
+    },
+    "Join" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Join"
+          }
+        }
+      }
+    },
+    "Quit the game to switch XMB Mode." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quit the game to switch XMB Mode."
+          }
+        }
+      }
+    },
+    "Browse without JIT" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Browse without JIT"
+          }
+        }
+      }
+    },
+    "Games need JIT. This test build is only showing the menus." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Games need JIT. This test build is only showing the menus."
+          }
+        }
+      }
+    },
+    "This needs JIT. This test build is only showing the menus." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This needs JIT. This test build is only showing the menus."
+          }
+        }
+      }
+    },
+    "Playing" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Playing"
+          }
+        }
+      }
+    },
+    "Paused" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paused"
+          }
+        }
+      }
+    },
+    "%@ of %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ of %@"
+          }
+        }
+      }
+    },
+    "Track Position" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Track Position"
+          }
+        }
+      }
+    },
+    "Previous" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Previous"
+          }
+        }
+      }
+    },
+    "Next" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Next"
+          }
+        }
+      }
+    },
+    "Repeat" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repeat"
+          }
+        }
+      }
+    },
+    "Shuffle" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shuffle"
+          }
+        }
+      }
+    },
+    "All" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All"
+          }
+        }
+      }
+    },
+    "One" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "One"
+          }
+        }
+      }
+    },
+    "Shift" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shift"
+          }
+        }
+      }
+    },
+    "Goes back to the player." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Goes back to the player."
           }
         }
       }
