@@ -172,8 +172,16 @@ object ConfigDatabase {
         // Capping how many SPU threads run at once makes jobs run late, which is what exposes that
         // race. Back on 0 he got through, and the crash never appeared in 38 of our own runs at 0.
         // Pinned here, per title, so a global 3 cannot bring it back.
-        "BCUS98234" to "Video:\n  Write Color Buffers: false\nCore:\n  Preferred SPU Threads: 0\n",
-        "BCES01007" to "Video:\n  Write Color Buffers: false\nCore:\n  Preferred SPU Threads: 0\n",
+        //
+        // Fence Poll Completion Markers (Video/Vulkan; off elsewhere). On the Turnip build measured
+        // (Mesa 26.3.0-devel; Mesa main now polls) a zero-timeout fence poll waits for the fence
+        // instead of answering. With frame generation on, the RSX thread slept in the poll it makes
+        // after every flip until the GPU had finished the frame, while the game's next commands were
+        // already queued. With the markers, a poll of a command buffer the GPU has not reached
+        // answers "not yet" without asking the driver. Campaign, frame generation x2, off -> on:
+        // [to be measured on current master, alternated runs].
+        "BCUS98234" to "Video:\n  Write Color Buffers: false\n  Vulkan:\n    Fence Poll Completion Markers: true\nCore:\n  Preferred SPU Threads: 0\n",
+        "BCES01007" to "Video:\n  Write Color Buffers: false\n  Vulkan:\n    Fence Poll Completion Markers: true\nCore:\n  Preferred SPU Threads: 0\n",
 
         // Spider-Man: Web of Shadows: Accurate SPU Reservations off.
         //
@@ -347,11 +355,16 @@ object ConfigDatabase {
         // With vertex fetch specialization on, it took the robots fight from 21.9 to 25.7 FPS
         // (Retroid Pocket 6, Turnip, 11-06); alone it gains nothing there.
         // Contributed by k1r4ct (PR #232, PR #233).
-        "BCES00052" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n",
-        "BCUS98127" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n",
-        "BCJS30014" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n",
-        "NPEA00452" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n",
-        "NPUA80965" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n",
+        //
+        // ToD also gets Fence Poll Completion Markers (Video/Vulkan; off elsewhere), for the reason
+        // given at Killzone 3 above. On that Turnip build the poll of early submit waited for the
+        // previous submit as well, instead of telling whether the GPU had finished it. Robots fight,
+        // off -> on: [to be measured on current master, alternated runs].
+        "BCES00052" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n    Fence Poll Completion Markers: true\n",
+        "BCUS98127" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n    Fence Poll Completion Markers: true\n",
+        "BCJS30014" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n    Fence Poll Completion Markers: true\n",
+        "NPEA00452" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n    Fence Poll Completion Markers: true\n",
+        "NPUA80965" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n    Fence Poll Completion Markers: true\n",
         "BCES00301" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
         "BCAS20052" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
         "NPEA00088" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n",
