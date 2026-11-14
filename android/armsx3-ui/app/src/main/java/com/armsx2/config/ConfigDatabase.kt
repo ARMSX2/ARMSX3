@@ -180,8 +180,15 @@ object ConfigDatabase {
         // already queued. With the markers, a poll of a command buffer the GPU has not reached
         // answers "not yet" without asking the driver. Campaign, frame generation x2, off -> on:
         // [to be measured on current master, alternated runs].
-        "BCUS98234" to "Video:\n  Write Color Buffers: false\n  Vulkan:\n    Fence Poll Completion Markers: true\nCore:\n  Preferred SPU Threads: 0\n",
-        "BCES01007" to "Video:\n  Write Color Buffers: false\n  Vulkan:\n    Fence Poll Completion Markers: true\nCore:\n  Preferred SPU Threads: 0\n",
+        //
+        // SPU Inline Interrupt Idioms on (Core; off elsewhere). The game's SPU code wraps its DMA
+        // sequences in bid/bie, and without the setting the code after each one runs as a function
+        // of its own, reached through the dispatcher: in one of its SPU function lists, 4,206 of
+        // 10,264 functions begin right after one. Campaign, steady state, off -> on: [to be
+        // measured on current master, alternated runs]. The bie half needs SPU Block Size Mega,
+        // which RPCS3's database entry for the game sets.
+        "BCUS98234" to "Video:\n  Write Color Buffers: false\n  Vulkan:\n    Fence Poll Completion Markers: true\nCore:\n  Preferred SPU Threads: 0\n  SPU Inline Interrupt Idioms: true\n",
+        "BCES01007" to "Video:\n  Write Color Buffers: false\n  Vulkan:\n    Fence Poll Completion Markers: true\nCore:\n  Preferred SPU Threads: 0\n  SPU Inline Interrupt Idioms: true\n",
 
         // Spider-Man: Web of Shadows: Accurate SPU Reservations off.
         //
