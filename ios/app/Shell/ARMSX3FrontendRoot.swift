@@ -24,6 +24,9 @@ struct ARMSX3FrontendRoot: View {
     @State private var autoboot: AutobootRequest?
     @State private var started = false
     @State private var crashOffer = false
+    @State private var crashOfferWaits = false
+    /// A link's answer that came while setup was up before the app was ready, shown once setup ends.
+    @State private var heldMessage: String?
     @State private var report: ReportRequest?
     @State private var pendingLink: DeepLink?
     @State private var libraryReady = false
@@ -54,12 +57,12 @@ struct ARMSX3FrontendRoot: View {
                     if let block = GameListView.launchBlock(entry) {
                         XmbInGame.shared.nextDisc = nil
                         switch block {
-                        case .locked: linkMessage = String(localized: "That game needs a licence first. Open it from the library to add one.")
-                        case .explained(let why): linkMessage = why
+                        case .locked: tell(String(localized: "That game needs a licence first. Open it from the library to add one."))
+                        case .explained(let why): tell(why)
                         }
                     } else if InstallModel.installInFlight || UpdateStore.shared.installingSerial != nil {
                         XmbInGame.shared.nextDisc = nil
-                        linkMessage = String(localized: "Another install is running. Wait for it to finish.")
+                        tell(String(localized: "Another install is running. Wait for it to finish."))
                     } else {
                         UpdateStore.shared.holdForLaunch()
                         autoboot = AutobootRequest(game: game)
@@ -71,7 +74,17 @@ struct ARMSX3FrontendRoot: View {
                     .environment(\.menuControllerInputRouter, controllerInput)
                     .onAppear { XmbInGame.shared.nextDisc = nil }
             }
-            .onChange(of: setup != nil, initial: true) { _, up in XmbLibraryCover.shared.setupUp = up }
+            .onChange(of: setup != nil, initial: true) { _, up in
+                XmbLibraryCover.shared.setupUp = up
+                if !up, crashOfferWaits {
+                    crashOfferWaits = false
+                    crashOffer = true
+                }
+                if !up, let held = heldMessage {
+                    heldMessage = nil
+                    tell(held)
+                }
+            }
             .onChange(of: crashOffer || report != nil || linkMessage != nil, initial: true) { _, up in
                 XmbLibraryCover.shared.rootModal = up
             }
@@ -121,6 +134,20 @@ struct ARMSX3FrontendRoot: View {
         }
     }
 
+    /// A link's answer. Once the app is up it goes to the prompt window, since a root alert would close a game or setup
+    /// cover that is up to show itself.
+    private func tell(_ message: String?) {
+        guard let message else { return }
+        // While a backup restore waits for a relaunch, the prompt window is not on screen, so the alert says it.
+        if case .ready = stage, EmulatorSession.shared.restorePhase != .restored {
+            ControllerPrompt.shared.ask(message, message: "", actions: [.ok])
+        } else if setup != nil {
+            heldMessage = message
+        } else {
+            linkMessage = message
+        }
+    }
+
     private var linkMessageShown: Binding<Bool> {
         Binding(get: { linkMessage != nil }, set: { if !$0 { linkMessage = nil } })
     }
@@ -132,15 +159,15 @@ struct ARMSX3FrontendRoot: View {
                 installPairing(data, origin: .sidestoreLink)
             case .ignored:
                 PairingLink.lastAnswer = .ignored
-                linkMessage = String(localized: "ARMSX3 didn't ask for that pairing file, so it was ignored.")
+                tell(String(localized: "ARMSX3 didn't ask for that pairing file, so it was ignored."))
             case .malformed:
                 PairingLink.lastAnswer = .invalid
-                linkMessage = JitNextStep.importRefusalSentence(PairingImport.Outcome.invalid.rawValue)
+                tell(JitNextStep.importRefusalSentence(PairingImport.Outcome.invalid.rawValue))
             }
             return
         }
         if url.isFileURL, url.pathExtension.lowercased() == PadLayoutFile.fileExtension {
-            linkMessage = PadLayoutStore.shared.importMessage(url)
+            tell(PadLayoutStore.shared.importMessage(url))
             return
         }
         if url.isFileURL, ["plist", "mobiledevicepairing", "mobiledevicepair"].contains(url.pathExtension.lowercased()) {
@@ -148,7 +175,7 @@ struct ARMSX3FrontendRoot: View {
             return
         }
         guard let link = DeepLink.parse(url) else {
-            linkMessage = String(localized: "That isn't an ARMSX3 link.")
+            tell(String(localized: "That isn't an ARMSX3 link."))
             return
         }
         pendingLink = link
@@ -168,12 +195,12 @@ struct ARMSX3FrontendRoot: View {
         if origin == .sidestoreLink { PairingLink.lastAnswer = answer }
         switch answer {
         case .replaced:
-            linkMessage = String(localized: "Pairing file replaced. ARMSX3 uses the new one the next time it opens.")
+            tell(String(localized: "Pairing file replaced. ARMSX3 uses the new one the next time it opens."))
         case .added:
-            linkMessage = String(localized: "Pairing file added. ARMSX3 uses it the next time it opens.")
+            tell(String(localized: "Pairing file added. ARMSX3 uses it the next time it opens."))
         default:
             let refusal = JitNextStep.importRefusalSentence(result.outcome.rawValue)
-            linkMessage = answer == .lockdown && origin == .sidestoreLink ? refusal.map { $0 + " " + PairingSource.sideStoreLockdownFix } : refusal
+            tell(answer == .lockdown && origin == .sidestoreLink ? refusal.map { $0 + " " + PairingSource.sideStoreLockdownFix } : refusal)
         }
     }
 
@@ -189,24 +216,24 @@ struct ARMSX3FrontendRoot: View {
             let game = entry.flatMap { library.game(for: $0) }
             if EmulatorSession.shared.restorePhase != .idle {
                 // Nothing boots during a restore or before the relaunch it needs.
-                linkMessage = String(localized: "A backup is being restored. Close and reopen ARMSX3, then open the link again.")
+                tell(String(localized: "A backup is being restored. Close and reopen ARMSX3, then open the link again."))
             } else if EmulatorSession.shared.isRunning || autoboot != nil {
-                linkMessage = String(localized: "Stop the current game before opening another.")
+                tell(String(localized: "Stop the current game before opening another."))
             } else if InstallModel.installInFlight || UpdateStore.shared.installingSerial != nil {
                 // An install holds the core's one queue and the library is scanned again after it, so the boot waits.
-                linkMessage = String(localized: "Another install is running. Wait for it to finish.")
+                tell(String(localized: "Another install is running. Wait for it to finish."))
             } else if entry?.locked == true {
-                linkMessage = String(localized: "That game needs a licence first. Open it from the library to add one.")
+                tell(String(localized: "That game needs a licence first. Open it from the library to add one."))
             } else if entry?.unreadable == true {
-                linkMessage = String(localized: "This game can't be read, and a licence won't help. It may be built for a PS3 running CFW or HEN.")
+                tell(String(localized: "This game can't be read, and a licence won't help. It may be built for a PS3 running CFW or HEN."))
             } else if let entry, let gone = LibraryRelocation.goneMessage(bootPath: entry.bootPath, isISO: entry.isISO) {
                 // The ISO's image is gone, so nothing boots.
-                linkMessage = gone
+                tell(gone)
             } else if let game {
                 UpdateStore.shared.holdForLaunch()
                 autoboot = AutobootRequest(game: game)
             } else {
-                linkMessage = String(localized: "No installed game has the serial \(serial).")
+                tell(String(localized: "No installed game has the serial \(serial)."))
             }
         }
     }
@@ -339,8 +366,11 @@ struct ARMSX3FrontendRoot: View {
 
         // Shown at once over the cached library; this runs before GameListView's .task, so the model starts once.
         stage = .ready
-        if DiagnosticsSession.shared.crashed != nil {
+        // The alert would close setup's cover to show itself, so it waits for setup to end.
+        if DiagnosticsSession.shared.crashed != nil, setup == nil {
             crashOffer = true
+        } else if DiagnosticsSession.shared.crashed != nil {
+            crashOfferWaits = true
         }
         await library.start()
 
