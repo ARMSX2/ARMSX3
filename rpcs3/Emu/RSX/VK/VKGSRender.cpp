@@ -2498,7 +2498,13 @@ bool VKGSRender::load_program()
 	if (shadermode == shader_mode::async_with_interpreter || shadermode == shader_mode::interpreter_only)
 	{
 		const bool is_interpreter = !m_program;
-		const bool was_interpreter = m_shader_interpreter.is_interpreter(m_prev_program);
+
+		// ARMSX3: what the last draw that ran used, whose constants the buffers hold, laid out for it: all
+		// the transform constants for the interpreter, for a recompiled vertex program only those it reads
+		// unless it indexes them. m_prev_program only changes with the programs, so a hand-over between the
+		// interpreter and a recompiled pipeline of the same programs (that pipeline becoming ready, or
+		// another render state still compiling) could go unseen, and the draw read the other layout.
+		const bool was_interpreter = m_last_program_interpreted;
 
 		// First load the next program if not available
 		if (!m_program)
@@ -2525,6 +2531,12 @@ bool VKGSRender::load_program()
 			{
 				m_stale_constants.set(rsx::draw_state_t::group::fragment_constants);
 			}
+		}
+
+		if (m_program)
+		{
+			// ARMSX3: this draw runs, see was_interpreter above
+			m_last_program_interpreted = is_interpreter;
 		}
 	}
 

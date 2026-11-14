@@ -67,6 +67,7 @@ private:
 	const VKVertexProgram *m_vertex_prog = nullptr;
 	vk::glsl::program *m_program = nullptr;
 	vk::glsl::program *m_prev_program = nullptr;
+	bool m_last_program_interpreted = false;            // ARMSX3: the last draw that ran used the shader interpreter
 	// ARMSX3: vertex fetch specialization (vk_vspec.h), all unused while it is off
 	vk::glsl::program *m_generic_program = nullptr;     // Generic variant of a specialized m_program
 	std::array<u32, 16> m_bound_vtx_spec{};             // Specialization of m_program, all zero = generic
