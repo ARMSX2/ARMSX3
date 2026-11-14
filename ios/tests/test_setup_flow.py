@@ -22,7 +22,7 @@ DIAGNOSTICS = ROOT / "ios" / "app" / "Diagnostics" / "DiagnosticsStore.swift"
 VFS_CONFIG = ROOT / "rpcs3" / "Emu" / "vfs_config.h"
 SYSINFO = ROOT / "rpcs3" / "util" / "sysinfo.cpp"
 
-SAVED = (-3, 0, 1, 3, 6, 7, 9)
+SAVED = (-3, 0, 1, 3, 6, 7, 8, 9)
 LAUNCH_CASES = list(itertools.product((False, True), SAVED, (False, True), (False, True)))
 STEPS = range(-1, 9)
 SUPPORT = "/AppSupport"
@@ -53,7 +53,7 @@ FIRMWARE_VALUES = [
 
 def expected_launch(finished, saved, folders, firmware):
     """The first rule that holds: (present, markFinished)."""
-    if 1 <= saved <= 6:
+    if 1 <= saved <= 7:
         return saved, False
     if finished:
         return None, False
@@ -146,11 +146,11 @@ def rules_problems(out, marker):
         if launch.get(case) != want:
             problems.append("launch: finished={0} saved={1} folders={2} firmware={3} gave {4}, wanted {5}".format(
                 case[0], case[1], case[2], case[3], launch.get(case), want))
-    if count != 6:
-        problems.append("order: stepCount is {0}, wanted 6".format(count))
+    if count != 7:
+        problems.append("order: stepCount is {0}, wanted 7".format(count))
     for n in STEPS:
-        want_next = n + 1 if 1 <= n <= 5 else None
-        want_prev = n - 1 if 2 <= n <= 6 else None
+        want_next = n + 1 if 1 <= n <= 6 else None
+        want_prev = n - 1 if 2 <= n <= 7 else None
         if nexts.get(n, "absent") != want_next:
             problems.append("order: next({0}) gave {1}, wanted {2}".format(n, nexts.get(n, "absent"), want_next))
         if prevs.get(n, "absent") != want_prev:
@@ -369,7 +369,7 @@ class Launch(unittest.TestCase):
     def test_control_the_expected_table_is_d_15_08(self):
         self.assertEqual(expected_launch(True, 3, True, True), (3, False))
         self.assertEqual(expected_launch(True, 0, False, False), (None, False))
-        self.assertEqual(expected_launch(False, 7, False, False), (1, False))
+        self.assertEqual(expected_launch(False, 8, False, False), (1, False))
         self.assertEqual(expected_launch(False, 0, True, False), (None, True))
         self.assertEqual(expected_launch(False, -3, False, True), (None, True))
 
