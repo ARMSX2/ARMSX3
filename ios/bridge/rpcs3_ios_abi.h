@@ -556,6 +556,28 @@ Rpcs3IOS_Status Rpcs3IOS_AvatarUseImage(const uint8_t* bytes, uint32_t size);
 // WRONG_STATE when the firmware has no default avatar or the choice could not be cleared.
 Rpcs3IOS_Status Rpcs3IOS_AvatarUseDefault(void);
 
+// A game's SND0.AT3 as a 16-bit stereo WAV at `out_path`, with the core's FFmpeg; WRONG_STATE when it does not decode.
+Rpcs3IOS_Status Rpcs3IOS_XmbDecodeAudio(const char* in_path, const char* out_path);
+
+// An ICON1.PAM's own sound as a WAV; WRONG_STATE when it has none or it does not decode.
+Rpcs3IOS_Status Rpcs3IOS_XmbDecodeIconAudio(const char* in_path, const char* out_path);
+
+// Copies PS3_GAME's PIC1.PNG, SND0.AT3 and ICON1.PAM out of a disc image into `out_dir`, only when the image's
+// TITLE_ID is `serial`; WRONG_STATE when it holds none of them or is another game's, INSTALL_WRITE_FAILED when it
+// does not read or a file does not write (worth asking again).
+Rpcs3IOS_Status Rpcs3IOS_XmbDiscMedia(const char* image_path, const char* serial, const char* out_dir);
+
+// An open ICON1.PAM, played frame by frame.
+typedef struct Rpcs3IOS_XmbIcon Rpcs3IOS_XmbIcon;
+
+// WRONG_STATE when the file is not an animated icon this decoder plays.
+Rpcs3IOS_Status Rpcs3IOS_XmbIconOpen(const char* path, Rpcs3IOS_XmbIcon** out_icon, uint32_t* width, uint32_t* height);
+
+// The next frame as RGBA into `rgba` (width * height * 4 bytes) and its time in milliseconds; WRONG_STATE at the end.
+Rpcs3IOS_Status Rpcs3IOS_XmbIconFrame(Rpcs3IOS_XmbIcon* icon, uint8_t* rgba, uint64_t capacity, int64_t* time_ms);
+
+Rpcs3IOS_Status Rpcs3IOS_XmbIconClose(Rpcs3IOS_XmbIcon* icon);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
