@@ -4860,6 +4860,64 @@ extern "C" bool _armsx3_initialize(std::string_view rootDir,
     }
   }
 
+  // Mesa's shader disk cache, for each of its variables that driver_env.txt above did not set.
+  //
+  // Mesa drivers (Turnip, and PanVK on Mali) can keep compiled shaders in a cache on disk, keyed
+  // by driver build and GPU, writing each entry shortly after it is compiled. Mesa leaves that off
+  // on Android, where the EGL layer gives GL apps a cache of its own: a Vulkan app has to turn it
+  // on and name a folder it can write. Without it, the one driver-level cache is
+  // vk_pipeline_cache.bin, which three ordinary things undo. It is written when the renderer is
+  // destroyed and before a pause, so when the app stops any other way (a crash, a force stop),
+  // what was compiled since is lost. It is deleted once it grows past 128 MiB. And a game that
+  // boots on another driver replaces it with that driver's cache. Each time, what it lost
+  // compiles again.
+  //
+  // The folder is the app's private cache folder, as for the SPU object cache: thousands of small
+  // files, and Android empties it by itself when the phone runs low on space, as does the app's
+  // Clear cache. Mesa makes its mesa_shader_cache folder inside, and past the cap it evicts
+  // entries itself.
+  //
+  // Saves come before the cache, as for the SPU object cache (SPU_OBJ_CACHE_MIN_FREE): a failed
+  // write is fatal (an ensure in fs::file::write), and Mesa keeps no free-space margin of its own.
+  // So the cap is explicit, and the defaults are given only while 1 GB plus the whole cap is free
+  // at app start, so that the cache filling up to its cap still leaves that 1 GB. Otherwise a
+  // notice says so, and Mesa keeps its Android default, off.
+  //
+  // No overwrite: a value from driver_env.txt wins over these, and the Turnip options' driver
+  // variables, which the app sets before each game, win over both. MESA_SHADER_CACHE_DISABLE=true
+  // in either leaves the cache off. Drivers that are not Mesa, like Qualcomm's own, do not read
+  // these variables. With older glue there is no private folder, and nothing is set. What a game
+  // gets is logged when its driver is bound, in _armsx3_setCustomDriver.
+  if (!g_android_private_cache_dir.empty()) {
+    std::string mesa_cache_parent = g_android_private_cache_dir;
+
+    if (mesa_cache_parent.size() > 1 && mesa_cache_parent.back() == '/') {
+      mesa_cache_parent.pop_back();
+    }
+
+    constexpr u64 k_mesa_cache_min_free = 1ull << 30;
+    constexpr u64 k_mesa_cache_cap_mb = 512; // MESA_SHADER_CACHE_MAX_SIZE
+
+    std::error_code ec;
+    std::filesystem::create_directories(mesa_cache_parent, ec);
+
+    if (std::filesystem::is_directory(mesa_cache_parent, ec)) {
+      fs::device_stat free_stat{};
+
+      if (fs::statfs(mesa_cache_parent, free_stat) &&
+          free_stat.avail_free >= k_mesa_cache_min_free + (k_mesa_cache_cap_mb << 20)) {
+        setenv("MESA_SHADER_CACHE_DISABLE", "false", 0);
+        setenv("MESA_SHADER_CACHE_DIR", mesa_cache_parent.c_str(), 0);
+        setenv("MESA_SHADER_CACHE_MAX_SIZE", fmt::format("%uM", k_mesa_cache_cap_mb).c_str(), 0);
+      } else {
+        armsx3_android.notice("Mesa shader disk cache: defaults not set, %u MB free, under the "
+                              "%u MB kept for saves plus its %u MB cap",
+                              free_stat.avail_free >> 20, k_mesa_cache_min_free >> 20,
+                              k_mesa_cache_cap_mb);
+      }
+    }
+  }
+
   logs::stored_message ver{armsx3_android.always()};
   ver.text = fmt::format("ARMSX3 v%s", rpcs3::get_version().to_string());
 
@@ -8783,6 +8841,20 @@ extern "C" void *_armsx3_setCustomDriver(void *driverHandle) {
   if (driverHandle != nullptr && !vk::android::using_custom_driver()) {
     armsx3_android.error("setCustomDriver: driver rejected (%s)",
                         vk::android::last_error());
+  } else if (driverHandle != nullptr) {
+    // What a Mesa driver will read for its shader disk cache (see _armsx3_initialize) when the
+    // renderer creates its instance. The app calls this before each game, after it has set that
+    // game's Turnip options (CustomDriver.applyDriverEnv), so these are the values the game gets.
+    // Read back for the log only, like the driver_env.txt lines; nothing depends on them here.
+    // Not logged on the system driver.
+    const char *const mesa_cache_off = getenv("MESA_SHADER_CACHE_DISABLE");
+    const char *const mesa_cache_dir = getenv("MESA_SHADER_CACHE_DIR");
+    const char *const mesa_cache_max = getenv("MESA_SHADER_CACHE_MAX_SIZE");
+    armsx3_android.notice("Mesa shader disk cache: MESA_SHADER_CACHE_DISABLE=%s, "
+                          "MESA_SHADER_CACHE_DIR=%s, MESA_SHADER_CACHE_MAX_SIZE=%s",
+                          mesa_cache_off ? mesa_cache_off : "(unset)",
+                          mesa_cache_dir ? mesa_cache_dir : "(unset)",
+                          mesa_cache_max ? mesa_cache_max : "(unset)");
   }
 
   return previous;
