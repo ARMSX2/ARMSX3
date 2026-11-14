@@ -503,11 +503,23 @@ namespace vk
 				.flags = 0,
 				.program = result
 			};
-			this->m_program_cache[key] = cached_program;
+
+			// ARMSX3: it replaces an alias preload() registered for the key, but not a pipeline of its own:
+			// after a skipped preload, one get() linked on the RSX thread while the key's job was still
+			// queued, or one an earlier job for the same key stored. Draws may use that one in command
+			// buffers being recorded or in flight: dropped from the cache, it would be destroyed under
+			// them. This one, which nothing has used, goes instead.
+			const auto [found, inserted] = this->m_program_cache.try_emplace(key, cached_program);
+
+			if (!inserted && (found->second.flags & CACHED_PIPE_UNOPTIMIZED))
+			{
+				found->second = cached_program;
+			}
 
 			if (async_callback)
 			{
-				async_callback(result);
+				// The pipeline the cache keeps, which the aliases preload() adds must point to
+				async_callback(found->second.program);
 			}
 		};
 
