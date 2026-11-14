@@ -648,6 +648,13 @@ namespace vk
 		return prog == m_current_interpreter.get();
 	}
 
+	bool shader_interpreter::has_fragment_textures() const
+	{
+		// The lookup update_fragment_textures() binds them by
+		return m_current_interpreter &&
+			m_current_interpreter->get_uniform_location(::glsl::glsl_fragment_program, glsl::input_type_texture, "sampler1D_array[16]").second != umax;
+	}
+
 	u32 shader_interpreter::get_vertex_instruction_location() const
 	{
 		return m_current_pipeline_info_ex.vertex_instruction_location;

@@ -888,7 +888,15 @@ bool VKGSRender::bind_texture_env()
 
 bool VKGSRender::bind_interpreter_texture_env()
 {
-	if (m_ctx->program.fp_metadata.referenced_textures_mask == 0)
+	// ARMSX3: a draw that samples nothing can still get an interpreter with the texture arrays: the base
+	// variant preload() registers under the key of the draw's own variant, which get() returns until
+	// that variant is built. Its arrays then get the null textures below, like any slot no texture is
+	// bound to. Left alone they would keep the views of an earlier draw, which may be destroyed by then,
+	// or, until a draw that samples has gone through that pipeline, no descriptor at all: a null sampler,
+	// which Turnip dereferences when it writes the descriptor set, and a write template of one descriptor
+	// per array, which the next draw that samples fails in update_descriptor_template().
+	if (m_ctx->program.fp_metadata.referenced_textures_mask == 0 &&
+		!m_shader_interpreter.has_fragment_textures())
 	{
 		// Nothing to do
 		return false;

@@ -107,6 +107,10 @@ namespace vk
 
 		bool is_interpreter(const glsl::program* prog) const;
 
+		// ARMSX3: the interpreter get() returned last declares the fragment texture arrays, which a variant
+		// built without the textures does not
+		bool has_fragment_textures() const;
+
 		u32 get_vertex_instruction_location() const;
 		u32 get_fragment_instruction_location() const;
 
