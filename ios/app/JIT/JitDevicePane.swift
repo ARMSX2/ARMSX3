@@ -520,10 +520,22 @@ struct JitOffScreen: View {
     let reason: String
     let helperOutcome: String
     let controllerInput: MenuControllerInputRouter
+    /// Opens the menus without JIT; only test builds offer it.
+    var onBrowse: (() -> Void)?
 
     var body: some View {
         NavigationStack {
             JitDevicePane(host: .jitOff, controller: SettingsControllerContext(input: controllerInput), onBack: { false })
+                #if ARMSX3_TESTER
+                .toolbar {
+                    if let onBrowse {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("Browse without JIT", action: onBrowse)
+                                .controllerAccessibilityActionTarget(id: "jitoff.browse", label: "Browse without JIT", action: onBrowse)
+                        }
+                    }
+                }
+                #endif
         }
         .preferredColorScheme(.dark)
         .onAppear {

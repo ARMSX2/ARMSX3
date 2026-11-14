@@ -216,7 +216,8 @@ struct ARMSX3FrontendRoot: View {
         case .checking:
             ProgressView("Checking JIT…")
         case .jitOff(let reason):
-            JitOffScreen(reason: reason, helperOutcome: EmulatorSession.shared.jitHelperOutcome, controllerInput: controllerInput)
+            JitOffScreen(reason: reason, helperOutcome: EmulatorSession.shared.jitHelperOutcome, controllerInput: controllerInput,
+                         onBrowse: browseWithoutJit)
                 .onAppear { DiagnosticsSession.shared.markFirstScreen() }
         case .failed(let message):
             Text(message)
@@ -244,6 +245,13 @@ struct ARMSX3FrontendRoot: View {
                     }
             }
         }
+    }
+
+    /// A test build's look at the menus without JIT: the core is never prepared, so only the cached library shows.
+    private func browseWithoutJit() {
+        EmulatorSession.shared.browsing = true
+        stage = .ready
+        Task { await library.start() }
     }
 
     // File metadata only; the firmware file is never opened and no path is logged.

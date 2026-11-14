@@ -5,6 +5,7 @@
 # copies the entitlements of the existing signature, and an unsigned IPA would lose the memory-limit key and abort at launch.
 # CONFIGURATION is Release (default) or Debug; ARMSX3_CMAKE_CONFIG is ios-llvm (default) or ios-nollvm; TEAM_ID overrides the keychain team.
 # OUT_DIR is where the IPA, DerivedData and the build log go (default ios/build/ipa).
+# TESTER=1 builds a test build, whose JIT screen can open the menus without JIT; releases leave it at 0.
 # It never touches a phone. Exit codes: 0 staged, 1 tool or build failure, 2 invalid value, 3 core archive missing or stale, 4 verification failed.
 
 # --help runs before strict mode and any tool lookup, and prints the header with bash builtins only.
@@ -27,6 +28,7 @@ SIGN="${SIGN:-1}"
 CONFIGURATION="${CONFIGURATION:-Release}"
 ARMSX3_CMAKE_CONFIG="${ARMSX3_CMAKE_CONFIG:-ios-llvm}"
 OUT_DIR="${OUT_DIR:-${ROOT_DIR}/build/ipa}"
+TESTER="${TESTER:-0}"
 SCHEME=ARMSX3
 PROJECT_NAME=ARMSX3
 
@@ -39,6 +41,13 @@ log() {
 	printf '%s\n' "$*"
 }
 
+case "${TESTER}" in
+	0 | 1) ;;
+	*)
+		echo "error: TESTER='${TESTER}' is not valid. Valid values: 0 (release, default), 1 (test build)." >&2
+		exit "${EXIT_INVALID}"
+		;;
+esac
 case "${SIGN}" in
 	0 | 1) ;;
 	*)
@@ -169,14 +178,16 @@ DERIVED="${OUT_DIR}/DerivedData"
 BUILD_LOG="${OUT_DIR}/xcodebuild-${CONFIGURATION}.log"
 
 build_app() {
+	local tester_flags=()
+	[[ "${TESTER}" == 1 ]] && tester_flags=(SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) ARMSX3_TESTER')
 	if [[ "${SIGN}" == 1 ]]; then
-		if ! xcodebuild -project "${ROOT_DIR}/${PROJECT_NAME}.xcodeproj" -scheme "${SCHEME}" -configuration "${CONFIGURATION}" -destination 'generic/platform=iOS' -derivedDataPath "${DERIVED}" -allowProvisioningUpdates DEVELOPMENT_TEAM="${TEAM_ID}" CODE_SIGN_STYLE=Automatic build > "${BUILD_LOG}" 2>&1; then
+		if ! xcodebuild -project "${ROOT_DIR}/${PROJECT_NAME}.xcodeproj" -scheme "${SCHEME}" -configuration "${CONFIGURATION}" -destination 'generic/platform=iOS' -derivedDataPath "${DERIVED}" -allowProvisioningUpdates DEVELOPMENT_TEAM="${TEAM_ID}" CODE_SIGN_STYLE=Automatic ${tester_flags[@]+"${tester_flags[@]}"} build > "${BUILD_LOG}" 2>&1; then
 			tail -30 "${BUILD_LOG}" >&2
 			echo "error: xcodebuild failed (signed)." >&2
 			exit "${EXIT_TOOL}"
 		fi
 	else
-		if ! xcodebuild -project "${ROOT_DIR}/${PROJECT_NAME}.xcodeproj" -scheme "${SCHEME}" -configuration "${CONFIGURATION}" -destination 'generic/platform=iOS' -derivedDataPath "${DERIVED}" CODE_SIGNING_ALLOWED=NO build > "${BUILD_LOG}" 2>&1; then
+		if ! xcodebuild -project "${ROOT_DIR}/${PROJECT_NAME}.xcodeproj" -scheme "${SCHEME}" -configuration "${CONFIGURATION}" -destination 'generic/platform=iOS' -derivedDataPath "${DERIVED}" CODE_SIGNING_ALLOWED=NO ${tester_flags[@]+"${tester_flags[@]}"} build > "${BUILD_LOG}" 2>&1; then
 			tail -30 "${BUILD_LOG}" >&2
 			echo "error: xcodebuild failed (unsigned)." >&2
 			exit "${EXIT_TOOL}"
@@ -275,6 +286,8 @@ require_entitlements "${APP}" get-task-allow com.apple.developer.kernel.increase
 
 NAME="ARMSX3-${CONFIGURATION}-${ARMSX3_CMAKE_CONFIG}"
 [[ "${SIGN}" == 1 ]] || NAME+="-unsigned"
+# A test build must never pass for a release.
+[[ "${TESTER}" == 0 ]] || NAME+="-tester"
 NAME+=".ipa"
 IPA="${OUT_DIR}/${NAME}"
 
