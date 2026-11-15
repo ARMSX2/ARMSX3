@@ -3859,7 +3859,37 @@ namespace rsx
 			}
 			else if (cached_dest)
 			{
-				cached_dest->dma_transfer(cmd, vram_texture, src_area, dst_range, dst.pitch);
+				// A blit into main memory copies the source straight out, without the blitter that keeps a
+				// region inside its image. At a resolution scale below 100% the scaled area can end a texel
+				// past the scaled surface: Ratchet & Clank: Tools of Destruction at 83% stopped with
+				// "Verification failed" at the width check in copy_image_to_buffer. The area is fitted to the
+				// image here as well; one with nothing left inside is skipped, as the blitter refuses it.
+				const areai asked = src_area;
+				src_area.x1 = std::max(src_area.x1, 0);
+				src_area.y1 = std::max(src_area.y1, 0);
+				src_area.x2 = std::min(src_area.x2, static_cast<s32>(vram_texture->width()));
+				src_area.y2 = std::min(src_area.y2, static_cast<s32>(vram_texture->height()));
+
+				if (src_area.x2 <= src_area.x1 || src_area.y2 <= src_area.y1)
+				{
+					rsx_log.error("Blit to memory denied because the source region (%d,%d)-(%d,%d) is outside its %ux%u image.",
+						asked.x1, asked.y1, asked.x2, asked.y2, vram_texture->width(), vram_texture->height());
+				}
+				else
+				{
+					if (src_area.x1 != asked.x1 || src_area.y1 != asked.y1 || src_area.x2 != asked.x2 || src_area.y2 != asked.y2)
+					{
+						static atomic_t<u32> s_fitted{0};
+
+						if (s_fitted++ < 16)
+						{
+							rsx_log.warning("Blit to memory: source region (%d,%d)-(%d,%d) ran past its %ux%u image; it was fitted to (%d,%d)-(%d,%d).",
+								asked.x1, asked.y1, asked.x2, asked.y2, vram_texture->width(), vram_texture->height(), src_area.x1, src_area.y1, src_area.x2, src_area.y2);
+						}
+					}
+
+					cached_dest->dma_transfer(cmd, vram_texture, src_area, dst_range, dst.pitch);
+				}
 			}
 
 			if (cached_src)
