@@ -83,6 +83,7 @@ struct DiagnosticsStore {
         case menu
         case inGame = "in-game"
         case background
+        case turnedOff = "turned-off"
     }
 
     enum Incident: String {
@@ -90,7 +91,7 @@ struct DiagnosticsStore {
     }
 
     enum SessionOutcome: String {
-        case running, crashed, starting, background
+        case running, crashed, starting, background, turnedOff
     }
 
     struct SessionRow: Identifiable {
@@ -267,7 +268,12 @@ struct DiagnosticsStore {
                 switch incident(of: session) {
                 case .game, .menu: outcome = .crashed
                 case .starting: outcome = .starting
-                case nil: outcome = record?["state"] as? String == SessionState.background.rawValue ? .background : nil
+                case nil:
+                    switch record?["state"] as? String {
+                    case SessionState.background.rawValue: outcome = .background
+                    case SessionState.turnedOff.rawValue: outcome = .turnedOff
+                    default: outcome = nil
+                    }
                 }
             }
             return SessionRow(url: session,

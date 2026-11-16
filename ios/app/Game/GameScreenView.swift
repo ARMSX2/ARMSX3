@@ -347,7 +347,7 @@ struct GameScreenView: View {
                 NotificationCenter.default.post(name: EmulatorSession.menuBackgroundReturnNotification, object: nil)
                 // A chosen power-off, so the next launch does not take it for a crash.
                 if XmbInGame.shared.turnOffAfterExit {
-                    DiagnosticsSession.shared.mark(.background)
+                    DiagnosticsSession.shared.mark(.turnedOff)
                     _exit(0)
                 }
             }

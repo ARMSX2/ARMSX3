@@ -17,7 +17,7 @@ extension XmbHost {
                 // iOS has no call to quit an app; _exit skips the core's static destructors, as Close ARMSX3 does. The
                 // session is marked a chosen close first, so the next launch does not take it for a crash.
                 guard button == 0 else { return }
-                DiagnosticsSession.shared.mark(.background)
+                DiagnosticsSession.shared.mark(.turnedOff)
                 _exit(0)
             }
         }

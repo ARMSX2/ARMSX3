@@ -219,7 +219,7 @@ do {
 
 // I1: the previous session's incident and whether it is offered.
 var incidents: [String] = []
-for kind in ["game", "menu", "starting", "nolaunch", "background", "oldmenu", "oldgame"] {
+for kind in ["game", "menu", "starting", "nolaunch", "background", "turnedoff", "oldmenu", "oldgame"] {
     do {
         let start = try store("i1-" + kind).beginSession(now: now)
         incidents.append("\(kind)=\(start.incident?.rawValue ?? "none")/\(start.offer == nil ? 0 : 1)")
@@ -349,10 +349,10 @@ EXPECTED = {
     # Six no-game sessions; the newest five are 2 to 6, so only 1 goes.
     "B10": "B10 kept=5 archive=0 removed=1 oldestgone=1 threeback=1 survivors=5",
     # In-game is a game under any schema; menu evidence counts under /2 only.
-    "I1": "I1 game=game/1 menu=menu/1 starting=starting/1 nolaunch=none/0 background=none/0 oldmenu=none/0 oldgame=game/1",
+    "I1": "I1 game=game/1 menu=menu/1 starting=starting/1 nolaunch=none/0 background=none/0 turnedoff=none/0 oldmenu=none/0 oldgame=game/1",
     "B11": "B11 idle=background/menu playing=in-game stopped=background returned=menu title=Synthetic Title first=true",
     # 07 is current, 06 background, 05 launch.json without the marker, 04 to 02 incidents, 01 a /1 menu.
-    "D1": "D1 n=7 outcomes=running,background,starting,crashed,crashed,crashed,none labels=-,-,-,-,EFGH67890,Synthetic Game,- first=1767744000 iso=1767357000",
+    "D1": "D1 n=8 outcomes=running,turnedOff,background,starting,crashed,crashed,crashed,none labels=-,-,-,-,-,EFGH67890,Synthetic Game,- first=1767744000 iso=1767357000",
     "B7": "B7 zips=7 folders=0 partial=0 archived=9",
     "B8": "B8 launch=1 early=menu/false/nil state=in-game serial=ABCD12345 game=true back=background menu=menu keepgame=true",
     "B7zip": "B7zip RPCS3.log=1",
@@ -403,7 +403,7 @@ def write_fixtures(tmp):
     # I1: (root, schema, state, marker, launch.json).
     for kind, schema, state, marker, launch in (("game", 2, "in-game", False, False), ("menu", 2, "menu", True, True),
                                                 ("starting", 2, "menu", False, True), ("nolaunch", 2, "menu", False, False),
-                                                ("background", 2, "background", True, True), ("oldmenu", 1, "menu", True, True),
+                                                ("background", 2, "background", True, True), ("turnedoff", 2, "turned-off", True, True), ("oldmenu", 1, "menu", True, True),
                                                 ("oldgame", 1, "in-game", False, False)):
         folder = session_dir(tmp, "i1-" + kind, PREVIOUS)
         game = state == "in-game"
@@ -424,6 +424,7 @@ def write_fixtures(tmp):
     write_state(folder, "menu", False, schema=v2)
     (folder / "launch.json").write_bytes(LAUNCH)
     write_state(session_dir(tmp, "d1", "20260106T000000Z"), "background", False, schema=v2)
+    write_state(session_dir(tmp, "d1", "20260106T120000Z"), "turned-off", False, schema=v2)
     write_state(session_dir(tmp, "d1", "20260107T000000Z"), "menu", False, schema=v2)
     for index in range(9):
         folder = session_dir(tmp, "b7", "2026010{0}T000000Z".format(index + 1))
@@ -1495,6 +1496,8 @@ def marks_problems(screen):
     handler = screen[slice(*brace_span(screen, change))] if change != -1 else ""
     if "DiagnosticsSession.shared.mark(.background)" not in handler or "syncLog" not in handler:
         problems.append("marks: the scene-phase handler does not mark background and sync the log")
+    if not after(screen, "if XmbInGame.shared.turnOffAfterExit", "DiagnosticsSession.shared.mark(.turnedOff)"):
+        problems.append("marks: a Turn Off System after a game does not mark the session turned off before it exits")
     return problems
 
 
