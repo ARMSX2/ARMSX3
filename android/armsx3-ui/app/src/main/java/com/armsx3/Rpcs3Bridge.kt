@@ -57,23 +57,27 @@ object Rpcs3Bridge {
      * Reported as issue #15, where it looked like a firmware installer bug because the core is
      * dlopen'd lazily and installing firmware was the first thing that needed it.
      *
-     * Fails OPEN. An unreadable or unfamiliar /proc/cpuinfo returns null, because refusing to
-     * start a device that would have worked is worse than the crash this avoids.
+     * It asks the kernel: the AT_HWCAP bits in this process's auxiliary vector, which is what
+     * getauxval(AT_HWCAP) returns. It used to read the text of /proc/cpuinfo instead, and that
+     * told a Nothing Phone (2a) (Dimensity 7200 Pro, ARMv9 cores) that it lacked both extensions
+     * (issue #284): the feature list a process sees there is not the 64-bit one on every kernel,
+     * and the kernel's own comment on that file says to read the hwcaps instead. The kernel sets a
+     * hwcap bit only when every core has the feature, so one check covers all of them.
+     *
+     * Fails OPEN. An unreadable auxiliary vector returns null, because refusing to start a device
+     * that would have worked is worse than the crash this avoids.
      */
     private fun unsupportedCpuReason(): String? {
-        val perCore = runCatching {
-            File("/proc/cpuinfo").readLines()
-                .filter { it.trimStart().startsWith("Features") }
-                .map { it.substringAfter(':').trim().split(' ').filter { f -> f.isNotEmpty() }.toSet() }
-        }.getOrNull().orEmpty()
+        val caps = kernelHwcap()
+        if (caps == null) {
+            android.util.Log.w("ARMSX3", "CPU check: AT_HWCAP could not be read, not checking")
+            return null
+        }
+        android.util.Log.i("ARMSX3", "CPU check: AT_HWCAP=0x" + java.lang.Long.toHexString(caps))
 
-        if (perCore.isEmpty()) return null
-
-        // Checked across every core listed, not just the first: emulator threads are scheduled on
-        // all of them, so one core lacking the extension is enough to fault.
         val missing = buildList {
-            if (perCore.any { "atomics" !in it }) add("LSE atomics")
-            if (perCore.any { "asimdrdm" !in it }) add("RDMA")
+            if ((caps and HWCAP_ATOMICS) == 0L) add("LSE atomics")
+            if ((caps and HWCAP_ASIMDRDM) == 0L) add("RDMA")
         }
 
         if (missing.isEmpty()) return null
@@ -82,6 +86,33 @@ object Rpcs3Bridge {
         return "This device's CPU is ARMv8.0 and ARMSX3 requires ARMv8.1 " +
             "(missing " + names + "). No ARMSX3 build can run on it."
     }
+
+    // arm64 <linux/auxvec.h> and <asm/hwcap.h>
+    private const val AT_NULL = 0L
+    private const val AT_HWCAP = 16L
+    private const val HWCAP_ATOMICS = 1L shl 8
+    private const val HWCAP_ASIMDRDM = 1L shl 12
+
+    /**
+     * AT_HWCAP from /proc/self/auxv, or null if it cannot be read. The file is pairs of
+     * native-endian 64-bit words (type, value) ending with AT_NULL, in a 64-bit process.
+     */
+    private fun kernelHwcap(): Long? = runCatching {
+        if (!android.os.Process.is64Bit()) return@runCatching null
+        val auxv = File("/proc/self/auxv").inputStream().use { it.readBytes() }
+        val words = java.nio.ByteBuffer.wrap(auxv).order(java.nio.ByteOrder.nativeOrder())
+        var hwcap: Long? = null
+        while (words.remaining() >= 16) {
+            val type = words.long
+            val value = words.long
+            if (type == AT_NULL) break
+            if (type == AT_HWCAP) {
+                hwcap = value
+                break
+            }
+        }
+        hwcap
+    }.getOrNull()
 
     /** Toast on the main looper -- Toast.makeText throws on a thread with no Looper. */
     private fun reportFatal(context: Context, message: String) {

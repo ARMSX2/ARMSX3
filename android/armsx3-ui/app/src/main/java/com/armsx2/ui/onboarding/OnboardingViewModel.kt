@@ -172,9 +172,11 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
             runCatching { NativeApp.initializeOnce(getApplication()) }
         }
         if (!ARMSX3.initialized) {
+            // A CPU the core cannot run on is not fixed by reinstalling: say what it is.
             state.value = state.value.copy(
-                error = "The emulator core did not load, so firmware cannot be " +
-                    "installed. Reinstall ARMSX3 and try again.",
+                error = com.armsx3.Rpcs3Bridge.unsupportedCpuMessage
+                    ?: ("The emulator core did not load, so firmware cannot be " +
+                        "installed. Reinstall ARMSX3 and try again."),
             )
             return
         }
