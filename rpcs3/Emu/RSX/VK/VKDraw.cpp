@@ -895,6 +895,7 @@ bool VKGSRender::bind_interpreter_texture_env()
 	// or, until a draw that samples has gone through that pipeline, no descriptor at all: a null sampler,
 	// which Turnip dereferences when it writes the descriptor set, and a write template of one descriptor
 	// per array, which the next draw that samples fails in update_descriptor_template().
+	// Contributed by k1r4ct (issue #281).
 	if (m_ctx->program.fp_metadata.referenced_textures_mask == 0 &&
 		!m_shader_interpreter.has_fragment_textures())
 	{

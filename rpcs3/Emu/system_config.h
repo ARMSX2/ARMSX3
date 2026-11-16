@@ -50,7 +50,7 @@ struct cfg_root : cfg::node
 		// ARMSX3: SPU LLVM compiles the interrupt toggle idioms (a bid or bie to the next instruction)
 		// in line instead of leaving the compiled function at each one; bie with SPU Block Size Mega
 		// only. Part of the SPU object cache key and of the SPU cache file name, so not dynamic. Off
-		// by default; the config database turns it on per title.
+		// by default; the config database turns it on per title. Contributed by k1r4ct (issue #281).
 		cfg::_bool spu_inline_interrupt_idioms{ this, "SPU Inline Interrupt Idioms", false };
 #endif
 		cfg::_bool spu_accurate_dma{ this, "Accurate SPU DMA", false };
@@ -303,7 +303,7 @@ struct cfg_root : cfg::node
 			// starts. The last command of every primary command buffer a fence poll can ask about (not
 			// those submitted with the caller's own fence) writes a number to mapped memory, and a poll
 			// answers "not yet" from that word, without asking the driver, while the GPU has not reached
-			// it (VKGSRender::arm_completion_marker).
+			// it (VKGSRender::arm_completion_marker). Contributed by k1r4ct (issue #281).
 			cfg::_bool fence_poll_completion_markers{ this, "Fence Poll Completion Markers", false };
 #ifdef __ANDROID__
 			// ARMSX3: left on. Android has no Re-BAR; the name only fits desktop cards. RPCS3 counts any

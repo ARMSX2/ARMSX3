@@ -186,7 +186,7 @@ object ConfigDatabase {
         // of its own, reached through the dispatcher: in one of its SPU function lists, 4,206 of
         // 10,264 functions begin right after one. Campaign, steady state, off -> on: [to be
         // measured on current master, alternated runs]. The bie half needs SPU Block Size Mega,
-        // which RPCS3's database entry for the game sets.
+        // which RPCS3's database entry for the game sets. Both contributed by k1r4ct (issue #281).
         "BCUS98234" to "Video:\n  Write Color Buffers: false\n  Vulkan:\n    Fence Poll Completion Markers: true\nCore:\n  Preferred SPU Threads: 0\n  SPU Inline Interrupt Idioms: true\n",
         "BCES01007" to "Video:\n  Write Color Buffers: false\n  Vulkan:\n    Fence Poll Completion Markers: true\nCore:\n  Preferred SPU Threads: 0\n  SPU Inline Interrupt Idioms: true\n",
 
@@ -366,7 +366,7 @@ object ConfigDatabase {
         // ToD also gets Fence Poll Completion Markers (Video/Vulkan; off elsewhere), for the reason
         // given at Killzone 3 above. On that Turnip build the poll of early submit waited for the
         // previous submit as well, instead of telling whether the GPU had finished it. Robots fight,
-        // off -> on: [to be measured on current master, alternated runs].
+        // off -> on: [to be measured on current master, alternated runs]. Contributed by k1r4ct (issue #281).
         "BCES00052" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n    Fence Poll Completion Markers: true\n",
         "BCUS98127" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n    Fence Poll Completion Markers: true\n",
         "BCJS30014" to "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n    Fence Poll Completion Markers: true\n",

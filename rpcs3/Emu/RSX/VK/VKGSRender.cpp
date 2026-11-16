@@ -2531,6 +2531,7 @@ bool VKGSRender::load_program()
 		// unless it indexes them. m_prev_program only changes with the programs, so a hand-over between the
 		// interpreter and a recompiled pipeline of the same programs (that pipeline becoming ready, or
 		// another render state still compiling) could go unseen, and the draw read the other layout.
+		// Contributed by k1r4ct (issue #281).
 		const bool was_interpreter = m_last_program_interpreted;
 
 		// First load the next program if not available

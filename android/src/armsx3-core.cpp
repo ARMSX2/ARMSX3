@@ -4887,7 +4887,7 @@ extern "C" bool _armsx3_initialize(std::string_view rootDir,
   // variables, which the app sets before each game, win over both. MESA_SHADER_CACHE_DISABLE=true
   // in either leaves the cache off. Drivers that are not Mesa, like Qualcomm's own, do not read
   // these variables. With older glue there is no private folder, and nothing is set. What a game
-  // gets is logged when its driver is bound, in _armsx3_setCustomDriver.
+  // gets is logged when its driver is bound, in _armsx3_setCustomDriver. Contributed by k1r4ct (issue #281).
   if (!g_android_private_cache_dir.empty()) {
     std::string mesa_cache_parent = g_android_private_cache_dir;
 

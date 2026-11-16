@@ -508,7 +508,7 @@ namespace vk
 			// after a skipped preload, one get() linked on the RSX thread while the key's job was still
 			// queued, or one an earlier job for the same key stored. Draws may use that one in command
 			// buffers being recorded or in flight: dropped from the cache, it would be destroyed under
-			// them. This one, which nothing has used, goes instead.
+			// them. This one, which nothing has used, goes instead. Contributed by k1r4ct (issue #281).
 			const auto [found, inserted] = this->m_program_cache.try_emplace(key, cached_program);
 
 			if (!inserted && (found->second.flags & CACHED_PIPE_UNOPTIMIZED))

@@ -228,7 +228,7 @@ namespace vk::frame_gen
 	// that flushes the texture cache after an access violation. [before_submit], when set, runs on
 	// the calling thread just before that, once everything is recorded and before the lock is
 	// taken. The present path waits there for the frame the passes read to reach the queue
-	// (VKGSRender::queue_swap_request).
+	// (VKGSRender::queue_swap_request). Contributed by k1r4ct (issue #281).
 	u32 generate(const vk::render_device& dev, const std::function<void()>& before_submit = {});
 
 	// vkDeviceWaitIdle under the global submit lock, for FrameGen::WaitForIdle ahead of a pass chain
