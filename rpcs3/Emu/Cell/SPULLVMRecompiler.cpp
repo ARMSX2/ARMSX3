@@ -10954,6 +10954,36 @@ public:
 		return addr;
 	}
 
+	// ARMSX3: the end of a conditional branch through a register (BIZ, BINZ, BIHZ, BIHNZ). When the
+	// analyser offered the program's own entry as a target (a loop going back to its start, see
+	// spu_recompiler_base::analyse), going there when the register holds it stays inside the
+	// compiled code like a direct branch back would; any other address leaves through the dispatcher
+	// as before. One switch in the block that branches, so the entry block's PHI nodes see this
+	// block as their predecessor (add_block connects them to m_block->block_end).
+	void cond_branch_indirect(llvm::Value* cond, spu_opcode_t op, value_t<u32> addr)
+	{
+#ifdef __ANDROID__
+		const auto tfound = m_targets.find(m_pos);
+
+		if (!m_interp_magn && !op.d && !op.e && !(m_finfo && m_finfo->fn) && g_cfg.core.spu_block_size == spu_block_size_type::safe &&
+			tfound != m_targets.end() && std::count(tfound->second.begin(), tfound->second.end(), m_entry) && m_block_info[m_entry / 4] &&
+			m_block && m_block->block_end == m_ir->GetInsertBlock())
+		{
+			const auto self = add_block(m_entry);
+			const auto exit = add_block_indirect(op, addr);
+			const auto next = add_block_next();
+			const auto is_self = m_ir->CreateICmpEQ(addr.value, m_ir->getInt32(m_entry));
+			const auto taken = m_ir->CreateSelect(is_self, m_ir->getInt32(1), m_ir->getInt32(2));
+			const auto sw = m_ir->CreateSwitch(m_ir->CreateSelect(cond, taken, m_ir->getInt32(0)), next, 2);
+			sw->addCase(m_ir->getInt32(1), self);
+			sw->addCase(m_ir->getInt32(2), exit);
+			return;
+		}
+#endif
+		const auto target = add_block_indirect(op, addr);
+		m_ir->CreateCondBr(cond, target, add_block_next());
+	}
+
 	llvm::BasicBlock* add_block_indirect(spu_opcode_t op, value_t<u32> addr, bool ret = true)
 	{
 		if (m_interp_magn)
@@ -11107,8 +11137,7 @@ public:
 			m_block->block_end = m_ir->GetInsertBlock();
 			const auto cond = eval(extract(bitcast<u32[4]>(as), 0) == 0);
 			const auto addr = eval(extract(get_vr(op.ra), 3) & 0x3fffc);
-			const auto target = add_block_indirect(op, addr);
-			m_ir->CreateCondBr(cond.value, target, add_block_next());
+			cond_branch_indirect(cond.value, op, addr);
 			return;
 		}
 
@@ -11122,8 +11151,7 @@ public:
 			const auto b = extract(bitcast<u64[2]>(as), 1);
 			const auto cond = eval((a | b) == 0);
 			const auto addr = eval(extract(get_vr(op.ra), 3) & 0x3fffc);
-			const auto target = add_block_indirect(op, addr);
-			m_ir->CreateCondBr(cond.value, target, add_block_next());
+			cond_branch_indirect(cond.value, op, addr);
 			return;
 		}
 
@@ -11139,8 +11167,7 @@ public:
 				const auto a = get_vr<s8[16]>(op.rt);
 				const auto cond = eval(bitcast<s16>(trunc<bool[16]>(a)) >= 0);
 				const auto addr = eval(extract(get_vr(op.ra), 3) & 0x3fffc);
-				const auto target = add_block_indirect(op, addr);
-				m_ir->CreateCondBr(cond.value, target, add_block_next());
+				cond_branch_indirect(cond.value, op, addr);
 				return true;
 			}
 
@@ -11153,8 +11180,7 @@ public:
 #endif
 		const auto cond = eval(extract(get_vr(op.rt), 3) == 0);
 		const auto addr = eval(extract(get_vr(op.ra), 3) & 0x3fffc);
-		const auto target = add_block_indirect(op, addr);
-		m_ir->CreateCondBr(cond.value, target, add_block_next());
+		cond_branch_indirect(cond.value, op, addr);
 	}
 
 	void BINZ(spu_opcode_t op) //
@@ -11170,8 +11196,7 @@ public:
 			m_block->block_end = m_ir->GetInsertBlock();
 			const auto cond = eval(extract(bitcast<u32[4]>(as), 0) != 0);
 			const auto addr = eval(extract(get_vr(op.ra), 3) & 0x3fffc);
-			const auto target = add_block_indirect(op, addr);
-			m_ir->CreateCondBr(cond.value, target, add_block_next());
+			cond_branch_indirect(cond.value, op, addr);
 			return;
 		}
 
@@ -11185,8 +11210,7 @@ public:
 			const auto b = extract(bitcast<u64[2]>(as), 1);
 			const auto cond = eval((a | b) != 0);
 			const auto addr = eval(extract(get_vr(op.ra), 3) & 0x3fffc);
-			const auto target = add_block_indirect(op, addr);
-			m_ir->CreateCondBr(cond.value, target, add_block_next());
+			cond_branch_indirect(cond.value, op, addr);
 			return;
 		}
 
@@ -11202,8 +11226,7 @@ public:
 				const auto a = get_vr<s8[16]>(op.rt);
 				const auto cond = eval(bitcast<s16>(trunc<bool[16]>(a)) < 0);
 				const auto addr = eval(extract(get_vr(op.ra), 3) & 0x3fffc);
-				const auto target = add_block_indirect(op, addr);
-				m_ir->CreateCondBr(cond.value, target, add_block_next());
+				cond_branch_indirect(cond.value, op, addr);
 				return true;
 			}
 
@@ -11216,8 +11239,7 @@ public:
 #endif
 		const auto cond = eval(extract(get_vr(op.rt), 3) != 0);
 		const auto addr = eval(extract(get_vr(op.ra), 3) & 0x3fffc);
-		const auto target = add_block_indirect(op, addr);
-		m_ir->CreateCondBr(cond.value, target, add_block_next());
+		cond_branch_indirect(cond.value, op, addr);
 	}
 
 	void BIHZ(spu_opcode_t op) //
@@ -11235,8 +11257,7 @@ public:
 				const auto a = get_vr<s8[16]>(op.rt);
 				const auto cond = eval((bitcast<s16>(trunc<bool[16]>(a)) & 0x3000) == 0);
 				const auto addr = eval(extract(get_vr(op.ra), 3) & 0x3fffc);
-				const auto target = add_block_indirect(op, addr);
-				m_ir->CreateCondBr(cond.value, target, add_block_next());
+				cond_branch_indirect(cond.value, op, addr);
 				return true;
 			}
 
@@ -11249,8 +11270,7 @@ public:
 #endif
 		const auto cond = eval(extract(get_vr<u16[8]>(op.rt), 6) == 0);
 		const auto addr = eval(extract(get_vr(op.ra), 3) & 0x3fffc);
-		const auto target = add_block_indirect(op, addr);
-		m_ir->CreateCondBr(cond.value, target, add_block_next());
+		cond_branch_indirect(cond.value, op, addr);
 	}
 
 	void BIHNZ(spu_opcode_t op) //
@@ -11268,8 +11288,7 @@ public:
 				const auto a = get_vr<s8[16]>(op.rt);
 				const auto cond = eval((bitcast<s16>(trunc<bool[16]>(a)) & 0x3000) != 0);
 				const auto addr = eval(extract(get_vr(op.ra), 3) & 0x3fffc);
-				const auto target = add_block_indirect(op, addr);
-				m_ir->CreateCondBr(cond.value, target, add_block_next());
+				cond_branch_indirect(cond.value, op, addr);
 				return true;
 			}
 
@@ -11282,8 +11301,7 @@ public:
 #endif
 		const auto cond = eval(extract(get_vr<u16[8]>(op.rt), 6) != 0);
 		const auto addr = eval(extract(get_vr(op.ra), 3) & 0x3fffc);
-		const auto target = add_block_indirect(op, addr);
-		m_ir->CreateCondBr(cond.value, target, add_block_next());
+		cond_branch_indirect(cond.value, op, addr);
 	}
 
 	void BI(spu_opcode_t op) //

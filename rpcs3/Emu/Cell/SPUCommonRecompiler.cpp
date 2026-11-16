@@ -5075,6 +5075,32 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 				spu_log.warning("[0x%x] At 0x%x: Undetected interrupt branch target (ra=%d)", entry_point, pos, op.ra);
 			}
 
+#ifdef __ANDROID__
+			if (type == spu_itype::BIZ || type == spu_itype::BINZ || type == spu_itype::BIHZ || type == spu_itype::BIHNZ)
+			{
+				// ARMSX3: a conditional branch through a register that may be a loop going back to this
+				// program's own start. The Last of Us ends its software-pipelined SPU loops that way (binz
+				// r57 at 0x074dc, with r57 = 0x073f8 the program's entry in every capture), and with no
+				// target known here each trip round the loop left through the dispatcher: the registers
+				// stored, the whole program's code checked again on entry, the registers loaded again.
+				// The entry is offered as a target, which the LLVM recompiler takes only when the register
+				// holds it at run time (cond_branch_indirect) and otherwise leaves as before. It is the edge
+				// a direct branch back to the entry would make: the entry block gets the state check
+				// every loop head gets. Safe block size only, and not after a SYNC or with D or E set.
+				//
+				// A block that starts inside this one gets the branch analysed again, maybe with the
+				// register known by then: drop an edge an earlier pass made, as nothing else in this case
+				// gives a conditional indirect branch an edge to the entry in Safe mode.
+				std::erase(m_preds[entry_point], pos);
+
+				if (!(af & vf::is_const) && !op.d && !op.e && !sync && g_cfg.core.spu_block_size == spu_block_size_type::safe)
+				{
+					m_targets[pos].push_back(entry_point);
+					add_block(entry_point);
+				}
+			}
+
+#endif
 			if (!(af & vf::is_const) || op.e)
 			{
 				// Possible unknown target
