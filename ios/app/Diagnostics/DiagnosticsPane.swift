@@ -73,6 +73,7 @@ struct DiagnosticsPane: View {
         case .crashed: outcome = String(localized: "Crashed")
         case .starting: outcome = String(localized: "Closed while starting")
         case .background: outcome = String(localized: "Closed by iOS")
+        case .turnedOff: outcome = String(localized: "Turned off")
         case .running, nil: outcome = nil
         }
         let parts = [start, outcome].compactMap { $0 }
