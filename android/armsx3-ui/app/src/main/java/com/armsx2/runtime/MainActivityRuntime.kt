@@ -2227,6 +2227,7 @@ open class MainActivityRuntime : ComponentActivity() {
 
         invoke {
             NativeApp.initializeOnce(applicationContext)
+            logPreviousExit()
 
             // Re-assert the pad device classes, AFTER the core is open and not before.
             //
@@ -5648,7 +5649,113 @@ open class MainActivityRuntime : ComponentActivity() {
         }
     }
 
+    // The app's side of its own lifecycle, written to ARMSX3.log. A tester's game kept closing to
+    // the home screen, and the log showed only Android removing the surface and our shutdown after
+    // it, so it could not say why. Now it records whether Android paused, stopped or finished the
+    // activity, Home or Recents, a system window taking focus, Android's memory warnings, who
+    // called finish(), and at the next start how Android says the previous run ended. Before the
+    // core is loaded a line is dropped.
+    private fun logLifecycle(event: String) {
+        runCatching { com.armsx3.core.ARMSX3.instance.logAndroid("app: $event") }
+    }
+
+    /** Where a finish came from: the first frames past this class's own finish overrides. */
+    private fun finishCaller(): String =
+        Throwable().stackTrace.drop(2).take(3)
+            .joinToString(" <- ") { "${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}" }
+
+    override fun finish() {
+        logLifecycle("finish() called from ${finishCaller()}")
+        super.finish()
+    }
+
+    override fun finishAndRemoveTask() {
+        logLifecycle("finishAndRemoveTask() called from ${finishCaller()}")
+        super.finishAndRemoveTask()
+    }
+
+    override fun onUserLeaveHint() {
+        // Android's own hint, before onPause, that the user pressed Home or Recents
+        logLifecycle("the user is leaving the app (Home or Recents)")
+        super.onUserLeaveHint()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        logLifecycle(
+            if (hasFocus) "window has focus again"
+            else "window lost focus (a dialog, the notification shade or another window is on top)",
+        )
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        // ComponentCallbacks2.TRIM_MEMORY_* by value: several are deprecated, all are still sent
+        val name = when (level) {
+            5 -> "running moderate"
+            10 -> "running low"
+            15 -> "running critical"
+            20 -> "UI hidden"
+            40 -> "background"
+            60 -> "moderate"
+            80 -> "complete"
+            else -> "level"
+        }
+        logLifecycle("Android memory warning: $name ($level)")
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        logLifecycle("Android says memory is low (onLowMemory)")
+    }
+
+    /** Once per process: an activity recreated by a configuration change starts the core again. */
+    private object PreviousExit {
+        @Volatile var logged = false
+    }
+
+    /** How the previous run of the app ended, as Android recorded it. Once the core is up. */
+    private fun logPreviousExit() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || PreviousExit.logged) return
+        PreviousExit.logged = true
+        runCatching {
+            val info = getSystemService(android.app.ActivityManager::class.java)
+                ?.getHistoricalProcessExitReasons(packageName, 0, 1)?.firstOrNull() ?: return
+            // ApplicationExitInfo.REASON_* by value: the last three need a newer SDK than the floor
+            val reason = when (info.reason) {
+                1 -> "the app exited by itself"
+                2 -> "killed by signal ${info.status}"
+                3 -> "killed by Android for low memory"
+                4 -> "crashed (Java)"
+                5 -> "crashed (native)"
+                6 -> "not responding (ANR)"
+                7 -> "failed to start"
+                8 -> "a permission changed"
+                9 -> "excessive resource use"
+                10 -> "the user removed it (Recents or force stop)"
+                11 -> "the user stopped it"
+                12 -> "a process it depends on died"
+                13 -> "other"
+                14 -> "frozen by Android"
+                15 -> "its package state changed"
+                16 -> "it was updated"
+                else -> "unknown"
+            }
+            val at = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+                .format(java.util.Date(info.timestamp))
+            logLifecycle(
+                "the previous run ended $at: $reason (reason ${info.reason}, status ${info.status}, " +
+                    "importance ${info.importance}, pss ${info.pss / 1024} MB, rss ${info.rss / 1024} MB)" +
+                    (info.description?.let { ", Android says \"$it\"" } ?: ""),
+            )
+        }
+    }
+
     override fun onPause() {
+        logLifecycle(
+            "paused, finishing=$isFinishing, screen on=" +
+                (getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager)?.isInteractive,
+        )
         // Take the second-display panel down with the app. A Presentation is not torn down by the
         // activity stopping, so it otherwise stayed on the external screen while the user was off
         // doing something else (reported).
@@ -5708,6 +5815,7 @@ open class MainActivityRuntime : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        logLifecycle("started")
         runCatching { NativeApp.setAppBackgrounded(false) }
         com.armsx2.DiscordPresence.setForeground(true)
         com.armsx2.input.MicDevices.watch(applicationContext)
@@ -5749,6 +5857,7 @@ open class MainActivityRuntime : ComponentActivity() {
     }
 
     override fun onStop() {
+        logLifecycle("stopped, finishing=$isFinishing")
         onlineSessionWatch?.cancel()
         onlineSessionWatch = null
         runCatching { NativeApp.setAppBackgrounded(true) }
@@ -5758,6 +5867,7 @@ open class MainActivityRuntime : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        logLifecycle("resumed")
         runCatching { com.armsx2.SecondScreen.setForeground(applicationContext, true) }
         // Woke from a real sleep (paired with the onPause sleep chime): play the wake chime + a brief
         // top-left "Welcome Back!". A plain background return never set wasAsleep, so this only fires
@@ -5799,6 +5909,7 @@ open class MainActivityRuntime : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        logLifecycle("destroyed, finishing=$isFinishing, changing configuration=${isChangingConfigurations()}")
         getSystemService(android.hardware.input.InputManager::class.java)
             ?.unregisterInputDeviceListener(inputDeviceListener)
         // On a CONFIGURATION-driven recreate (e.g. Samsung DeX moving the activity to
