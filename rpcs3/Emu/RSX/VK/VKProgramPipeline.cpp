@@ -185,6 +185,18 @@ namespace vk
 
 			vkCreateShaderModule(*g_render_device, &vs_info, nullptr, &m_handle);
 
+#ifdef __ANDROID__
+			// ARMSX3: nothing reads the GLSL or the SPIR-V once the module exists (get_source is for
+			// the shader log, before compile; get_compiled has no caller), so free them now rather
+			// than with the program. Kept, they were two allocations per shader for its whole life,
+			// and on Android every allocation over 64 KB is a mapping of its own (Scudo's secondary,
+			// plus a guard): The Last of Us far in loads 14,800 programs, and perf_monitor counted
+			// ~24,000 of those blocks and as many unnamed mappings when the process reached the
+			// kernel's 65,530 and the texture cache's mprotect failed.
+			std::string().swap(m_source);
+			std::vector<u32>().swap(m_compiled);
+#endif
+
 			return m_handle;
 		}
 
