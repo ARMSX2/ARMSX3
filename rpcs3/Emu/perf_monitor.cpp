@@ -200,6 +200,14 @@ namespace
 }
 #endif
 
+#ifdef __ANDROID__
+namespace utils
+{
+	// rpcs3/util/vm_native.cpp: the process's memory mappings against the kernel's cap
+	std::string memory_map_census();
+}
+#endif
+
 void perf_monitor::operator()()
 {
 	constexpr u64 update_interval_us = 500000; // Update every half second
@@ -215,6 +223,9 @@ void perf_monitor::operator()()
 	u32 logged_pause = 0;
 	u64 last_pause_time = umax;
 	u64 max_memory_usage = 0;
+#ifdef __ANDROID__
+	u64 last_map_census = 0;
+#endif
 
 	std::vector<double> per_core_usage;
 	std::string msg;
@@ -294,6 +305,17 @@ void perf_monitor::operator()()
 				fmt::append(msg, ", Process RSS: %dMB (Peak: %dMB)",
 					current_mem_use / (1024 * 1024), max_memory_usage / (1024 * 1024));
 			}
+
+#ifdef __ANDROID__
+			// ARMSX3: the process's memory mappings, at most every 30 seconds: reading the table
+			// costs the kernel time in proportion to its size. Past the cap, mprotect and thread
+			// creation fail while RAM is free (see utils::memory_map_census).
+			if (const u64 now = get_system_time(); now - last_map_census >= 30'000'000 || thread_ctrl::state() == thread_state::aborting)
+			{
+				last_map_census = now;
+				fmt::append(msg, ", Maps: %s", utils::memory_map_census());
+			}
+#endif
 
 			if (system_total)
 			{

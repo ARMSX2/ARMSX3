@@ -160,6 +160,14 @@ namespace vk
 			std::vector<bool> m_descriptors_dirty;
 			bool m_any_descriptors_dirty = false;
 
+			// ARMSX3: a game's draw programs on Android allocate from a pool shared by every draw
+			// program whose sets hold the same descriptors (see allocate_descriptor_set), not from
+			// one of their own. m_descriptor_set_generation is that pool's generation when the set
+			// was allocated; commit() opens a new set once the pool has moved on.
+			bool m_use_shared_pool = false;
+			vk::descriptor_pool* m_shared_pool = nullptr;
+			u64 m_descriptor_set_generation = 0;
+
 			void init(VkDevice dev);
 			void destroy();
 
@@ -222,6 +230,10 @@ namespace vk
 			program& link(VkPipelineCache pipeline_cache, bool separate_stages);
 			program& bind(const vk::command_buffer& cmd, VkPipelineBindPoint bind_point);
 
+			// ARMSX3: allocate this program's descriptor sets from the shared pools (Android). Only
+			// for programs that only the RSX thread binds: a game's draws.
+			void use_shared_descriptor_pools();
+
 			bool has_uniform(program_input_type type, std::string_view uniform_name);
 			std::pair<u32, u32> get_uniform_location(::glsl::program_domain domain, program_input_type type, std::string_view uniform_name);
 
@@ -234,5 +246,8 @@ namespace vk
 			inline VkPipelineLayout layout() const { return m_pipeline_layout; }
 			inline VkPipeline value() const { return m_pipeline; }
 		};
+
+		// ARMSX3: destroys the shared descriptor pools. With the renderer, after its programs.
+		void destroy_shared_descriptor_pools();
 	}
 }

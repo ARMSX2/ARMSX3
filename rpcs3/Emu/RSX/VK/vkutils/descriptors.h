@@ -48,6 +48,12 @@ namespace vk
 		FORCE_INLINE bool valid() const { return !m_device_subpools.empty(); }
 		FORCE_INLINE u32 max_sets() const { return m_current_subpool_index >= m_device_subpools.size() ? 0u : m_device_subpools[m_current_subpool_index].size; }
 
+		// ARMSX3: bumped each time the pool moves to another subpool. The one it leaves is reset once
+		// the GPU is past it, so a set allocated in an earlier generation must not be bound again. A
+		// pool that one caller owns never meets that: it only moves inside that caller's own
+		// allocate(). A pool shared by many programs (descriptor_table_t) moves under the others.
+		FORCE_INLINE u64 generation() const { return m_generation; }
+
 	private:
 		FORCE_INLINE bool can_allocate(u32 required_count, u32 already_used_count = 0) const { return (required_count + already_used_count) <= max_sets(); };
 		void reset(u32 subpool_id, VkDescriptorPoolResetFlags flags);
@@ -84,6 +90,7 @@ namespace vk
 		VkDescriptorPool m_current_pool_handle = VK_NULL_HANDLE;
 		u32 m_current_subpool_index = umax;
 		u32 m_current_subpool_offset = 0;
+		u64 m_generation = 0;
 
 		shared_mutex m_subpool_lock;
 

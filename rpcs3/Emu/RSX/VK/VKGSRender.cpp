@@ -1029,6 +1029,7 @@ VKGSRender::~VKGSRender()
 	vk::destroy_pipe_compiler();        // Ensure no pending shaders being compiled
 	spirv::finalize_compiler_context(); // Shut down the glslang compiler
 	m_prog_buffer->clear();             // Delete shader objects
+	vk::glsl::destroy_shared_descriptor_pools(); // ARMSX3: the draw programs' pools, after them
 	vk::vspec::deactivate();            // The next boot decides again
 	m_shader_interpreter.destroy();
 

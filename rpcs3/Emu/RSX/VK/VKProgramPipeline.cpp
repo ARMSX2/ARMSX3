@@ -8,11 +8,74 @@
 
 #include "../Program/SPIRVCommon.h"
 
+#include <map>
+#include <mutex>
+
 namespace vk
 {
 	namespace glsl
 	{
 		using namespace ::glsl;
+
+#ifdef __ANDROID__
+		namespace
+		{
+			// ARMSX3: descriptor pools shared by a game's draw programs, one for each set of per-set
+			// descriptor counts.
+			//
+			// Each program used to get a pool of its own on its first draw, growing by subpools. On
+			// Turnip every VkDescriptorPool is a buffer object of its own, mapped into the process,
+			// and Android lets a process hold about 65,000 mappings (vm.max_map_count). A tester far
+			// into The Last of Us loaded 14,800 programs from the shader cache; minutes later the
+			// texture cache's mprotect failed with ENOMEM while 4.5 GB was free, and the game died.
+			// Shared, there are as many pools as distinct descriptor counts, a few dozen.
+			//
+			// Only programs that only the RSX thread binds share them (use_shared_descriptor_pools,
+			// set for the draws the pipeline compiler builds from pipeline_props): a pool is not
+			// thread safe, and overlay and compute passes also run on threads that flush the texture
+			// cache. The map is locked because programs are made on the compiler threads.
+			std::mutex g_shared_pools_mutex;
+			std::map<std::vector<std::pair<u32, u32>>, std::unique_ptr<vk::descriptor_pool>> g_shared_pools;
+
+			vk::descriptor_pool* get_shared_descriptor_pool(const rsx::simple_array<VkDescriptorPoolSize>& sizes)
+			{
+				std::vector<std::pair<u32, u32>> key;
+				key.reserve(sizes.size());
+
+				for (const auto& size : sizes)
+				{
+					key.emplace_back(static_cast<u32>(size.type), size.descriptorCount);
+				}
+
+				std::lock_guard lock(g_shared_pools_mutex);
+				auto& pool = g_shared_pools[key];
+
+				if (!pool)
+				{
+					// Larger first subpools than a program's own (16 sets): many programs fill them,
+					// and every move to another subpool makes each program open a new set.
+					pool = std::make_unique<vk::descriptor_pool>();
+					pool->create(*vk::g_render_device, sizes, 256u, 4096u);
+				}
+
+				return pool.get();
+			}
+		}
+#endif
+
+		void destroy_shared_descriptor_pools()
+		{
+#ifdef __ANDROID__
+			std::lock_guard lock(g_shared_pools_mutex);
+
+			for (auto& [key, pool] : g_shared_pools)
+			{
+				pool->destroy();
+			}
+
+			g_shared_pools.clear();
+#endif
+		}
 
 		bool operator == (const descriptor_slot_t& a, const VkDescriptorImageInfoEx& b)
 		{
@@ -408,6 +471,18 @@ namespace vk
 			CHECK_RESULT(vkCreatePipelineLayout(m_device, &create_info, nullptr, &m_pipeline_layout));
 		}
 
+		void program::use_shared_descriptor_pools()
+		{
+#ifdef __ANDROID__
+			for (auto& set : m_sets)
+			{
+				// Before the first draw: nothing has been allocated from a pool of its own yet
+				ensure(!set.m_descriptor_pool);
+				set.m_use_shared_pool = true;
+			}
+#endif
+		}
+
 		program& program::bind(const vk::command_buffer& cmd, VkPipelineBindPoint bind_point)
 		{
 			VkDescriptorSet bind_sets[binding_set_index_max_enum];
@@ -473,6 +548,23 @@ namespace vk
 
 		VkDescriptorSet descriptor_table_t::allocate_descriptor_set()
 		{
+#ifdef __ANDROID__
+			if (m_use_shared_pool)
+			{
+				if (!m_shared_pool)
+				{
+					m_shared_pool = get_shared_descriptor_pool(m_descriptor_pool_sizes);
+				}
+
+				// One set at a time: the pool's set cache holds a single layout's sets, and every
+				// program here brings a layout of its own. The generation is read after allocate(),
+				// which may itself have moved the pool to another subpool.
+				const VkDescriptorSet set = m_shared_pool->allocate(m_descriptor_set_layout, VK_FALSE);
+				m_descriptor_set_generation = m_shared_pool->generation();
+				return set;
+			}
+#endif
+
 			if (!m_descriptor_pool)
 			{
 				create_descriptor_pool();
@@ -606,6 +698,15 @@ namespace vk
 				m_any_descriptors_dirty = true;
 				std::fill(m_descriptors_dirty.begin(), m_descriptors_dirty.end(), false);
 			}
+#ifdef __ANDROID__
+			else if (m_shared_pool && m_shared_pool->generation() != m_descriptor_set_generation)
+			{
+				// ARMSX3: another program moved the shared pool on, and the subpool this set lives in
+				// is reset once the GPU is past it. Open a new set: the template update below writes
+				// every descriptor into it, as for any new set.
+				m_any_descriptors_dirty = true;
+			}
+#endif
 
 			// Check if we need to actually open a new set
 			if (!m_any_descriptors_dirty)

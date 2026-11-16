@@ -27,6 +27,14 @@
 #include <vm/vm_param.h>
 #endif
 
+#ifdef __ANDROID__
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
+#include <string_view>
+#include <unordered_map>
+#endif
+
 #ifdef __linux__
 #include <sys/syscall.h>
 #include <linux/memfd.h>
@@ -492,6 +500,10 @@ namespace utils
 #endif
 	}
 
+#ifdef __ANDROID__
+	std::string memory_map_census();
+#endif
+
 	void memory_protect(void* pointer, usz size, protection prot)
 	{
 		// Counted here because this is the syscall itself. On ARM a protection change forces
@@ -550,9 +562,105 @@ namespace utils
 			return;
 		}
 #endif
-		ensure(::mprotect(reinterpret_cast<void*>(ptr64 & -get_page_size()), size + (ptr64 & (get_page_size() - 1)), +prot) != -1);
+		const int result = ::mprotect(reinterpret_cast<void*>(ptr64 & -get_page_size()), size + (ptr64 & (get_page_size() - 1)), +prot);
+#ifdef __ANDROID__
+		if (result == -1 && errno == ENOMEM) [[unlikely]]
+		{
+			// ARMSX3: with RAM free this is the kernel's cap on the process's mappings. A tester's The
+			// Last of Us died here 6.5 minutes in with 4.5 GB free; say how many there were and what.
+			fmt::throw_exception("mprotect(%p, 0x%x) failed with ENOMEM, out of memory mappings: %s", pointer, size, memory_map_census());
+		}
+#endif
+		ensure(result != -1);
 #endif
 	}
+
+#ifdef __ANDROID__
+	// ARMSX3: how many memory mappings this process holds, against the kernel's cap, and the three
+	// largest groups by what is mapped ("anon" for nothing named). Past vm.max_map_count (65530
+	// unless the vendor raised it) mmap, mprotect and thread creation all fail with ENOMEM while
+	// RAM is free. perf_monitor logs it every 30 seconds.
+	std::string memory_map_census()
+	{
+		std::FILE* maps = std::fopen("/proc/self/maps", "r");
+
+		if (!maps)
+		{
+			return "unreadable";
+		}
+
+		std::unordered_map<std::string, u32> groups;
+		u32 total = 0;
+		char line[1024];
+		bool line_start = true;
+
+		while (std::fgets(line, sizeof(line), maps))
+		{
+			const usz length = std::strlen(line);
+
+			if (line_start)
+			{
+				total++;
+
+				// address perms offset dev inode [pathname]
+				const char* p = line;
+
+				for (int field = 0; field < 5 && *p; field++)
+				{
+					while (*p == ' ')
+						p++;
+					while (*p && *p != ' ' && *p != '\n')
+						p++;
+				}
+
+				while (*p == ' ')
+					p++;
+
+				std::string_view name(p, std::strcspn(p, "\n"));
+				groups[std::string(name.empty() ? std::string_view("anon") : name.substr(0, 60))]++;
+			}
+
+			// A line longer than the buffer comes in pieces; only the first is a new mapping
+			line_start = length && line[length - 1] == '\n';
+		}
+
+		std::fclose(maps);
+
+		u64 cap = 0;
+
+		if (std::FILE* f = std::fopen("/proc/sys/vm/max_map_count", "r"))
+		{
+			unsigned long long value = 0;
+
+			if (std::fscanf(f, "%llu", &value) == 1)
+			{
+				cap = value;
+			}
+
+			std::fclose(f);
+		}
+
+		std::vector<std::pair<u32, std::string>> top;
+		top.reserve(groups.size());
+
+		for (auto& [name, count] : groups)
+		{
+			top.emplace_back(count, name);
+		}
+
+		const usz shown = std::min<usz>(top.size(), 3);
+		std::partial_sort(top.begin(), top.begin() + shown, top.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+
+		std::string result = cap ? fmt::format("%u of %u", total, cap) : fmt::format("%u (cap unreadable)", total);
+
+		for (usz i = 0; i < shown; i++)
+		{
+			fmt::append(result, "%s%s %u", i ? ", " : "; most: ", top[i].second, top[i].first);
+		}
+
+		return result;
+	}
+#endif
 
 	bool memory_lock(void* pointer, usz size)
 	{

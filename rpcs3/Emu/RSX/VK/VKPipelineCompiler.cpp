@@ -392,7 +392,11 @@ namespace vk
 		info.basePipelineHandle = VK_NULL_HANDLE;
 		info.renderPass = vk::get_renderpass(*m_device, create_info.renderpass_key);
 
-		return int_compile_graphics_pipe(info, vs_inputs, fs_inputs, flags);
+		// ARMSX3: a game's draw programs, which only the RSX thread binds, take their descriptor
+		// sets from the shared pools (Android; see VKProgramPipeline.cpp)
+		auto program = int_compile_graphics_pipe(info, vs_inputs, fs_inputs, flags);
+		program->use_shared_descriptor_pools();
+		return program;
 	}
 
 	std::unique_ptr<glsl::program> pipe_compiler::int_compile_graphics_pipe(

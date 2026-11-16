@@ -251,6 +251,12 @@ namespace vk
 			vk::get_gc()->dispose(cleanup_obj);
 		}
 
+		// ARMSX3: sets allocated before this point belong to the subpool queued for reset above.
+		// Cached ones go with it: with one layout per pool the cache is always empty here, but a
+		// shared pool can leave this subpool while another layout's sets are still cached.
+		m_generation++;
+		m_descriptor_set_cache.clear();
+
 		m_current_subpool_offset = 0;
 		m_current_subpool_index = umax;
 
