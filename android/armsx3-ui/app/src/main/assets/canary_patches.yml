@@ -1021,7 +1021,8 @@ SPU-9001b44fd7278b5a6fa5385939fe928a0e549394: # SPUNAME: 'PS3_Release/edgepost-m
       - [ be32, 0x000031f4, 0x40800003 ] # il r3 0
       - [ be32, 0x0000349c, 0x40800017 ] # il r23 0
 
-# CALL OF DUTY: BLACK OPS III 01.06 and 01.07, BLES02166. Fixes the freeze after the profile loads.
+# CALL OF DUTY: BLACK OPS III 01.06 and 01.07, BLES02166 and BLUS31527. Fixes the freeze after the
+# profile loads.
 # staticsurfaces and dynamicmodels wait on each other and requeue forever; staticsurfaces now
 # waits only while dynamicmodels is running.
 PPU-5635a589abc84726e788318ac2a3012cacccad32:
@@ -1029,6 +1030,8 @@ PPU-5635a589abc84726e788318ac2a3012cacccad32:
     Games:
       "Call of Duty: Black Ops III":
         BLES02166:
+          - "01.06"
+        BLUS31527:
           - "01.06"
     Author: "J1coding"
     Notes: "Fixes the freeze a few seconds after the profile loads."
@@ -1041,6 +1044,8 @@ PPU-2d8f06a45cb7e9d137e14ba04ccb1954b02c6af2:
     Games:
       "Call of Duty: Black Ops III":
         BLES02166:
+          - "01.07"
+        BLUS31527:
           - "01.07"
     Author: "J1coding"
     Notes: "Fixes the freeze a few seconds after the profile loads."
