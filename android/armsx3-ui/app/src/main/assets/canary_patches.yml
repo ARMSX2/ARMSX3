@@ -1021,6 +1021,34 @@ SPU-9001b44fd7278b5a6fa5385939fe928a0e549394: # SPUNAME: 'PS3_Release/edgepost-m
       - [ be32, 0x000031f4, 0x40800003 ] # il r3 0
       - [ be32, 0x0000349c, 0x40800017 ] # il r23 0
 
+# CALL OF DUTY: BLACK OPS III 01.06 and 01.07, BLES02166. Fixes the freeze after the profile loads.
+# staticsurfaces and dynamicmodels wait on each other and requeue forever; staticsurfaces now
+# waits only while dynamicmodels is running.
+PPU-5635a589abc84726e788318ac2a3012cacccad32:
+  "ARMSX3 profile load freeze fix":
+    Games:
+      "Call of Duty: Black Ops III":
+        BLES02166:
+          - "01.06"
+    Author: "J1coding"
+    Notes: "Fixes the freeze a few seconds after the profile loads."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x00c1016c, 0x1c070183 ] # ai r3,r3,0x1c: read the running count
+      - [ be32, 0x00c101cc, 0x337fef80 ] # brsl 0x6cc8: use it for dynamicmodels
+PPU-2d8f06a45cb7e9d137e14ba04ccb1954b02c6af2:
+  "ARMSX3 profile load freeze fix":
+    Games:
+      "Call of Duty: Black Ops III":
+        BLES02166:
+          - "01.07"
+    Author: "J1coding"
+    Notes: "Fixes the freeze a few seconds after the profile loads."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x00c0c96c, 0x1c070183 ] # ai r3,r3,0x1c: read the running count
+      - [ be32, 0x00c0c9cc, 0x337fef80 ] # brsl 0x6cc8: use it for dynamicmodels
+
 # LITTLEBIGPLANET 2 v01.33 (BCUS98245), the executable patched for online play with Refresher --
 # the database's own LBP2 01.33 patches, re-keyed. RPCS3's database keys them to the stock 01.33
 # executable (PPU-a74423ca913fc18e46cfe926db1d48e41f9858a9) only, and patching the EBOOT for a
