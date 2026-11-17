@@ -950,6 +950,20 @@ object Ps3PatchRepo {
             appVersion = "01.07",
             sinceRevision = 33,
         ),
+        Bundled(
+            hash = "PPU-cacda0eb155baaa913e1ecccbd3f98beec03e0d2",
+            name = "ARMSX3 profile load freeze fix",
+            serial = "BLES02166",
+            appVersion = "01.07",
+            sinceRevision = 33,
+        ),
+        Bundled(
+            hash = "PPU-cacda0eb155baaa913e1ecccbd3f98beec03e0d2",
+            name = "ARMSX3 profile load freeze fix",
+            serial = "BLUS31527",
+            appVersion = "01.07",
+            sinceRevision = 33,
+        ),
     ) + tlouBundled()
 
     /**
