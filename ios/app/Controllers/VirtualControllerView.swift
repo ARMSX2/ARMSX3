@@ -331,6 +331,10 @@ private struct PadPieceView<Content: View>: View {
     @ObservationIgnored private var tracker = PadTouchTracker<ObjectIdentifier, Rpcs3PadButton>()
     @ObservationIgnored private let haptic = UIImpactFeedbackGenerator(style: .light)
     @ObservationIgnored private var aiming = Set<ObjectIdentifier>()
+    // With the menu button hidden, a long press on PS opens the menu and a short one is still the game's PS press.
+    @ObservationIgnored private var psHold = PadHoldButton<Rpcs3PadButton>(key: .PS)
+    @ObservationIgnored private var psTimer: Task<Void, Never>?
+    @ObservationIgnored var onMenuHold: (() -> Void)?
 
     // The sticks' frames, so a finger on one never aims.
     var sticks: [Bool: CGRect] = [:]
@@ -394,7 +398,9 @@ private struct PadPieceView<Content: View>: View {
 
     private func apply(_ change: PadChange<Rpcs3PadButton>) {
         guard !change.isEmpty else { return }
-        if !muted {
+        var change = change
+        if !muted, SettingsStore.shared.menuButtonVisibility == .hidden { holdPS(&change) }
+        if !muted, !change.isEmpty {
             for button in change.released { PadSnapshot.shared.set(button, pressed: false) }
             for button in change.pressed { PadSnapshot.shared.set(button, pressed: true) }
             PadSnapshot.shared.send(source: .touch)
@@ -403,6 +409,31 @@ private struct PadPieceView<Content: View>: View {
         if !change.pressed.isEmpty {
             if SettingsStore.shared.padVibrates { haptic.impactOccurred() }
             haptic.prepare()
+        }
+    }
+
+    private func holdPS(_ change: inout PadChange<Rpcs3PadButton>) {
+        let wasWaiting = psHold.waiting
+        if psHold.filter(&change) {
+            psTimer?.cancel()
+            tapPS()
+        } else if psHold.waiting, !wasWaiting {
+            psTimer = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(800))
+                guard !Task.isCancelled, let self, self.psHold.expire() else { return }
+                self.onMenuHold?()
+            }
+        }
+    }
+
+    // The press was held back until the finger lifted, so the game gets it now, briefly.
+    private func tapPS() {
+        PadSnapshot.shared.set(.PS, pressed: true)
+        PadSnapshot.shared.send(source: .touch)
+        Task {
+            try? await Task.sleep(for: .milliseconds(60))
+            PadSnapshot.shared.set(.PS, pressed: false)
+            PadSnapshot.shared.send(source: .touch)
         }
     }
 }

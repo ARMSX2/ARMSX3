@@ -13,6 +13,10 @@ struct GameScreenView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.menuControllerInputRouter) private var controllerInput
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @State private var menuButtonFaded = false
+    @State private var fadeTimer: Task<Void, Never>?
     @State private var bootRequested = false
     @State private var bootStatus: Int?
     @State private var aiming = false
@@ -136,17 +140,18 @@ struct GameScreenView: View {
                     GameplayControllerShortcutHelpOverlay(settings: SettingsStore.shared, controllerInput: controllerInput)
                 }
             }
-            // In landscape the menu button sits top centre, between the shoulder buttons, and the banner moves below it.
-            .overlay(alignment: .top) { banner.padding(.top, verticalSizeClass == .compact ? 48 : 0) }
-            .overlay(alignment: verticalSizeClass == .compact ? .top : .topTrailing) {
+            // With the menu button top centre the banner moves below it.
+            .overlay(alignment: .top) { banner.padding(.top, menuButtonBesideBanner ? 48 : 0) }
+            .overlay(alignment: menuButtonAlignment) {
                 // Hidden while the menu is open: the card's glass smeared the button through. The scrim takes every tap anyway.
                 if menuOpen {
                     EmptyView()
-                } else if verticalSizeClass == .compact {
+                } else if menuButtonPosition == .topCentre {
                     // Centred on the whole screen, as the pad is, not between unequal safe-area insets.
                     menuButton.frame(maxWidth: .infinity).ignoresSafeArea(.container, edges: .horizontal)
                 } else {
-                    menuButton
+                    // Sideways, the shoulder row starts 54 pt down, so a corner button rides 10 pt higher to leave 8 pt above it.
+                    menuButton.offset(y: verticalSizeClass == .compact ? -10 : 0)
                 }
             }
             // Over the game only, while a recording runs. The open menu covers it.
@@ -156,6 +161,8 @@ struct GameScreenView: View {
                         .fill(.red)
                         .frame(width: 10, height: 10)
                         .padding(16)
+                        // Clear of the menu button's 68 pt.
+                        .padding(.leading, menuButtonPosition == .topLeft && menuButtonVisible ? 56 : 0)
                         .accessibilityLabel("Recording")
                         .onAppear { RecordingStore.shared.dotDrawn = true }
                 }
@@ -272,6 +279,12 @@ struct GameScreenView: View {
             .sheet(isPresented: $portalSheet) {
                 PortalSheet(onDone: { portalSheet = false })
             }
+            .onAppear {
+                PadTouches.shared.onMenuHold = { if !menuOpen { setMenu(open: true) } }
+                restartFade()
+            }
+            .onChange(of: menuOpen) { restartFade() }
+            .onChange(of: SettingsStore.shared.menuButtonVisibility) { restartFade() }
             .onChange(of: controllerInput?.latestQuickPauseRequest) { _, request in
                 guard request != nil, chordsReady, !menuOpen else { return }
                 setMenu(open: true)
@@ -328,6 +341,8 @@ struct GameScreenView: View {
             }
             .onAppear { XmbInGame.shared.screenUp = true }
             .onDisappear {
+                PadTouches.shared.onMenuHold = nil
+                fadeTimer?.cancel()
                 XmbInGame.shared.screenUp = false
                 UIApplication.shared.isIdleTimerDisabled = false
                 // The screen closing finishes a running recording's file.
@@ -450,9 +465,47 @@ struct GameScreenView: View {
         }
     }
 
+    private var menuButtonPosition: MenuButtonPosition {
+        SettingsStore.shared.menuButtonPosition.resolved(landscape: verticalSizeClass == .compact)
+    }
+
+    private var menuButtonAlignment: Alignment {
+        switch menuButtonPosition {
+        case .topLeft: .topLeading
+        case .topRight: .topTrailing
+        default: .top
+        }
+    }
+
+    private var menuButtonVisible: Bool { SettingsStore.shared.menuButtonVisibility != .hidden }
+
+    private var menuButtonBesideBanner: Bool { menuButtonPosition == .topCentre && menuButtonVisible }
+
+    // After about 3 s without a touch on it the button fades; it keeps its hit area.
+    private func restartFade() {
+        fadeTimer?.cancel()
+        menuButtonFaded = false
+        guard SettingsStore.shared.menuButtonVisibility == .fadeWhenIdle, !menuOpen else { return }
+        fadeTimer = Task {
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            if reduceMotion { menuButtonFaded = true } else { withAnimation(.easeOut(duration: 0.4)) { menuButtonFaded = true } }
+        }
+    }
+
+    private func menuButtonTapped() {
+        // A faded button only comes back; VoiceOver cannot see it fade, so it opens the menu at once.
+        if menuButtonFaded, !voiceOver {
+            menuButtonFaded = false
+            restartFade()
+        } else {
+            setMenu(open: !menuOpen)
+        }
+    }
+
     private var menuButton: some View {
         Button {
-            setMenu(open: !menuOpen)
+            menuButtonTapped()
         } label: {
             Image(systemName: "line.3.horizontal")
                 .font(.title3.weight(.semibold))
@@ -462,6 +515,9 @@ struct GameScreenView: View {
         }
         .accessibilityLabel("Menu")
         .padding(12)
+        // Hidden keeps the button for VoiceOver only; it takes no touch and shows nothing.
+        .opacity(menuButtonVisible && !menuButtonFaded ? 1 : 0)
+        .allowsHitTesting(menuButtonVisible)
         .disabled(bootStatus == nil)
     }
 
