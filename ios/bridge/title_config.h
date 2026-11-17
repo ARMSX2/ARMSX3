@@ -662,10 +662,19 @@ namespace armsx3::bridge::title_config
 		{"NPUA80908", "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n"},
 	};
 
-	// iOS-only rows, kept apart so the table above stays Android's entry for entry; tests check the two do not overlap.
+	// iOS-only rows, kept apart so the table above stays Android's entry for entry. A row here wins over the same serial above, and tests allow that overlap only for the serials they name.
 	inline constexpr local_override ios_only_overrides[] = {
 		// Its SPU loop polls the decrementer, and loop detection lets it yield; per title because the global setting hurts other games.
 		{"NPUB30558", "Core:\n  SPU loop detection: true\n"},
+
+		// Relaxed XFloat, which Android's table sets, turns Kratos' brows, beard and face white in the menu and cutscenes here.
+		{"BCUS98111", "Core:\n  SPU XFloat Accuracy: Approximate\n"},
+		{"BCES00510", "Core:\n  SPU XFloat Accuracy: Approximate\n"},
+		{"BCES00799", "Core:\n  SPU XFloat Accuracy: Approximate\n"},
+		{"BCAS25003", "Core:\n  SPU XFloat Accuracy: Approximate\n"},
+		{"BCKS15003", "Core:\n  SPU XFloat Accuracy: Approximate\n"},
+		{"BCJS37001", "Core:\n  SPU XFloat Accuracy: Approximate\n"},
+		{"NPUA70080", "Core:\n  SPU XFloat Accuracy: Approximate\n"},
 
 		// The shader interpreter draws this game's intro wrong until pipelines compile.
 		{"BLUS30837", "Video:\n  Shader Mode: Async Recompiler (multi-threaded)\n"},
@@ -713,14 +722,14 @@ namespace armsx3::bridge::title_config
 	// Empty when neither table has the serial.
 	inline std::string_view local_override_for(std::string_view serial)
 	{
-		for (const local_override& o : local_overrides)
+		for (const local_override& o : ios_only_overrides)
 		{
 			if (o.serial == serial)
 			{
 				return o.config;
 			}
 		}
-		for (const local_override& o : ios_only_overrides)
+		for (const local_override& o : local_overrides)
 		{
 			if (o.serial == serial)
 			{
