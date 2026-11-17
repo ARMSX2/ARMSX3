@@ -70,6 +70,12 @@ rsx::frame_capture_data frame_capture;
 extern CellGcmOffsetTable offsetTable;
 extern thread_local std::string(*g_tls_log_prefix)();
 
+namespace rsx::reports
+{
+	// ARMSX3: in RSXZCULL.cpp. Declared here, not in RSXZCULL.h, which reaches the SPU compiler units.
+	bool is_in_report_queue_pass();
+}
+
 namespace rsx
 {
 	std::function<bool(u32 addr, bool is_writing)> g_access_violation_handler;
@@ -1748,6 +1754,16 @@ namespace rsx
 
 	void thread::sync()
 	{
+		if (reports::is_in_report_queue_pass()) [[unlikely]]
+		{
+			// ARMSX3: called from a wait inside a ZCULL update()/sync() pass (see RSXZCULL.cpp). A ZCULL
+			// sync here would walk the report queue a second time and stop on a report the outer pass
+			// has retired but not yet removed: "Verification failed" in ZCULL_control::sync, The Last
+			// of Us a minute in, right after an SPU touched the reports page. Leave the pipe flush
+			// pending; do_local_task in the FIFO loop runs it once the outer pass returns.
+			return;
+		}
+
 		eng_interrupt_mask.clear(rsx::pipe_flush_interrupt);
 
 		mm_flush();

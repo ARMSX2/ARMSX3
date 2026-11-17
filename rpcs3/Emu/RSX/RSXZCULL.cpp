@@ -10,6 +10,28 @@ namespace rsx
 	{
 		static occlusion_query_provider s_null_provider;
 
+		// ARMSX3: how deep this thread is in update()/sync() passes over m_pending_writes, for
+		// thread::sync(). A wait inside a pass (the report write's reservation lock: cpu_wait ->
+		// on_semaphore_acquire_wait -> do_local_task) can reach thread::sync() through a pipe flush,
+		// and a second pass would then meet reports the first has retired but not yet removed.
+		// Kept here, not as a member: RSXZCULL.h reaches the SPU compiler units, so any change to it
+		// changes the SPU cache identity and every game rebuilds its SPU code.
+		static thread_local u32 s_report_queue_passes = 0;
+
+		namespace
+		{
+			struct report_queue_pass
+			{
+				report_queue_pass() { s_report_queue_passes++; }
+				~report_queue_pass() { s_report_queue_passes--; }
+			};
+		}
+
+		bool is_in_report_queue_pass()
+		{
+			return s_report_queue_passes != 0;
+		}
+
 		ZCULL_control::ZCULL_control()
 			: m_provider(&s_null_provider)
 		{
@@ -542,6 +564,8 @@ namespace rsx
 
 		void ZCULL_control::sync(::rsx::thread* ptimer)
 		{
+			const report_queue_pass pass; // ARMSX3: see is_in_report_queue_pass()
+
 			if (m_pending_writes.empty())
 			{
 				// Nothing to do
@@ -654,6 +678,8 @@ namespace rsx
 
 		void ZCULL_control::update(::rsx::thread* ptimer, u32 sync_address, bool hint)
 		{
+			const report_queue_pass pass; // ARMSX3: see is_in_report_queue_pass()
+
 			if (m_pending_writes.empty())
 			{
 				return;
