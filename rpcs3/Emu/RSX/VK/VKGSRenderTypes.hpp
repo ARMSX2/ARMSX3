@@ -199,6 +199,16 @@ namespace vk
 			m_submit_fence->reset();
 			vk::on_event_completed(eid_tag);
 
+#ifdef __APPLE__
+			// poke() does this too: a buffer retired by waiting has finished with its ring memory as well
+			if (heap_snapshot_id)
+			{
+				data_heap_manager::restore_snapshot(heap_snapshot, heap_snapshot_id);
+				heap_snapshot.clear();
+				heap_snapshot_id = 0;
+			}
+#endif
+
 			is_pending = false;
 			eid_tag = 0;
 			return ret;
