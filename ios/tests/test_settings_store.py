@@ -148,6 +148,18 @@ MainActor.assumeIsolated {
     j.backgroundPrimaryAsset = nil
     let cleared = suite.object(forKey: "armsx3.settings.backgroundPrimaryAsset") == nil && !j.hasCustomBackground
     suite.set("not-a-mode", forKey: SettingsStore.key("backgroundFitMode"))
+    // The menu button's placement and visibility default to today's look, persist, and read an unknown value as the default.
+    let m = SettingsStore(defaults: suite)
+    let menuDefault = "\(m.menuButtonPosition.rawValue) \(m.menuButtonVisibility.rawValue)"
+        + " land=\(m.menuButtonPosition.resolved(landscape: true).rawValue) up=\(m.menuButtonPosition.resolved(landscape: false).rawValue)"
+    m.menuButtonPosition = .topLeft
+    m.menuButtonVisibility = .hidden
+    let m2 = SettingsStore(defaults: suite)
+    let menuKept = "\(m2.menuButtonPosition.rawValue) \(m2.menuButtonVisibility.rawValue)"
+    suite.set("not-a-place", forKey: SettingsStore.key("menuButtonPosition"))
+    suite.set("not-a-mode", forKey: SettingsStore.key("menuButtonVisibility"))
+    let m3 = SettingsStore(defaults: suite)
+    line("T9 \(menuDefault) | \(menuKept) | \(m3.menuButtonPosition.rawValue) \(m3.menuButtonVisibility.rawValue)")
     line("T8 \(defaultsLine) kept=\(kept) hasBg=\(hasBg) cleared=\(cleared) unknown=\(SettingsStore(defaults: suite).backgroundFitMode.rawValue)")
 }
 """
@@ -170,6 +182,9 @@ T6 = "T6 empty=true save=select+r1 load=nil menu=select+start binding=select+r1 
 T7 = "T7 verbose=false persisted=true"
 # The picked background members.
 T8 = "T8 primary=true landscape=true fit=fill landFit=fill muted=true kept=true hasBg=true cleared=true unknown=fill"
+
+# The menu button members.
+T9 = "T9 standard always land=topCentre up=topRight | topLeft hidden | standard always"
 
 
 def read(path):
@@ -234,6 +249,9 @@ class TheStoreHolds(unittest.TestCase):
 
     def test_t8_the_picked_background_defaults_persists_and_drives_has_custom_background(self):
         self.assertEqual(T8, self.lines.get("T8"))
+
+    def test_t9_the_menu_button_defaults_to_todays_look_and_persists(self):
+        self.assertEqual(T9, self.lines.get("T9"))
 
 
 class TheStoreFileIsClean(unittest.TestCase):

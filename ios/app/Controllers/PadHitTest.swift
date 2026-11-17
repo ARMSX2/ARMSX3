@@ -118,3 +118,26 @@ struct PadTouchTracker<Finger: Hashable, Key: Hashable> {
         return clusters.indices.filter { PadHit.covers(clusters[$0], point) }.min { nearest($0) < nearest($1) }
     }
 }
+
+// A button whose press waits for its release, so holding it can mean something else without the game seeing a press.
+struct PadHoldButton<Key: Hashable> {
+    let key: Key
+    private(set) var waiting = false
+    private var held = false
+
+    // Takes the button out of the change; true when it was a short tap that the game should now see.
+    mutating func filter(_ change: inout PadChange<Key>) -> Bool {
+        if change.pressed.remove(key) != nil { waiting = true }
+        guard change.released.remove(key) != nil else { return false }
+        defer { waiting = false; held = false }
+        return waiting && !held
+    }
+
+    // True when the hold ran out with the button still down.
+    mutating func expire() -> Bool {
+        guard waiting else { return false }
+        waiting = false
+        held = true
+        return true
+    }
+}

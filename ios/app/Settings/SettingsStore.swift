@@ -5,6 +5,36 @@ import Foundation
 import Observation
 import SwiftUI
 
+// Standard keeps the button top centre on a sideways phone, between the shoulder buttons, and top right otherwise.
+enum MenuButtonPosition: String, CaseIterable {
+    case standard, topCentre, topLeft, topRight
+
+    var title: String {
+        switch self {
+        case .standard: String(localized: "Default")
+        case .topCentre: String(localized: "Top Centre")
+        case .topLeft: String(localized: "Top Left")
+        case .topRight: String(localized: "Top Right")
+        }
+    }
+
+    func resolved(landscape: Bool) -> MenuButtonPosition {
+        self == .standard ? (landscape ? .topCentre : .topRight) : self
+    }
+}
+
+enum MenuButtonVisibility: String, CaseIterable {
+    case always, fadeWhenIdle, hidden
+
+    var title: String {
+        switch self {
+        case .always: String(localized: "Always")
+        case .fadeWhenIdle: String(localized: "Fade When Idle")
+        case .hidden: String(localized: "Hidden")
+        }
+    }
+}
+
 @MainActor @Observable final class SettingsStore {
     static let shared = SettingsStore()
 
@@ -34,6 +64,14 @@ import SwiftUI
 
     var padVibrates: Bool {
         didSet { defaults.set(padVibrates, forKey: Self.key("padVibrates")) }
+    }
+
+    var menuButtonPosition: MenuButtonPosition {
+        didSet { defaults.set(menuButtonPosition.rawValue, forKey: Self.key("menuButtonPosition")) }
+    }
+
+    var menuButtonVisibility: MenuButtonVisibility {
+        didSet { defaults.set(menuButtonVisibility.rawValue, forKey: Self.key("menuButtonVisibility")) }
     }
 
     var backgroundDim: Double {
@@ -310,6 +348,8 @@ import SwiftUI
         backgroundDim = min(max(double("backgroundDim", 0), 0), 1)
         padOpacity = min(max(double("padOpacity", 0.75), 0.2), 1)
         padVibrates = bool("padVibrates", true)
+        menuButtonPosition = defaults.string(forKey: Self.key("menuButtonPosition")).flatMap(MenuButtonPosition.init(rawValue:)) ?? .standard
+        menuButtonVisibility = defaults.string(forKey: Self.key("menuButtonVisibility")).flatMap(MenuButtonVisibility.init(rawValue:)) ?? .always
         func asset(_ member: String) -> BackgroundAsset? {
             defaults.data(forKey: Self.key(member)).flatMap { try? JSONDecoder().decode(BackgroundAsset.self, from: $0) }
         }
