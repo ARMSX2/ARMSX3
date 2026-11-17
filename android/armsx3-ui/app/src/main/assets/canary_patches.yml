@@ -1022,7 +1022,7 @@ SPU-9001b44fd7278b5a6fa5385939fe928a0e549394: # SPUNAME: 'PS3_Release/edgepost-m
       - [ be32, 0x0000349c, 0x40800017 ] # il r23 0
 
 # CALL OF DUTY: BLACK OPS III 01.06 and 01.07, BLES02166 and BLUS31527. Fixes the freezes after the
-# profile loads.
+# profile loads and in the Zombies menu.
 # staticsurfaces and dynamicmodels wait on each other and requeue forever; staticsurfaces now
 # waits only while dynamicmodels is running.
 # r_shaderpatch_ps3 can open a draw segment's wait word before the draw job writes it, and the
@@ -1079,6 +1079,33 @@ PPU-2d8f06a45cb7e9d137e14ba04ccb1954b02c6af2:
       - [ be32, 0x00bf7068, 0x207ffe98 ] # brz r24 back: segment not written yet
       - [ be32, 0x00bf706c, 0x40800083 ] # il r3,1
       - [ be32, 0x00bf7070, 0x40200000 ] # nop
+# Zombies is its own executable, Default_zm.self, the same for both serials: the same fixes at its
+# own addresses.
+PPU-cacda0eb155baaa913e1ecccbd3f98beec03e0d2:
+  "ARMSX3 profile load freeze fix":
+    Games:
+      "Call of Duty: Black Ops III":
+        BLES02166:
+          - "01.07"
+        BLUS31527:
+          - "01.07"
+    Author: "J1coding"
+    Notes: "Fixes the freezes after the profile loads and in the Zombies menu."
+    Patch Version: 1.1
+    Patch:
+      - [ be32, 0x00bfe26c, 0x1c070183 ] # ai r3,r3,0x1c: read the running count
+      - [ be32, 0x00bfe2cc, 0x337fef80 ] # brsl 0x6cc8: use it for dynamicmodels
+      - [ be32, 0x00be8944, 0x34024509 ] # lqd r9,0x90(r10): FIFO base
+      - [ be32, 0x00be8948, 0x3b828488 ] # rotqby r8,r9,r10
+      - [ be32, 0x00be894c, 0x0801c406 ] # sf r6,r8,r7
+      - [ be32, 0x00be8950, 0x08210304 ] # or r4,r6,r4: jump past the word
+      - [ be32, 0x00be8954, 0x1cff0205 ] # ai r5,r4,-4: jump to itself
+      - [ be32, 0x00be8958, 0x04002803 ] # ori r3,r80,0
+      - [ be32, 0x00be895c, 0x3306f380 ] # brsl 0x7a78: compare-and-swap
+      - [ be32, 0x00be8960, 0x78014198 ] # ceq r24,r3,r5
+      - [ be32, 0x00be8964, 0x207ffe98 ] # brz r24 back: segment not written yet
+      - [ be32, 0x00be8968, 0x40800083 ] # il r3,1
+      - [ be32, 0x00be896c, 0x40200000 ] # nop
 
 # LITTLEBIGPLANET 2 v01.33 (BCUS98245), the executable patched for online play with Refresher --
 # the database's own LBP2 01.33 patches, re-keyed. RPCS3's database keys them to the stock 01.33
