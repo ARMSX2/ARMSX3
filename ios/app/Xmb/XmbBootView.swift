@@ -203,6 +203,10 @@ struct XmbShutdownView: View {
             if t >= XmbShutdownTimeline.introAt {
                 halt()
                 phase = .intro
+                guard BootSplashView.plays else {
+                    introFinished()
+                    return
+                }
                 showsIntro = true
                 introLimit = Task {
                     try? await Task.sleep(for: .seconds(XmbShutdownTimeline.introLimit))

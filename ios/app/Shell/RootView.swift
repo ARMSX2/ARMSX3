@@ -454,7 +454,7 @@ struct RootView: View {
     @State private var frameRates = UIFrameRateSettings.shared
     @State private var gameCoverThemePreview = GameCoverThemePreviewStore.shared
     // XMB mode brings itself up from black, as the console does, in place of the intro. Setup's cover would hide it.
-    @State private var showBootSplash = !AppState.shared.automaticGameStartupPending && !SettingsStore.shared.xmbMode
+    @State private var showBootSplash = BootSplashView.plays && !AppState.shared.automaticGameStartupPending && !SettingsStore.shared.xmbMode
         && SettingsStore.shared.setupFinished && !SetupRules.steps.contains(SettingsStore.shared.setupStep)
     @State private var rootControllerAlertSelection = 0
     // Set by the initialiser, so a caller can hand in the router.
