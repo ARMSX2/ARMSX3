@@ -921,6 +921,21 @@ object Ps3PatchRepo {
             appVersion = "All",
             sinceRevision = 27,
         ),
+        // Call of Duty: Black Ops III freeze fixes, see canary_patches.yml.
+        Bundled(
+            hash = "PPU-5635a589abc84726e788318ac2a3012cacccad32",
+            name = "ARMSX3 profile load freeze fix",
+            serial = "BLES02166",
+            appVersion = "01.06",
+            sinceRevision = 33,
+        ),
+        Bundled(
+            hash = "PPU-2d8f06a45cb7e9d137e14ba04ccb1954b02c6af2",
+            name = "ARMSX3 profile load freeze fix",
+            serial = "BLES02166",
+            appVersion = "01.07",
+            sinceRevision = 33,
+        ),
     ) + tlouBundled()
 
     /**
@@ -969,7 +984,7 @@ object Ps3PatchRepo {
      * install re-imports and enables the new ones. Not a timestamp: it has to be
      * something a diff of this file makes obvious.
      */
-    private const val BUNDLED_REVISION = 29
+    private const val BUNDLED_REVISION = 33
 
     private const val PREFS_NAME = "ARMSX2"
     private const val KEY_BUNDLED_REVISION = "ps3_bundled_patch_revision"
