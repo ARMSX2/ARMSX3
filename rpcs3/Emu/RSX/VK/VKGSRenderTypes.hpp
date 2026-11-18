@@ -243,7 +243,7 @@ namespace vk
 			m_submit_fence->reset();
 			vk::on_event_completed(eid_tag);
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 			// poke() does this too: a buffer retired by waiting has finished with its ring memory as well
 			if (heap_snapshot_id)
 			{

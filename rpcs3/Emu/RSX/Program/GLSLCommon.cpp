@@ -361,9 +361,10 @@ namespace glsl
 			// Import vertex header
 			program_common::define_glsl_switches(OS, enabled_options);
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__ANDROID__)
 			{
-				// The no-fp64 fallback compresses clip Z where window Z is meant, which flattens perspective draws above depth 1 onto one depth
+				// The no-fp64 fallback compresses clip Z where window Z is meant, which flattens perspective draws above depth 1 onto one depth.
+				// Android takes it too: Adreno reports no shaderFloat64 (the log's "does not support double precision floats"), so every vertex program there uses the fallback.
 				constexpr std::string_view prologue =
 					#include "GLSLSnippets/RSXProg/RSXVertexPrologue.glsl"
 				;
