@@ -35,6 +35,26 @@
 #include "ios_jit_dual_map.h"
 #endif
 
+#if TARGET_OS_IPHONE
+namespace
+{
+	// glslang builds its built-in symbol tables on the first parse of a GLSL version, which costs tens of
+	// milliseconds on the RSX thread. The empty shader pays that at boot instead. It uses "#version 450" like the RSX
+	// programs, because glslang keeps one set of tables per version.
+	std::unique_ptr<named_thread<std::function<void()>>> s_glslang_prewarm;
+
+	void start_glslang_prewarm()
+	{
+		s_glslang_prewarm = std::make_unique<named_thread<std::function<void()>>>("RSX glslang prewarm"sv, []()
+		{
+			std::string source = "#version 450\nlayout(location=0) out vec4 ocol;\nvoid main()\n{\n\tocol = vec4(0.);\n}\n";
+			std::vector<u32> spv;
+			spirv::compile_glsl_to_spv(spv, source, ::glsl::glsl_fragment_program, ::glsl::glsl_rules_vulkan);
+		});
+	}
+}
+#endif
+
 namespace vk
 {
 	VkCompareOp get_compare_func(rsx::comparison_function op, bool reverse_direction = false);
@@ -673,6 +693,9 @@ VKGSRender::VKGSRender(rsx::context* ctx, rsx::display_output* output) noexcept 
 #endif
 
 	spirv::initialize_compiler_context();
+#if TARGET_OS_IPHONE
+	start_glslang_prewarm();
+#endif
 	vk::initialize_pipe_compiler(preferred_compiler_threads);
 
 	m_prog_buffer = std::make_unique<vk::program_cache>
@@ -1027,6 +1050,9 @@ VKGSRender::~VKGSRender()
 
 	// Shaders
 	vk::destroy_pipe_compiler();        // Ensure no pending shaders being compiled
+#if TARGET_OS_IPHONE
+	s_glslang_prewarm.reset();
+#endif
 	spirv::finalize_compiler_context(); // Shut down the glslang compiler
 	m_prog_buffer->clear();             // Delete shader objects
 	vk::vspec::deactivate();            // The next boot decides again
