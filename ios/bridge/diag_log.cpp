@@ -223,14 +223,14 @@ namespace
 	}
 
 	// The iPhoneOS SDK ships no libproc.h, so proc_pid_rusage is resolved at run time.
-	rusage_info_v4 io_snapshot()
+	rusage_info_v6 io_snapshot()
 	{
 		static const auto s_rusage = reinterpret_cast<int (*)(int, int, rusage_info_t*)>(dlsym(RTLD_DEFAULT, "proc_pid_rusage"));
-		rusage_info_v4 info{};
+		rusage_info_v6 info{};
 
-		if (!s_rusage || s_rusage(getpid(), RUSAGE_INFO_V4, reinterpret_cast<rusage_info_t*>(&info)) != 0)
+		if (!s_rusage || s_rusage(getpid(), RUSAGE_INFO_V6, reinterpret_cast<rusage_info_t*>(&info)) != 0)
 		{
-			return rusage_info_v4{};
+			return rusage_info_v6{};
 		}
 
 		return info;
@@ -1032,6 +1032,9 @@ namespace
 
 		// Zero, not a load: the counter is installed before this thread starts, so lines logged in between would vanish.
 		u64 last_adds = 0;
+		u64 last_energy_nj = 0;
+		u64 last_penergy_nj = 0;
+		u64 last_wkups = 0;
 		u64 ticks = 0;
 		bool prepare_told = false;
 		std::vector<u32> window;
@@ -1128,7 +1131,7 @@ namespace
 			}
 
 			const task_vm_info_data_t vm = vm_snapshot();
-			const rusage_info_v4 io = io_snapshot();
+			const rusage_info_v6 io = io_snapshot();
 			malloc_statistics_t heap{};
 			// nullptr sums every zone.
 			malloc_zone_statistics(nullptr, &heap);
@@ -1140,7 +1143,36 @@ namespace
 				gpu = armsx3::bridge::diag::gpu_busy_take(s_gpu, host_seconds(), frames);
 			}
 
-			diag_log.notice("perf fps=%.1f frame_ms=%.1f shaders_new=%u mem_mib=%u headroom_mib=%d vk_mib=%u vk_tex_mib=%u vk_rtt_mib=%u int_mib=%u cmp_mib=%u gfx_mib=%u pnv_mib=%u malloc_mib=%u mtl_mib=%u vk_blk_mib=%u jit2_mib=%u jit3_mib=%u thermal=%s ft_n=%u ft_low1_fps=%.1f ft_p95_ms=%.1f ft_p99_ms=%.1f ft_gt100=%u ft_gt250=%u ft_gt500=%u dsk_wr_mib=%u lgc_wr_mib=%u gpu_ms=%.1f gpu_pct=%.0f gpu_cbs=%u",
+			// A counter that reads zero is unavailable and the fields report -1; the previous reading is kept so the next delta stays honest.
+			double cpu_mj_frame = -1.0;
+			double pcore_pct = -1.0;
+			double wkups_s = -1.0;
+			const u64 wkups = io.ri_interrupt_wkups + io.ri_pkg_idle_wkups;
+
+			if (io.ri_energy_nj > last_energy_nj)
+			{
+				const double energy_nj = static_cast<double>(io.ri_energy_nj - last_energy_nj);
+				cpu_mj_frame = frames > 0 ? energy_nj / 1e6 / static_cast<double>(frames) : -1.0;
+				pcore_pct = io.ri_penergy_nj >= last_penergy_nj ? 100.0 * static_cast<double>(io.ri_penergy_nj - last_penergy_nj) / energy_nj : -1.0;
+			}
+
+			if (io.ri_energy_nj != 0)
+			{
+				last_energy_nj = io.ri_energy_nj;
+				last_penergy_nj = io.ri_penergy_nj;
+			}
+
+			if (wkups > last_wkups && seconds > 0)
+			{
+				wkups_s = static_cast<double>(wkups - last_wkups) / seconds;
+			}
+
+			if (wkups != 0)
+			{
+				last_wkups = wkups;
+			}
+
+			diag_log.notice("perf fps=%.1f frame_ms=%.1f shaders_new=%u mem_mib=%u headroom_mib=%d vk_mib=%u vk_tex_mib=%u vk_rtt_mib=%u int_mib=%u cmp_mib=%u gfx_mib=%u pnv_mib=%u malloc_mib=%u mtl_mib=%u vk_blk_mib=%u jit2_mib=%u jit3_mib=%u thermal=%s ft_n=%u ft_low1_fps=%.1f ft_p95_ms=%.1f ft_p99_ms=%.1f ft_gt100=%u ft_gt250=%u ft_gt500=%u dsk_wr_mib=%u lgc_wr_mib=%u gpu_ms=%.1f gpu_pct=%.0f gpu_cbs=%u cpu_mj_frame=%.2f pcore_pct=%.0f wkups_s=%.0f",
 				fps, frame_ms, adds - last_adds, vm.phys_footprint >> 20, headroom_mib(), vk_total >> 20, vk_texture >> 20, vk_surface >> 20,
 				vm.internal >> 20, vm.compressed >> 20,
 				static_cast<u64>(vm.ledger_tag_graphics_footprint + vm.ledger_tag_graphics_footprint_compressed) >> 20,
@@ -1148,7 +1180,7 @@ namespace
 				static_cast<u64>(heap.size_in_use) >> 20, metal_allocated_bytes() >> 20,
 				vk_blocks >> 20, jit2_bytes >> 20, (jit.llvm_units_peak * jit.llvm_unit_bytes) >> 20,
 				thermal_word(), ft.n, ft.low1_fps, ft.p95_ms, ft.p99_ms, ft.gt100, ft.gt250, ft.gt500,
-				io.ri_diskio_byteswritten >> 20, io.ri_logical_writes >> 20, gpu.gpu_ms, gpu.gpu_pct, gpu.cbs);
+				io.ri_diskio_byteswritten >> 20, io.ri_logical_writes >> 20, gpu.gpu_ms, gpu.gpu_pct, gpu.cbs, cpu_mj_frame, pcore_pct, wkups_s);
 
 			// The lock is held across the dump, which never waits on a lock.
 			{
