@@ -201,10 +201,150 @@ namespace
 #endif
 
 #ifdef __ANDROID__
+#include <sys/resource.h>
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
 namespace utils
 {
 	// rpcs3/util/vm_native.cpp: the process's memory mappings against the kernel's cap
 	std::string memory_map_census();
+}
+
+namespace
+{
+	// ARMSX3: Mesa's shader disk cache (on since d3a5395ad) writes each shader the driver compiles
+	// from a queue of its own, whose threads ("disk$0" and up) Mesa puts on SCHED_IDLE: they only
+	// run on a core no other thread wants. Until a shader is written, the queue holds a serialized
+	// copy of it, and a full queue grows instead of waiting.
+	//
+	// ARMSX3.old-8.log reads as those copies never being written while The Last of Us kept every
+	// core busy. Once the tester reached areas the cache had never seen (50 minutes in), each newly
+	// compiled program left about 16 mappings behind: about 8 blocks over 64 KB, each its own
+	// mapping under Scudo, plus their neighbours. Before that, with the shaders already on disk and
+	// so nothing to write, programs left about 2, though the session's pipeline cache started empty.
+	// 3 h 27 m in, the table hit Android's 65,530-mapping cap and the RSX thread's mprotect failed
+	// with 11 GB of RAM free.
+	//
+	// So each census moves the writers to the normal policy at nice 10, below the emulator's own
+	// threads but no longer starved, and reports them with the CPU time they have used: that says
+	// whether they run, and the mapping count next to it whether it was the cause.
+	std::string mesa_disk_cache_writers()
+	{
+		static std::set<int> s_moved;
+		static bool s_failure_reported = false;
+
+		u32 count = 0;
+		u32 moved_now = 0;
+		u64 cpu_ticks = 0;
+
+		DIR* dir = ::opendir("/proc/self/task");
+
+		if (!dir)
+		{
+			return {};
+		}
+
+		while (const dirent* ent = ::readdir(dir))
+		{
+			if (ent->d_name[0] < '0' || ent->d_name[0] > '9')
+			{
+				continue;
+			}
+
+			const int tid = std::atoi(ent->d_name);
+			char path[64];
+			char comm[32]{};
+
+			std::snprintf(path, sizeof(path), "/proc/self/task/%d/comm", tid);
+
+			if (const int fd = ::open(path, O_RDONLY | O_CLOEXEC); fd >= 0)
+			{
+				const ssize_t n = ::read(fd, comm, sizeof(comm) - 1);
+				::close(fd);
+				comm[n > 0 ? n : 0] = 0;
+			}
+
+			if (std::strncmp(comm, "disk$", 5) != 0)
+			{
+				// Any other thread left on SCHED_IDLE is named once, in case a driver names its queue differently
+				static std::set<std::string> s_idle_named;
+
+				if (s_idle_named.size() < 16 && ::sched_getscheduler(tid) == SCHED_IDLE)
+				{
+					if (char* nl = std::strchr(comm, '\n'))
+					{
+						*nl = 0;
+					}
+
+					if (s_idle_named.emplace(comm).second)
+					{
+						perf_log.notice("Thread %d (%s) runs on SCHED_IDLE", tid, comm);
+					}
+				}
+
+				continue;
+			}
+
+			count++;
+
+			if (::sched_getscheduler(tid) == SCHED_IDLE)
+			{
+				sched_param param{};
+
+				if (::sched_setscheduler(tid, SCHED_OTHER, &param) == 0)
+				{
+					::setpriority(PRIO_PROCESS, tid, 10);
+					s_moved.insert(tid);
+					moved_now++;
+				}
+				else if (!s_failure_reported)
+				{
+					s_failure_reported = true;
+					perf_log.warning("Mesa disk cache writer %d stays on SCHED_IDLE: %s", tid, std::strerror(errno));
+				}
+			}
+
+			std::snprintf(path, sizeof(path), "/proc/self/task/%d/stat", tid);
+
+			if (const int fd = ::open(path, O_RDONLY | O_CLOEXEC); fd >= 0)
+			{
+				char buf[512];
+				const ssize_t n = ::read(fd, buf, sizeof(buf) - 1);
+				::close(fd);
+
+				if (n > 0)
+				{
+					buf[n] = 0;
+
+					// utime and stime are fields 14 and 15; the name before them may hold spaces
+					if (const char* p = std::strrchr(buf, ')'))
+					{
+						unsigned long long utime = 0;
+						unsigned long long stime = 0;
+
+						if (std::sscanf(p + 1, " %*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %llu %llu", &utime, &stime) == 2)
+						{
+							cpu_ticks += utime + stime;
+						}
+					}
+				}
+			}
+		}
+
+		::closedir(dir);
+
+		if (!count)
+		{
+			return {};
+		}
+
+		const long hz = ::sysconf(_SC_CLK_TCK);
+
+		return fmt::format("%u (%u moved off SCHED_IDLE now, %u in all), %u ms CPU", count, moved_now, ::size32(s_moved), cpu_ticks * 1000 / (hz > 0 ? hz : 100));
+	}
 }
 #endif
 
@@ -314,6 +454,11 @@ void perf_monitor::operator()()
 			{
 				last_map_census = now;
 				fmt::append(msg, ", Maps: %s", utils::memory_map_census());
+
+				if (const std::string writers = mesa_disk_cache_writers(); !writers.empty())
+				{
+					fmt::append(msg, ", Mesa disk cache writers: %s", writers);
+				}
 			}
 #endif
 
