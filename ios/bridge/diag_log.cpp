@@ -10,6 +10,7 @@
 
 #include "util/logs.hpp"
 #include "util/sysinfo.hpp"
+#include "util/asm.hpp"
 #include "Utilities/File.h"
 #include "rpcs3_version.h"
 #include "ios/core/ios_jit_dual_map.h"
@@ -1208,6 +1209,11 @@ namespace armsx3::bridge::diag
 
 		logs::stored_message system{diag_log.always()};
 		system.text = utils::get_system_info();
+		// DiagStart runs before Rpcs3IOS_Initialize, so the scale is set here too; the call is idempotent.
+#ifdef ARCH_ARM64
+		utils::init_arm_timer_scale();
+		system.text += fmt::format(" | Timer scale: %u", static_cast<u32>(utils::arm_timer_scale));
+#endif
 
 		logs::stored_message os{diag_log.always()};
 		os.text = utils::get_OS_version_string();

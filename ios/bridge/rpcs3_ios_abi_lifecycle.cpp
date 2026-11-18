@@ -356,6 +356,11 @@ Rpcs3IOS_Status Rpcs3IOS_Initialize(void)
 	// The core looks icons up in the config folder first; replacing a real folder is iOS only, on the Mac it is the developer's.
 	armsx3::bridge::link_icon_tree(fs::get_config_dir(), armsx3::bridge::executable_path(), TARGET_OS_IPHONE != 0);
 
+	// Upstream calls this from rpcs3.cpp, which this build does not compile; without it every busy_wait runs about 33 times short.
+#ifdef ARCH_ARM64
+	utils::init_arm_timer_scale();
+#endif
+
 	Emu.Init();
 
 	// The touch pad is always player 1.
