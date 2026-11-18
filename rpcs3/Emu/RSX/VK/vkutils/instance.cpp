@@ -161,6 +161,11 @@ namespace vk
 		const int32_t setting_fast_math = g_cfg.video.disable_msl_fast_math.get() ? MVK_CONFIG_FAST_MATH_NEVER : MVK_CONFIG_FAST_MATH_ON_DEMAND;
 		// MoltenVK logs through stderr, and a blocked pipe there parks a Metal compile's completion handler.
 		const int32_t setting_log_level = MVK_CONFIG_LOG_LEVEL_NONE;
+#if TARGET_OS_IPHONE
+		// Encoding on MoltenVK's own queue thread takes the Metal encode off the RSX thread. Texture
+		// streaming orders two queues by semaphores that MoltenVK only advances at encode time.
+		const VkBool32 setting_synchronous_submits = g_cfg.video.vk.asynchronous_texture_streaming.get() ? VK_TRUE : VK_FALSE;
+#endif
 
 		std::vector<VkLayerSettingEXT> mvk_settings;
 		VkLayerSettingsCreateInfoEXT mvk_layer_settings_create_info{};
@@ -190,6 +195,9 @@ namespace vk
 				mvk_settings.push_back(VkLayerSettingEXT{ kMVKMoltenVKDriverLayerName, "MVK_CONFIG_RESUME_LOST_DEVICE", VK_LAYER_SETTING_TYPE_BOOL32_EXT, 1, &setting_true });
 				mvk_settings.push_back(VkLayerSettingEXT{ kMVKMoltenVKDriverLayerName, "MVK_CONFIG_FAST_MATH_ENABLED", VK_LAYER_SETTING_TYPE_INT32_EXT, 1, &setting_fast_math });
 				mvk_settings.push_back(VkLayerSettingEXT{ kMVKMoltenVKDriverLayerName, "MVK_CONFIG_LOG_LEVEL", VK_LAYER_SETTING_TYPE_INT32_EXT, 1, &setting_log_level });
+#if TARGET_OS_IPHONE
+				mvk_settings.push_back(VkLayerSettingEXT{ kMVKMoltenVKDriverLayerName, "MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS", VK_LAYER_SETTING_TYPE_BOOL32_EXT, 1, &setting_synchronous_submits });
+#endif
 
 				mvk_layer_settings_create_info.sType = VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT;
 				mvk_layer_settings_create_info.pNext = next_info;

@@ -3,6 +3,9 @@
 #include "VKFramebuffer.h"
 #include "vkutils/image.h"
 #include "vkutils/image_helpers.h"
+#if defined(__APPLE__)
+#include "vkutils/garbage_collector.h"
+#endif
 
 #include <unordered_map>
 #include "Utilities/mutex.h"
@@ -116,8 +119,35 @@ namespace vk
 
 		for (auto It = g_framebuffers_cache.begin(); It != g_framebuffers_cache.end();)
 		{
+#if defined(__APPLE__)
+			const auto removed = std::stable_partition(It->second.begin(), It->second.end(), [&](const auto& fbo)
+			{
+				if (!criteria(fbo))
+				{
+					return true;
+				}
+
+				if (fbo->has_refs())
+				{
+					// Still referenced: keep it for its owner, which drops it.
+					fbo->retired = true;
+					rsx_log.warning("VK: retired a framebuffer that is still referenced");
+					return true;
+				}
+
+				return false;
+			});
+
+			// Submitted command buffers may still use these, and MoltenVK can encode them after the submit returns.
+			for (auto fbo = removed; fbo != It->second.end(); ++fbo)
+			{
+				vk::get_gc()->dispose(*fbo);
+			}
+
+			It->second.erase(removed, It->second.end());
+#else
 			It->second.erase(
-#if defined(__APPLE__) || defined(__ANDROID__)
+#if defined(__ANDROID__)
 				std::remove_if(It->second.begin(), It->second.end(), [&](const auto& fbo)
 				{
 					if (!criteria(fbo))
@@ -140,6 +170,7 @@ namespace vk
 #endif
 				It->second.end()
 			);
+#endif
 
 			if (It->second.empty())
 			{
