@@ -2151,6 +2151,100 @@ static void dump_guest_memory_at_registers(cpu_thread* cpu)
 	}
 }
 
+#ifdef __ANDROID__
+namespace
+{
+	// A fault on memory the guest map already allows is answered "retry" below: another thread was
+	// changing the page's protection and is expected to finish in a moment. A host protection that
+	// nothing owns any more never finishes. The RSX handler declines the address, the map says the
+	// access is fine, and the thread faults on the same instruction forever. Ratchet & Clank: Tools
+	// of Destruction (BCES00052, 83% resolution scale, 8 Gen 3) froze that way two minutes in: at
+	// Stop, rsx::thread had 84,071,963 faults, 83 of them taken by the RSX handler, about a million
+	// a second for the 87 s the picture stood still.
+	//
+	// So the retries are counted. Faults on one host page with no other fault in between, at least
+	// 4096 of them over at least 100 ms, set the page back to the protection the guest map gives
+	// it. A real hand-over takes microseconds. The report names the thread, the code that faulted
+	// and, on the RSX thread, the method it was running, so the owner of the protection can be found.
+	struct stuck_fault
+	{
+		u64 seq = 0; // g_tls_fault_all at the previous retry
+		u64 page = umax;
+		u64 count = 0;
+		std::chrono::steady_clock::time_point since{};
+	};
+
+	thread_local stuck_fault s_stuck_fault;
+	atomic_t<u32> s_stuck_fault_reports{0};
+
+	std::string describe_code_address(uptr addr)
+	{
+		Dl_info info{};
+
+		if (addr && dladdr(reinterpret_cast<const void*>(addr), &info) && info.dli_fbase)
+		{
+			const char* lib = info.dli_fname ? std::strrchr(info.dli_fname, '/') : nullptr;
+			lib = lib ? lib + 1 : (info.dli_fname ? info.dli_fname : "?");
+			return fmt::format("%s+0x%x", lib, addr - reinterpret_cast<uptr>(info.dli_fbase));
+		}
+
+		return fmt::format("0x%x", addr);
+	}
+
+	void release_stuck_fault(u32 addr, bool is_writing, bool rsx_asked, ucontext_t* context)
+	{
+		auto& s = s_stuck_fault;
+		const u64 page = utils::page_start(addr);
+
+		if (s.page != page || s.seq + 1 != g_tls_fault_all)
+		{
+			s.page = page;
+			s.count = 0;
+			s.since = std::chrono::steady_clock::now();
+		}
+
+		s.seq = g_tls_fault_all;
+
+		if (++s.count % 4096)
+		{
+			return;
+		}
+
+		const auto stuck_for = std::chrono::steady_clock::now() - s.since;
+
+		if (stuck_for < std::chrono::milliseconds(100))
+		{
+			return;
+		}
+
+		const bool writable = vm::check_addr(addr, vm::page_writable);
+		utils::memory_protect(vm::base(static_cast<u32>(page)), utils::get_page_size(), writable ? utils::protection::rw : utils::protection::ro);
+
+		if (s_stuck_fault_reports++ < 16)
+		{
+			std::string rsx_state;
+
+			if (const auto rsxthr = rsx::get_current_renderer(); rsxthr && rsxthr->is_current_thread() && rsxthr->fifo_ctrl)
+			{
+				rsx_state = fmt::format(" The RSX was running method 0x%x, FIFO at 0x%x.", rsxthr->fifo_ctrl->last_cmd(), rsxthr->fifo_ctrl->get_pos());
+			}
+
+			sig_log.error("Thread '%s' faulted %u times in a row %s 0x%x over %u ms, memory the guest map allows (%s). %s"
+				" Its host protection was set back to %s so the thread can go on. Code: %s, called from %s.%s",
+				thread_ctrl::get_name(), s.count, is_writing ? "writing" : "reading", addr,
+				static_cast<u64>(std::chrono::duration_cast<std::chrono::milliseconds>(stuck_for).count()),
+				writable ? "read/write" : "read-only",
+				rsx_asked ? "The RSX did not claim it." : "The RSX was not asked.",
+				writable ? "read/write" : "read-only",
+				describe_code_address(static_cast<uptr>(RIP(context))), describe_code_address(static_cast<uptr>(GPR(context, 30))), rsx_state);
+		}
+
+		s.page = umax;
+		s.count = 0;
+	}
+}
+#endif
+
 bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t* context) noexcept
 {
 	g_tls_fault_all++;
@@ -2187,7 +2281,10 @@ bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t
 		}
 	} spu_protection{cpu};
 
-	if (!is_exec && addr < RAW_SPU_BASE_ADDR && vm::check_addr(addr) && rsx::g_access_violation_handler)
+	// Whether the RSX handler is asked about this fault (the stuck-fault report says so)
+	const bool rsx_asked = !is_exec && addr < RAW_SPU_BASE_ADDR && vm::check_addr(addr) && rsx::g_access_violation_handler;
+
+	if (rsx_asked)
 	{
 		bool state_changed = false;
 
@@ -2569,6 +2666,9 @@ bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t
 		{
 			utils::memory_protect(vm::base(utils::page_start(addr)), utils::get_page_size(), utils::protection::rw);
 		}
+#endif
+#ifdef __ANDROID__
+		release_stuck_fault(addr, is_writing, rsx_asked, context);
 #endif
 		return true;
 	}
