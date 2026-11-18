@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: GPL-2.0-only
-"""On Apple the framebuffer cache hands what it removes to the deferred-dispose queue instead of destroying
-it. Text checks on the real sources; the crash and its absence are shown by the macOS leg, not here."""
+"""On iOS MoltenVK encodes submits on its own queue thread, and on Apple the framebuffer cache hands what it
+removes to the deferred-dispose queue instead of destroying it. Text checks on the real sources; the crash and
+its absence are shown by the macOS leg, not here."""
 
+import re
 import unittest
 from pathlib import Path
 
@@ -11,6 +13,7 @@ from source_helpers import without_c_comments as without_comments
 ROOT = Path(__file__).resolve().parents[2]
 VK = ROOT / "rpcs3" / "Emu" / "RSX" / "VK"
 FRAMEBUFFER = VK / "VKFramebuffer.cpp"
+INSTANCE = VK / "vkutils" / "instance.cpp"
 
 
 def read(path):
@@ -36,6 +39,21 @@ class FramebuffersWaitForTheGpu(unittest.TestCase):
         dispose = code.find("vk::get_gc()->dispose(*fbo);")
         erase = code.find("It->second.erase(removed, It->second.end());")
         self.assertTrue(-1 < dispose < erase, "the erase must come after the dispose loop")
+
+
+class IosSubmitsAsynchronously(unittest.TestCase):
+    def test_the_setting_is_pushed_on_ios_only(self):
+        code = read(INSTANCE)
+        match = re.search(r'"MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS"[^;]*&setting_synchronous_submits', code)
+        self.assertIsNotNone(match, "the layer setting is never pushed")
+        self.assertTrue(guarded_by(code, match.start(), "TARGET_OS_IPHONE"))
+
+    def test_texture_streaming_keeps_submits_synchronous(self):
+        code = read(INSTANCE)
+        match = re.search(r"setting_synchronous_submits\s*=\s*([^;]*);", code)
+        self.assertIsNotNone(match)
+        self.assertIn("asynchronous_texture_streaming", match.group(1))
+        self.assertRegex(match.group(1), r"\?\s*VK_TRUE\s*:\s*VK_FALSE")
 
 
 if __name__ == "__main__":
