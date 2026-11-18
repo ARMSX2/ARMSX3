@@ -579,8 +579,8 @@ namespace armsx3::bridge::title_config
 		{"NPUB31590", "Core:\n  PPU Decoder: Recompiler (LLVM)\n"},
 
 		// Tied to the bundled "Disable MLAA" patch; SPU threads at Auto avoid a prologue freeze that a cap exposes.
-		{"BCUS98234", "Video:\n  Write Color Buffers: false\nCore:\n  Preferred SPU Threads: 0\n"},
-		{"BCES01007", "Video:\n  Write Color Buffers: false\nCore:\n  Preferred SPU Threads: 0\n"},
+		{"BCUS98234", "Video:\n  Write Color Buffers: false\n  Vulkan:\n    Fence Poll Completion Markers: true\nCore:\n  Preferred SPU Threads: 0\n"},
+		{"BCES01007", "Video:\n  Write Color Buffers: false\n  Vulkan:\n    Fence Poll Completion Markers: true\nCore:\n  Preferred SPU Threads: 0\n"},
 
 		// On, the SPURS control-block atomics take vm::writer_lock about 550,000 times a second; off-spec, so this title only.
 		{"BLUS30218", "Core:\n  Accurate SPU Reservations: false\n"},
@@ -644,11 +644,11 @@ namespace armsx3::bridge::title_config
 		{"NPUA70080", "Core:\n  SPU XFloat Accuracy: Relaxed\n"},
 
 		// The iOS product file pins the scheduler to the OS, so only GETLLAR 0 applies here; it lets a polling SPU wait in the OS.
-		{"BCES00052", "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n"},
-		{"BCUS98127", "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n"},
-		{"BCJS30014", "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n"},
-		{"NPEA00452", "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n"},
-		{"NPUA80965", "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n"},
+		{"BCES00052", "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n    Fence Poll Completion Markers: true\n"},
+		{"BCUS98127", "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n    Fence Poll Completion Markers: true\n"},
+		{"BCJS30014", "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n    Fence Poll Completion Markers: true\n"},
+		{"NPEA00452", "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n    Fence Poll Completion Markers: true\n"},
+		{"NPUA80965", "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\nVideo:\n  Vulkan:\n    Vertex Fetch Specialization: true\n    Early Submit Draw Threshold: 1024\n    Fence Poll Completion Markers: true\n"},
 		{"BCES00301", "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n"},
 		{"BCAS20052", "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n"},
 		{"NPEA00088", "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n"},
@@ -660,6 +660,20 @@ namespace armsx3::bridge::title_config
 		{"BCUS99245", "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n"},
 		{"NPEA00457", "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n"},
 		{"NPUA80908", "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n"},
+
+		// The Last of Us: background SPU compiling needs the pause off, and a boot that built the saved SPU list first stalled on a loading screen.
+		{"BCUS98174", "Core:\n  Pause Game During SPU Compilation: false\n  Stub PPU Traps: 1\n  SPU Cache: false\n"},
+		{"BCES01584", "Core:\n  Pause Game During SPU Compilation: false\n  Stub PPU Traps: 1\n  SPU Cache: false\n"},
+		{"BCES01585", "Core:\n  Pause Game During SPU Compilation: false\n  Stub PPU Traps: 1\n  SPU Cache: false\n"},
+		{"BCJS37010", "Core:\n  Pause Game During SPU Compilation: false\n  Stub PPU Traps: 1\n  SPU Cache: false\n"},
+		{"BCAS20270", "Core:\n  Pause Game During SPU Compilation: false\n  Stub PPU Traps: 1\n  SPU Cache: false\n"},
+		{"NPUA80960", "Core:\n  Pause Game During SPU Compilation: false\n  Stub PPU Traps: 1\n  SPU Cache: false\n"},
+		{"NPEA00435", "Core:\n  Pause Game During SPU Compilation: false\n  Stub PPU Traps: 1\n  SPU Cache: false\n"},
+		{"NPHA80243", "Core:\n  Pause Game During SPU Compilation: false\n  Stub PPU Traps: 1\n  SPU Cache: false\n"},
+		{"NPJA00096", "Core:\n  Pause Game During SPU Compilation: false\n  Stub PPU Traps: 1\n  SPU Cache: false\n"},
+
+		// Blur: its splash video went black with background SPU compiling on and played with the pause on, so it keeps the pause off.
+		{"BLUS30295", "Core:\n  Pause Game During SPU Compilation: false\n"},
 	};
 
 	// iOS-only rows, kept apart so the table above stays Android's entry for entry. A row here wins over the same serial above, and tests allow that overlap only for the serials they name.

@@ -70,6 +70,9 @@ IOS_ONLY_REQUIRED = ("NPUB30558", "BLUS30837", "BLES01613", "BLUS30405", "BLES00
 
 GOD_OF_WAR_3 = ("BCUS98111", "BCES00510", "BCES00799", "BCAS25003", "BCKS15003", "BCJS37001", "NPUA70080")
 
+# The ios_only table may repeat these Android serials; its row wins over the ported one.
+SHARED_WITH_ANDROID = GOD_OF_WAR_3 + ("BCUS98174",)
+
 IOS_ONLY_APPROXIMATE_XFLOAT = "Core:\\n  SPU XFloat Accuracy: Approximate\\n"
 
 IOS_ONLY_NO_INTERPRETER = "Video:\\n  Shader Mode: Async Recompiler (multi-threaded)\\n"
@@ -322,7 +325,7 @@ def ios_only_problems(header_text, kotlin_text, results):
             problems.append("iosonly: {0} has no expected row in the test".format(serial))
         elif config != want:
             problems.append("iosonly: {0} sets {1!r}, not exactly {2!r}".format(serial, config, want))
-        if serial in ported and serial not in GOD_OF_WAR_3:
+        if serial in ported and serial not in SHARED_WITH_ANDROID:
             problems.append("iosonly: {0} is also in the ported table or Android's".format(serial))
         text = config.replace("\\n", "\n")
         known, added, got = results.get("^" + serial, (1, 0, ""))
@@ -332,10 +335,22 @@ def ios_only_problems(header_text, kotlin_text, results):
     return problems
 
 
+# Keys Android's rows set that the iOS core does not have: they sit under `#ifdef __ANDROID__` in
+# system_config.h, so the iOS table leaves them out and the comparison ignores them.
+ANDROID_ONLY_KEYS = ("SPU Inline Interrupt Idioms",)
+
+
+def strip_android_only(config):
+    for key in ANDROID_ONLY_KEYS:
+        config = re.sub(r"\\n  " + re.escape(key) + r": [^\\]*", "", config)
+    return config
+
+
 def kotlin_table(kotlin_text):
     body = kotlin_text[kotlin_text.index("private val LOCAL_OVERRIDES"):]
     body = body[:body.index("\n    )\n")]
-    return re.findall(r'^\s*"([A-Z]{4}[0-9]{5})" to "((?:[^"\\]|\\.)*)",$', body, re.M)
+    rows = re.findall(r'^\s*"([A-Z]{4}[0-9]{5})" to "((?:[^"\\]|\\.)*)",$', body, re.M)
+    return [(serial, strip_android_only(config)) for serial, config in rows]
 
 
 def local_problems(header_text, kotlin_text, results):
@@ -344,7 +359,7 @@ def local_problems(header_text, kotlin_text, results):
     if not theirs or ours != theirs:
         problems.append("local: local_overrides ({0}) is not Android's LOCAL_OVERRIDES ({1})".format(len(ours), len(theirs)))
     for serial, config in theirs:
-        if serial in GOD_OF_WAR_3:
+        if serial in SHARED_WITH_ANDROID:
             if serial not in dict(ours):
                 problems.append("local: {0} is not in local_overrides, which must stay Android's".format(serial))
             continue
@@ -354,7 +369,7 @@ def local_problems(header_text, kotlin_text, results):
         if known or added != leaves or got != text:
             problems.append("local: with no database {0} added={1} text={2!r}, not its own entry".format(serial, added, got))
     known, added, got = results.get("%" + KILLZONE, (0, 0, ""))
-    if not known or added != 3 or "  Write Color Buffers: false\n" not in (section(got, "Video") or "") or \
+    if not known or added != 4 or "  Write Color Buffers: false\n" not in (section(got, "Video") or "") or \
             "Write Color Buffers: true" in got or "  PPU Decoder: Interpreter (static)\n" not in (section(got, "Core") or "") or \
             "  Preferred SPU Threads: 0\n" not in (section(got, "Core") or ""):
         problems.append("local: {0} with the database did not keep ours over it and add its other key (added={1}): {2!r}".format(KILLZONE, added, got))
