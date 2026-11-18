@@ -10,6 +10,7 @@
 
 #include "util/logs.hpp"
 #include "util/sysinfo.hpp"
+#include "util/asm.hpp"
 #include "Utilities/File.h"
 #include "rpcs3_version.h"
 #include "ios/core/ios_jit_dual_map.h"
@@ -48,6 +49,15 @@
 #include "Emu/IdManager.h"
 #include "Emu/Cell/PPUThread.h"
 #include "Emu/Cell/SPUThread.h"
+#include "Emu/Cell/lv2/sys_cond.h"
+#include "Emu/Cell/lv2/sys_event.h"
+#include "Emu/Cell/lv2/sys_event_flag.h"
+#include "Emu/Cell/lv2/sys_lwcond.h"
+#include "Emu/Cell/lv2/sys_lwmutex.h"
+#include "Emu/Cell/lv2/sys_mutex.h"
+#include "Emu/Cell/lv2/sys_rwlock.h"
+#include "Emu/Cell/lv2/sys_semaphore.h"
+#include "Emu/Cell/lv2/sys_spu.h"
 
 LOG_CHANNEL(diag_log, "IOSDIAG");
 
@@ -213,14 +223,14 @@ namespace
 	}
 
 	// The iPhoneOS SDK ships no libproc.h, so proc_pid_rusage is resolved at run time.
-	rusage_info_v4 io_snapshot()
+	rusage_info_v6 io_snapshot()
 	{
 		static const auto s_rusage = reinterpret_cast<int (*)(int, int, rusage_info_t*)>(dlsym(RTLD_DEFAULT, "proc_pid_rusage"));
-		rusage_info_v4 info{};
+		rusage_info_v6 info{};
 
-		if (!s_rusage || s_rusage(getpid(), RUSAGE_INFO_V4, reinterpret_cast<rusage_info_t*>(&info)) != 0)
+		if (!s_rusage || s_rusage(getpid(), RUSAGE_INFO_V6, reinterpret_cast<rusage_info_t*>(&info)) != 0)
 		{
-			return rusage_info_v4{};
+			return rusage_info_v6{};
 		}
 
 		return info;
@@ -633,7 +643,102 @@ namespace
 		const char* last_function = nullptr;
 		u64 start_time = 0;
 		u64 native = 0;
+		std::string wait;
 	};
+
+	std::string owner_word(u32 owner)
+	{
+		return owner && owner != lwmutex_free ? fmt::format("0x%x", owner) : std::string("none");
+	}
+
+	u32 lwmutex_owner(u32 lwmutex_id)
+	{
+		const auto lw = idm::check_unlocked<lv2_obj, lv2_lwmutex>(lwmutex_id);
+
+		if (!lw || !lw->control || !vm::check_addr(lw->control.addr(), vm::page_readable, sizeof(sys_lwmutex_t)))
+		{
+			return 0;
+		}
+
+		return lw->control->vars.owner;
+	}
+
+	// An lv2 call's first argument is the id of the object it blocks on; empty when that id names nothing live.
+	// Called with id_manager::g_mutex held shared, so each object outlives the read.
+	std::string wait_target(u32 id)
+	{
+		switch (id >> 24)
+		{
+		case lv2_mutex::id_base >> 24:
+			if (const auto m = idm::check_unlocked<lv2_obj, lv2_mutex>(id))
+			{
+				return fmt::format(" on=mutex:0x%x owner=%s", id, owner_word(m->control.load().owner));
+			}
+			break;
+		case lv2_lwmutex::id_base >> 24:
+			if (idm::check_unlocked<lv2_obj, lv2_lwmutex>(id))
+			{
+				return fmt::format(" on=lwmutex:0x%x owner=%s", id, owner_word(lwmutex_owner(id)));
+			}
+			break;
+		case lv2_lwcond::id_base >> 24:
+			if (const auto c = idm::check_unlocked<lv2_obj, lv2_lwcond>(id))
+			{
+				return fmt::format(" on=lwcond:0x%x lwmutex=0x%x owner=%s", id, c->lwid, owner_word(lwmutex_owner(c->lwid)));
+			}
+			break;
+		case lv2_cond::id_base >> 24:
+			if (const auto c = idm::check_unlocked<lv2_obj, lv2_cond>(id))
+			{
+				const auto m = idm::check_unlocked<lv2_obj, lv2_mutex>(c->mtx_id);
+				return fmt::format(" on=cond:0x%x mutex=0x%x owner=%s last_signal_by=0x%x", id, c->mtx_id,
+					owner_word(m ? m->control.load().owner : 0), c->dbg_last_signaller.load());
+			}
+			break;
+		case lv2_sema::id_base >> 24:
+			if (const auto sem = idm::check_unlocked<lv2_obj, lv2_sema>(id))
+			{
+				return fmt::format(" on=sema:0x%x val=%d last_post_by=0x%x", id, sem->val.load(), sem->dbg_last_poster.load());
+			}
+			break;
+		case lv2_rwlock::id_base >> 24:
+			if (const auto rw = idm::check_unlocked<lv2_obj, lv2_rwlock>(id))
+			{
+				// Positive is the writer's id shifted left once; negative counts readers in steps of two.
+				const s64 owner = rw->owner.load();
+				return owner > 0 ? fmt::format(" on=rwlock:0x%x writer=0x%x", id, static_cast<u32>(owner >> 1)) :
+					fmt::format(" on=rwlock:0x%x readers=%lld", id, -owner / 2);
+			}
+			break;
+		case lv2_event_queue::id_base >> 24:
+			if (idm::check_unlocked<lv2_obj, lv2_event_queue>(id))
+			{
+				return fmt::format(" on=event_queue:0x%x", id);
+			}
+			break;
+		case lv2_event_flag::id_base >> 24:
+			if (idm::check_unlocked<lv2_obj, lv2_event_flag>(id))
+			{
+				return fmt::format(" on=event_flag:0x%x", id);
+			}
+			break;
+		case ppu_thread::id_base >> 24:
+			if (idm::check_unlocked<named_thread<ppu_thread>>(id))
+			{
+				return fmt::format(" on=ppu:0x%x", id);
+			}
+			break;
+		case lv2_spu_group::id_base >> 24:
+			if (idm::check_unlocked<lv2_spu_group>(id))
+			{
+				return fmt::format(" on=spu_group:0x%x", id);
+			}
+			break;
+		default: break;
+		}
+
+		return {};
+	}
 
 	struct spu_snapshot
 	{
@@ -781,6 +886,12 @@ namespace
 				s.last_function = ppu.last_function;
 				s.start_time = ppu.start_time;
 				s.native = thread_ctrl::get_native_id(ppu);
+
+				if (locked && s.current_function)
+				{
+					s.wait = wait_target(static_cast<u32>(ppu.syscall_args[0]));
+				}
+
 				ppus.push_back(std::move(s));
 			}, idm::unlocked);
 		}
@@ -846,8 +957,8 @@ namespace
 			const char* const func = s.current_function ? s.current_function : s.last_function ? s.last_function : "-";
 			const double sleep_s = s.start_time && s.start_time <= now ? static_cast<double>(now - s.start_time) / 1e6 : 0.0;
 
-			diag_log.notice("stall ppu id=0x%x cia=0x%08x lr=0x%08x state=%s in=%s func=%s sleep_s=%.1f name='%s'",
-				s.id, s.cia, s.lr, s.state, in, func, sleep_s, s.name);
+			diag_log.notice("stall ppu id=0x%x cia=0x%08x lr=0x%08x state=%s in=%s func=%s%s sleep_s=%.1f name='%s'",
+				s.id, s.cia, s.lr, s.state, in, func, s.wait, sleep_s, s.name);
 
 			switch (h.status)
 			{
@@ -881,6 +992,32 @@ namespace
 		}
 	}
 
+	// The reason alone says which route ran, since pre-main cannot tell a StikDebug relaunch from a player who opened ARMSX3 through StikDebug.
+	const char* jit_route_word(const char* reason)
+	{
+		if (reason == nullptr || std::strcmp(reason, "helper-absent") == 0)
+		{
+			return "none";
+		}
+
+		if (std::strcmp(reason, "helper-ok") == 0)
+		{
+			return "builtin";
+		}
+
+		if (std::strcmp(reason, "already-traced") == 0)
+		{
+			return "pre-traced";
+		}
+
+		if (std::strcmp(reason, "debugger-attached") == 0 || std::strcmp(reason, "no-debugger") == 0)
+		{
+			return "wait";
+		}
+
+		return "stikdebug-fallback";
+	}
+
 	// Notice and never error: the log ring keeps every error-level line, and this one would push the errors out.
 	void perf_loop()
 	{
@@ -895,6 +1032,9 @@ namespace
 
 		// Zero, not a load: the counter is installed before this thread starts, so lines logged in between would vanish.
 		u64 last_adds = 0;
+		u64 last_energy_nj = 0;
+		u64 last_penergy_nj = 0;
+		u64 last_wkups = 0;
 		u64 ticks = 0;
 		bool prepare_told = false;
 		std::vector<u32> window;
@@ -983,7 +1123,7 @@ namespace
 				prepare_told = true;
 				const char* const reason = jit.enabler_reason;
 				diag_log.notice("jit prepare route=%s reason=%s script=%s pool2_mib=%u pool3_mib=%u pages_ok=%d elapsed_ms=%d budget_hit=%d first_refused_off=%d sessions=%u budget_pages=%u need2_mib=%u need3_mib=%u share2_mib=%u share3_mib=%u budget_ms=%d",
-					reason == nullptr ? "none" : std::strcmp(reason, "helper-ok") == 0 ? "builtin" : "stikdebug",
+					jit_route_word(reason),
 					reason == nullptr ? "none" : reason, jit.script_outcome == nullptr ? "none" : jit.script_outcome,
 					jit.pool2_limit_bytes >> 20, jit.pool3_limit_bytes >> 20, jit.script_pages_ok, jit.script_elapsed_ms,
 					jit.script_budget_hit, jit.script_first_refused_off, jit.split_sessions, jit.split_budget_pages,
@@ -991,7 +1131,7 @@ namespace
 			}
 
 			const task_vm_info_data_t vm = vm_snapshot();
-			const rusage_info_v4 io = io_snapshot();
+			const rusage_info_v6 io = io_snapshot();
 			malloc_statistics_t heap{};
 			// nullptr sums every zone.
 			malloc_zone_statistics(nullptr, &heap);
@@ -1003,7 +1143,36 @@ namespace
 				gpu = armsx3::bridge::diag::gpu_busy_take(s_gpu, host_seconds(), frames);
 			}
 
-			diag_log.notice("perf fps=%.1f frame_ms=%.1f shaders_new=%u mem_mib=%u headroom_mib=%d vk_mib=%u vk_tex_mib=%u vk_rtt_mib=%u int_mib=%u cmp_mib=%u gfx_mib=%u pnv_mib=%u malloc_mib=%u mtl_mib=%u vk_blk_mib=%u jit2_mib=%u jit3_mib=%u thermal=%s ft_n=%u ft_low1_fps=%.1f ft_p95_ms=%.1f ft_p99_ms=%.1f ft_gt100=%u ft_gt250=%u ft_gt500=%u dsk_wr_mib=%u lgc_wr_mib=%u gpu_ms=%.1f gpu_pct=%.0f gpu_cbs=%u",
+			// A counter that reads zero is unavailable and the fields report -1; the previous reading is kept so the next delta stays honest.
+			double cpu_mj_frame = -1.0;
+			double pcore_pct = -1.0;
+			double wkups_s = -1.0;
+			const u64 wkups = io.ri_interrupt_wkups + io.ri_pkg_idle_wkups;
+
+			if (io.ri_energy_nj > last_energy_nj)
+			{
+				const double energy_nj = static_cast<double>(io.ri_energy_nj - last_energy_nj);
+				cpu_mj_frame = frames > 0 ? energy_nj / 1e6 / static_cast<double>(frames) : -1.0;
+				pcore_pct = io.ri_penergy_nj >= last_penergy_nj ? 100.0 * static_cast<double>(io.ri_penergy_nj - last_penergy_nj) / energy_nj : -1.0;
+			}
+
+			if (io.ri_energy_nj != 0)
+			{
+				last_energy_nj = io.ri_energy_nj;
+				last_penergy_nj = io.ri_penergy_nj;
+			}
+
+			if (wkups > last_wkups && seconds > 0)
+			{
+				wkups_s = static_cast<double>(wkups - last_wkups) / seconds;
+			}
+
+			if (wkups != 0)
+			{
+				last_wkups = wkups;
+			}
+
+			diag_log.notice("perf fps=%.1f frame_ms=%.1f shaders_new=%u mem_mib=%u headroom_mib=%d vk_mib=%u vk_tex_mib=%u vk_rtt_mib=%u int_mib=%u cmp_mib=%u gfx_mib=%u pnv_mib=%u malloc_mib=%u mtl_mib=%u vk_blk_mib=%u jit2_mib=%u jit3_mib=%u thermal=%s ft_n=%u ft_low1_fps=%.1f ft_p95_ms=%.1f ft_p99_ms=%.1f ft_gt100=%u ft_gt250=%u ft_gt500=%u dsk_wr_mib=%u lgc_wr_mib=%u gpu_ms=%.1f gpu_pct=%.0f gpu_cbs=%u cpu_mj_frame=%.2f pcore_pct=%.0f wkups_s=%.0f",
 				fps, frame_ms, adds - last_adds, vm.phys_footprint >> 20, headroom_mib(), vk_total >> 20, vk_texture >> 20, vk_surface >> 20,
 				vm.internal >> 20, vm.compressed >> 20,
 				static_cast<u64>(vm.ledger_tag_graphics_footprint + vm.ledger_tag_graphics_footprint_compressed) >> 20,
@@ -1011,7 +1180,7 @@ namespace
 				static_cast<u64>(heap.size_in_use) >> 20, metal_allocated_bytes() >> 20,
 				vk_blocks >> 20, jit2_bytes >> 20, (jit.llvm_units_peak * jit.llvm_unit_bytes) >> 20,
 				thermal_word(), ft.n, ft.low1_fps, ft.p95_ms, ft.p99_ms, ft.gt100, ft.gt250, ft.gt500,
-				io.ri_diskio_byteswritten >> 20, io.ri_logical_writes >> 20, gpu.gpu_ms, gpu.gpu_pct, gpu.cbs);
+				io.ri_diskio_byteswritten >> 20, io.ri_logical_writes >> 20, gpu.gpu_ms, gpu.gpu_pct, gpu.cbs, cpu_mj_frame, pcore_pct, wkups_s);
 
 			// The lock is held across the dump, which never waits on a lock.
 			{
@@ -1072,6 +1241,11 @@ namespace armsx3::bridge::diag
 
 		logs::stored_message system{diag_log.always()};
 		system.text = utils::get_system_info();
+		// DiagStart runs before Rpcs3IOS_Initialize, so the scale is set here too; the call is idempotent.
+#ifdef ARCH_ARM64
+		utils::init_arm_timer_scale();
+		system.text += fmt::format(" | Timer scale: %u", static_cast<u32>(utils::arm_timer_scale));
+#endif
 
 		logs::stored_message os{diag_log.always()};
 		os.text = utils::get_OS_version_string();

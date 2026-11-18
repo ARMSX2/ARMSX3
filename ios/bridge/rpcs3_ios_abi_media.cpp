@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 #include "rpcs3_ios_abi_internal.h"
+#include "xmb_media.h"
 
 using namespace armsx3::bridge::abi_internal;
 
@@ -297,4 +298,111 @@ Rpcs3IOS_Status Rpcs3IOS_StopRecording(void)
 	}
 	// A file the writer did not complete, or not within 10 s, is reported as not written.
 	return sink->finished_ok() ? RPCS3_IOS_STATUS_OK : RPCS3_IOS_STATUS_INSTALL_WRITE_FAILED;
+}
+
+// The XMB's view of a game's own media; the paths are host paths and never logged.
+Rpcs3IOS_Status Rpcs3IOS_XmbDecodeAudio(const char* in_path, const char* out_path)
+{
+	if (pthread_main_np() != 0)
+	{
+		return refuse_main_thread("Rpcs3IOS_XmbDecodeAudio");
+	}
+
+	if (in_path == nullptr || out_path == nullptr)
+	{
+		return RPCS3_IOS_STATUS_NULL_ARGUMENT;
+	}
+
+	return armsx3::bridge::xmb::decode_audio(in_path, out_path) ? RPCS3_IOS_STATUS_OK : RPCS3_IOS_STATUS_WRONG_STATE;
+}
+
+Rpcs3IOS_Status Rpcs3IOS_XmbDecodeIconAudio(const char* in_path, const char* out_path)
+{
+	if (pthread_main_np() != 0)
+	{
+		return refuse_main_thread("Rpcs3IOS_XmbDecodeIconAudio");
+	}
+
+	if (in_path == nullptr || out_path == nullptr)
+	{
+		return RPCS3_IOS_STATUS_NULL_ARGUMENT;
+	}
+
+	return armsx3::bridge::xmb::decode_pam_audio(in_path, out_path) ? RPCS3_IOS_STATUS_OK : RPCS3_IOS_STATUS_WRONG_STATE;
+}
+
+Rpcs3IOS_Status Rpcs3IOS_XmbDiscMedia(const char* image_path, const char* serial, const char* out_dir)
+{
+	if (pthread_main_np() != 0)
+	{
+		return refuse_main_thread("Rpcs3IOS_XmbDiscMedia");
+	}
+
+	if (image_path == nullptr || serial == nullptr || out_dir == nullptr)
+	{
+		return RPCS3_IOS_STATUS_NULL_ARGUMENT;
+	}
+
+	// An encrypted image's key is looked up under the config folder `Emu.Init()` sets.
+	if (!g_initialized.load())
+	{
+		return RPCS3_IOS_STATUS_NOT_INITIALIZED;
+	}
+
+	switch (armsx3::bridge::xmb::copy_disc_media(image_path, serial, out_dir))
+	{
+	case armsx3::bridge::xmb::disc_media::copied: return RPCS3_IOS_STATUS_OK;
+	case armsx3::bridge::xmb::disc_media::absent: return RPCS3_IOS_STATUS_WRONG_STATE;
+	case armsx3::bridge::xmb::disc_media::failed: break;
+	}
+	return RPCS3_IOS_STATUS_INSTALL_WRITE_FAILED;
+}
+
+Rpcs3IOS_Status Rpcs3IOS_XmbIconOpen(const char* path, Rpcs3IOS_XmbIcon** out_icon, uint32_t* width, uint32_t* height)
+{
+	if (pthread_main_np() != 0)
+	{
+		return refuse_main_thread("Rpcs3IOS_XmbIconOpen");
+	}
+
+	if (path == nullptr || out_icon == nullptr || width == nullptr || height == nullptr)
+	{
+		return RPCS3_IOS_STATUS_NULL_ARGUMENT;
+	}
+
+	*out_icon = armsx3::bridge::xmb::icon_open(path);
+	if (*out_icon == nullptr)
+	{
+		return RPCS3_IOS_STATUS_WRONG_STATE;
+	}
+
+	armsx3::bridge::xmb::icon_size(*out_icon, *width, *height);
+	return RPCS3_IOS_STATUS_OK;
+}
+
+Rpcs3IOS_Status Rpcs3IOS_XmbIconFrame(Rpcs3IOS_XmbIcon* icon, uint8_t* rgba, uint64_t capacity, int64_t* time_ms)
+{
+	if (pthread_main_np() != 0)
+	{
+		return refuse_main_thread("Rpcs3IOS_XmbIconFrame");
+	}
+
+	if (icon == nullptr || rgba == nullptr || time_ms == nullptr)
+	{
+		return RPCS3_IOS_STATUS_NULL_ARGUMENT;
+	}
+
+	*time_ms = armsx3::bridge::xmb::icon_frame(icon, rgba, capacity);
+	return *time_ms < 0 ? RPCS3_IOS_STATUS_WRONG_STATE : RPCS3_IOS_STATUS_OK;
+}
+
+Rpcs3IOS_Status Rpcs3IOS_XmbIconClose(Rpcs3IOS_XmbIcon* icon)
+{
+	if (pthread_main_np() != 0)
+	{
+		return refuse_main_thread("Rpcs3IOS_XmbIconClose");
+	}
+
+	armsx3::bridge::xmb::icon_close(icon);
+	return RPCS3_IOS_STATUS_OK;
 }

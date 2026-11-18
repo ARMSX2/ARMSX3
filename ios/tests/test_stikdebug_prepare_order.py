@@ -253,15 +253,15 @@ class TheWalkHolds(TheSources):
 
     def test_model_measured_15s(self):
         # The default shares stay; the 15 s walk's extra pages go to the rest of pool 3.
-        self.assertEqual((0x9800000, 0x16c00000), self.ext(MEASURED_15S_PAGES))
+        self.assertEqual((0x9800000, 0x16d94000), self.ext(MEASURED_15S_PAGES))
 
     def test_model_tier_edges(self):
         # Pool 2's 16 MiB floor comes first.
         self.assertEqual((0x1000000, 0x400000), self.ext(2306))
-        self.assertEqual((0x1000000, 0), self.ext(2150))
+        self.assertEqual((0x1000000, 0x190000), self.ext(2150))
         self.assertEqual((0x800000, 0), self.ext(512))
         self.assertEqual((0x17d4000, 0xf000000), self.ext(17911))
-        self.assertEqual((0x9800000, 0xf600000), self.ext(26602))
+        self.assertEqual((0x9800000, 0xf7a0000), self.ext(26602))
 
     def test_model_refusals(self):
         # A refusal inside pool 2's floor ends the walk there.
@@ -270,7 +270,7 @@ class TheWalkHolds(TheSources):
 
     def test_model_slow_walk_keeps_pool2_and_pool1(self):
         # The Last of Us demo walked 11,606 pages in 15 s and ended with pool 2 at 0 MiB. Now it keeps 16 MiB.
-        self.assertEqual((0x1000000, 0x9400000), self.ext(11606))
+        self.assertEqual((0x1000000, 0x9550000), self.ext(11606))
         # Pool 1 is whole after the floor, the stubs and pool 1 (2,050 pages), inside the shortest budget at the slowest rate (3,868).
         through_pool1 = sum(1 for _ in pages_of(self.normal[:6])) - (self.normal[5] - self.env["k_pool3_off"]) // PAGE
         self.assertEqual(2050, through_pool1)

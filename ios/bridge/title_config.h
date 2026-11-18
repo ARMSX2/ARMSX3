@@ -662,34 +662,19 @@ namespace armsx3::bridge::title_config
 		{"NPUA80908", "Core:\n  Thread Scheduler Mode: RPCS3 Scheduler\n  SPU GETLLAR Busy Waiting Percentage: 0\n"},
 	};
 
-	// iOS-only rows, kept apart so the table above stays Android's entry for entry; tests check the two do not overlap.
+	// iOS-only rows, kept apart so the table above stays Android's entry for entry. A row here wins over the same serial above, and tests allow that overlap only for the serials they name.
 	inline constexpr local_override ios_only_overrides[] = {
-		// MoltenVK has no unrestricted depth range, so the viewmodel's 1 to 1e19 depth is squeezed and smears; costs early-Z.
-		{"BLUS31011", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLUS31140", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLES01717", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLES01718", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLES01719", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLES01720", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"NPUB31054", "Video:\n  Emulate Extended Depth Range: true\n"},
-
-		// Same engine and the same reported symptom as Black Ops II.
-		{"BLUS30591", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLES01031", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLES01032", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLES01033", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLES01034", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLES01035", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLES01105", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLJM60286", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"BLJM60287", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"NPUB30584", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"NPEB00756", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"NPUB90430", "Video:\n  Emulate Extended Depth Range: true\n"},
-		{"NPEB90323", "Video:\n  Emulate Extended Depth Range: true\n"},
-
 		// Its SPU loop polls the decrementer, and loop detection lets it yield; per title because the global setting hurts other games.
 		{"NPUB30558", "Core:\n  SPU loop detection: true\n"},
+
+		// Relaxed XFloat, which Android's table sets, turns Kratos' brows, beard and face white in the menu and cutscenes here.
+		{"BCUS98111", "Core:\n  SPU XFloat Accuracy: Approximate\n"},
+		{"BCES00510", "Core:\n  SPU XFloat Accuracy: Approximate\n"},
+		{"BCES00799", "Core:\n  SPU XFloat Accuracy: Approximate\n"},
+		{"BCAS25003", "Core:\n  SPU XFloat Accuracy: Approximate\n"},
+		{"BCKS15003", "Core:\n  SPU XFloat Accuracy: Approximate\n"},
+		{"BCJS37001", "Core:\n  SPU XFloat Accuracy: Approximate\n"},
+		{"NPUA70080", "Core:\n  SPU XFloat Accuracy: Approximate\n"},
 
 		// The shader interpreter draws this game's intro wrong until pipelines compile.
 		{"BLUS30837", "Video:\n  Shader Mode: Async Recompiler (multi-threaded)\n"},
@@ -700,9 +685,16 @@ namespace armsx3::bridge::title_config
 		{"BLES00713", "Core:\n  Pause Game During SPU Compilation: true\n  SPU Poll Park Sites: 3f47c:40801083\n"},
 		{"BLES00714", "Core:\n  Pause Game During SPU Compilation: true\n"},
 
+		// Cold starts sometimes freeze while SPU code compiles on demand; pausing the game during compiles stops it.
+		{"BCUS98174", "Core:\n  Pause Game During SPU Compilation: true\n"},
+
 		// Exact ZCULL stats make the torches flicker on iPhone; approximate stats stop it.
 		{"BLES00158", "Video:\n  Accurate ZCULL stats: false\n  Relaxed ZCULL Sync: false\n"},
 		{"BLUS30089", "Video:\n  Accurate ZCULL stats: false\n  Relaxed ZCULL Sync: false\n"},
+
+		// The database sets Low precision for AMD cards, which turns this game's textures black on iPhone.
+		{"BLUS30065", "Video:\n  Shader Precision: High\n"},
+		{"BLES00142", "Video:\n  Shader Precision: High\n"},
 
 		// At 0 a PPU trap stops the game; at 1 the trapping instruction is skipped.
 		{"BCES01176", "Core:\n  Stub PPU Traps: 1\n"},
@@ -722,19 +714,22 @@ namespace armsx3::bridge::title_config
 		{"NPUA80918", "Core:\n  Stub PPU Traps: 1\n"},
 		{"NPEA00445", "Core:\n  Stub PPU Traps: 1\n"},
 		{"NPHA80258", "Core:\n  Stub PPU Traps: 1\n"},
+
+		// Six busy SPU threads crowd out the PPU in Zombies; letting two run at once gave about a sixth more fps on a Mac.
+		{"BLES01717", "Core:\n  Preferred SPU Threads: 2\n"},
 	};
 
 	// Empty when neither table has the serial.
 	inline std::string_view local_override_for(std::string_view serial)
 	{
-		for (const local_override& o : local_overrides)
+		for (const local_override& o : ios_only_overrides)
 		{
 			if (o.serial == serial)
 			{
 				return o.config;
 			}
 		}
-		for (const local_override& o : ios_only_overrides)
+		for (const local_override& o : local_overrides)
 		{
 			if (o.serial == serial)
 			{

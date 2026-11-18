@@ -56,6 +56,7 @@ struct UpdateSeams {
     @ObservationIgnored weak var library: LibraryModel?
     @ObservationIgnored private var session: URLSession?
     @ObservationIgnored private var tasks: [String: Int] = [:]
+    @ObservationIgnored private var progressShown = ContinuousClock.now
     @ObservationIgnored private var folders: (game: URL, exdata: URL)?
     @ObservationIgnored private var monitored = NetworkState(online: true, expensive: false, constrained: false)
     @ObservationIgnored private let monitor = NWPathMonitor()
@@ -494,6 +495,8 @@ struct UpdateSeams {
 
     // One job at a time: its downloads, two packages ahead, then its next package installs.
     func pump() {
+        // Without a prepared core nothing could install, so nothing downloads or retries either.
+        guard !EmulatorSession.shared.browsing else { return }
         guard let serial = UpdateQueue.next(order: order, jobs: Array(jobs.values)), var job = jobs[serial] else {
             return settle()
         }
@@ -730,8 +733,12 @@ struct UpdateSeams {
 
     fileprivate func progress(_ name: String?, task: Int, bytes: Int64) {
         if let name { heard.insert(name) }
-        guard current(name, task), let spot = locate(name), jobs[spot.serial]?.packages[spot.index].state == .downloading
-        else { return }
+        guard current(name, task), let spot = locate(name), let package = jobs[spot.serial]?.packages[spot.index],
+              package.state == .downloading else { return }
+        // A fast link reports many times a second, and each write redraws everything that shows the progress.
+        let now = ContinuousClock.now
+        guard abs(bytes - package.received) >= package.package.size / 100 || now - progressShown >= .milliseconds(250) else { return }
+        progressShown = now
         jobs[spot.serial]?.packages[spot.index].received = bytes
     }
 

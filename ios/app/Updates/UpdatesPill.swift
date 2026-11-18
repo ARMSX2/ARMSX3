@@ -7,6 +7,8 @@ struct UpdatesPill: View {
     // In RootView's tabs the Install tab opens on Updates; elsewhere the library's Install sheet does.
     let inTabs: Bool
     let openSheet: () -> Void
+    /// A phone as narrow as an iPhone SE, where 160 points would push Add into the toolbar's overflow.
+    var narrow = false
     private var store: UpdateStore { UpdateStore.shared }
 
     var body: some View {
@@ -24,8 +26,8 @@ struct UpdatesPill: View {
                     .font(.footnote.weight(.semibold))
                     .monospacedDigit()
                     .lineLimit(1)
-                    // Narrow enough that Sort, Game Folders and Add stay out of the toolbar's overflow.
-                    .frame(maxWidth: 160)
+                    // Narrow enough that the bar's own buttons stay out of its overflow.
+                    .frame(maxWidth: narrow ? 136 : 160)
                     // White, not the tint: blue text vanished on the blue wallpaper.
                     .foregroundStyle(store.pillFailed ? OverlayTheme.warm : OverlayTheme.textPrimary)
             }

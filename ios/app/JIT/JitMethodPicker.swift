@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// The JIT method list. Under LiveContainer Built-in is not listed, and the app never picks a method for the player.
 
 import SwiftUI
 
@@ -12,12 +11,6 @@ struct JitMethodPicker: View {
 
     var body: some View {
         SettingsPage {
-            if model.liveContainer {
-                Text("Built-in isn't available inside LiveContainer, so it isn't listed.")
-                    .font(.subheadline)
-                    .foregroundStyle(OverlayTheme.textSecondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
             OverlaySectionCard {
                 ForEach(model.choices, id: \.self) { method in
                     ChoiceRow(navigationID: Self.navigationID(method),
@@ -39,6 +32,6 @@ struct JitMethodPicker: View {
         .controllerAccessibilityNavigation(controllerInput: controller.input, scopeKey: "settings.pane.jitanddevice.method",
                                            onBack: { onDone(); return true }, onPreviousTab: controller.onPreviousTab,
                                            onNextTab: controller.onNextTab, onBoundary: controller.onBoundary,
-                                           preferredInitialFocusLabel: model.method.map(Self.navigationID))
+                                           preferredInitialFocusLabel: Self.navigationID(model.method))
     }
 }

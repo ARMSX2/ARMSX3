@@ -30,6 +30,16 @@ import UIKit
         customPath(for: serial) ?? fallback
     }
 
+    /// The covers' file names, read once so a long list looks each game up without a disk check.
+    static func names() -> Set<String> {
+        Set((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
+    }
+
+    static func path(for serial: String, fallback: String?, in names: Set<String>) -> String? {
+        guard isValidSerial(serial) else { return fallback }
+        return ["jpg", "png"].first { names.contains(serial + "." + $0) }.map { file(serial, $0).path } ?? fallback
+    }
+
     // Keeps `data` as the title's cover when it decodes as an image. True when written.
     @discardableResult
     static func set(_ data: Data, serial: String, fallback: String? = nil) -> Bool {

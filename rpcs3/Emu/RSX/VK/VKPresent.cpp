@@ -1537,6 +1537,26 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 		m_async_skipped_first_write = 0;
 	}
 
+	if (const u32 jobs = vk::g_pipe_compile_stats.jobs.exchange(0); m_program_misses || jobs)
+	{
+		const u64 job_us = vk::g_pipe_compile_stats.total_us.exchange(0);
+		const u64 job_max_us = vk::g_pipe_compile_stats.max_us.exchange(0);
+		const u32 job_max_qos = vk::g_pipe_compile_stats.max_qos.exchange(0);
+
+		rsx_log.notice("vk: frame compile time: RSX thread %llu ms in %u missed program loads (max %llu ms), %u built inline (%u tiny, %llu ms, max %llu ms); workers %u pipelines in %llu ms (max %llu ms at QoS 0x%x)",
+			m_program_miss_us / 1000, m_program_misses, m_program_miss_max_us / 1000,
+			m_program_inline, m_program_inline_tiny, m_program_inline_us / 1000, m_program_inline_max_us / 1000,
+			jobs, job_us / 1000, job_max_us / 1000, job_max_qos);
+
+		m_program_misses = 0;
+		m_program_miss_us = 0;
+		m_program_miss_max_us = 0;
+		m_program_inline = 0;
+		m_program_inline_tiny = 0;
+		m_program_inline_us = 0;
+		m_program_inline_max_us = 0;
+	}
+
 #endif
 	// Frame dumps (VKFrameDump.cpp) start, wait and finish on flips.
 	frame_dump_on_flip(info);
@@ -2214,6 +2234,10 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 
 		// Restore the driver manager state to keep things from crashing...
 		driver_manager.set_enabled(true);
+#ifdef __APPLE__
+		// The disabled manager dropped this sync's completions; without them a recording never frees what it disposes.
+		driver_manager.notify_completed(vk::last_completed_event_id());
+#endif
 
 		const bool is_bgra = image_to_copy->format() == VK_FORMAT_B8G8R8A8_UNORM;
 		if (user_asked_for_screenshot)

@@ -163,7 +163,10 @@ target_link_libraries(savers log GLESv2 m)
 # here as an IMPORTED target so the bridge links, and the .aar is what actually
 # packages it.
 # ---------------------------------------------------------------------------
-if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
+# The SDK is not in the repository, so a build without it skips the bridge; DiscordNative copes
+# with the missing library.
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" AND
+    EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/discord_sdk/arm64-v8a/libdiscord_partner_sdk.so)
     add_library(discord_partner_sdk SHARED IMPORTED)
     set_target_properties(discord_partner_sdk PROPERTIES
         IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/discord_sdk/arm64-v8a/libdiscord_partner_sdk.so)

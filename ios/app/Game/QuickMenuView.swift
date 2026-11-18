@@ -14,12 +14,16 @@ struct QuickMenuView: View {
         var screenshot: () -> Void
         var controllers: () -> Void
         var changeDisc: () -> Void
+        // The XMB's Change Disc: this game closes and another disc starts. The quick menu has only the swap.
+        var bootDisc: () -> Void = {}
         var record: () -> Void
         var portal: () -> Void
         // A menu that never shows the row (the smoke scenes' own menus) leaves it empty.
         var friends: () -> Void = {}
         // nil while no touch pad is on screen, which hides the row.
         var touchLayout: (() -> Void)? = nil
+        // nil while the phone feeds no tilt, which hides the row.
+        var recentreTilt: (() -> Void)? = nil
     }
 
     static let controllerScope = "game.quickmenu"
@@ -189,6 +193,11 @@ struct QuickMenuView: View {
                                  action: touchLayout)
                     .disabled(busy)
             }
+            if let recentreTilt = actions.recentreTilt {
+                OverlayActionRow(controllerNavigationID: "quickmenu.recentretilt", label: "Recentre Tilt", systemImage: "gyroscope",
+                                 action: recentreTilt)
+                    .disabled(busy)
+            }
         }
     }
 
@@ -279,6 +288,7 @@ struct QuickMenuView: View {
     private var controllerOrder: [String] {
         let actions = [Self.rowIDs[1], Self.rowIDs[2], "quickmenu.controllers"]
             + (self.actions.touchLayout != nil ? ["quickmenu.touchlayout"] : [])
+            + (self.actions.recentreTilt != nil ? ["quickmenu.recentretilt"] : [])
         let capture = ["quickmenu.screenshot", "quickmenu.record", "quickmenu.portal"] + (signedIn ? [Self.rowIDs[4]] : [])
         let settings = ["quickmenu.volume.down", "quickmenu.volume.up", "quickmenu.scale.down", "quickmenu.scale.up",
                         "quickmenu.framelimit", "quickmenu.perfoverlay", "quickmenu.settings"]

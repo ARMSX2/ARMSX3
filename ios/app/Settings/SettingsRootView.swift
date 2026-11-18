@@ -441,26 +441,6 @@ struct SettingsRootView: View {
     }
 }
 
-// Both scopes read the same dump, so switching sends nothing to the bridge.
-struct GameSettingsChrome: View {
-    let model: SettingsScreenModel
-    // A phone in landscape is short, so the header and the switch sit side by side and compact there.
-    @Environment(\.verticalSizeClass) private var verticalSizeClass
-
-    var body: some View {
-        let short = verticalSizeClass == .compact
-        let layout = short ? AnyLayout(HStackLayout(spacing: 12)) : AnyLayout(VStackLayout(spacing: 12))
-        layout {
-            OverlayHeader(systemImage: "slider.horizontal.3", title: "Game Settings", subtitle: model.gameTitle, compact: short)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            SettingsScopePicker(model: model)
-        }
-        .frame(maxWidth: 720)
-        .padding(.horizontal)
-        .padding(.top, short ? 0 : 16)
-    }
-}
-
 // `compact` draws a menu for a bar too narrow for both segments beside the page's name.
 struct SettingsScopePicker: View {
     let model: SettingsScreenModel
@@ -509,7 +489,10 @@ extension EnvironmentValues {
 struct GameSettingsSheet: View {
     @State private var model: SettingsScreenModel
     @State private var path: [SettingsPane]
+    // Below about 360 points the bar has no room for both segments beside the page's name.
+    @State private var narrow = false
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     init(serial: String, title: String, model: SettingsScreenModel? = nil, path: [SettingsPane] = []) {
         _model = State(initialValue: model ?? SettingsScreenModel(serial: serial, gameTitle: title, scope: .game, fromGameHost: true))
@@ -517,16 +500,25 @@ struct GameSettingsSheet: View {
     }
 
     var body: some View {
+        let short = verticalSizeClass == .compact
         VStack(spacing: 0) {
-            GameSettingsChrome(model: model)
+            OverlayHeader(systemImage: "slider.horizontal.3", title: "Game Settings", subtitle: model.gameTitle, compact: short)
+                .frame(maxWidth: 720, alignment: .leading)
+                .padding(.horizontal)
+                .padding(.top, short ? 8 : 16)
+            // Done and the scope switch share the stack's bar, so no row holds a lone button.
             NavigationStack(path: $path) {
                 SettingsScreen(model: model, path: $path,
                                controller: SettingsControllerContext(onCloseHost: { dismiss(); return true }))
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } }
+                        ToolbarItem(placement: .topBarTrailing) { SettingsScopePicker(model: model, compact: narrow).fixedSize() }
                     }
             }
+            .onGeometryChange(for: Bool.self) { $0.size.width < 360 } action: { narrow = $0 }
+            .environment(\.inGameScopeBar, true)
+            .environment(\.inGameScopeCompact, narrow)
             .settingsFailureAlert(model)
         }
         .background(OverlayFrostBackground().ignoresSafeArea())

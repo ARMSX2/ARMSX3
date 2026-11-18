@@ -248,6 +248,22 @@ static inline int armsx3_jit_budget_ms(long long stored, int fallback)
 	return stored >= ARMSX3_JIT_BUDGET_MIN_MS && stored <= ARMSX3_JIT_BUDGET_MAX_MS ? stored : fallback;
 }
 
+// The walk's budget for a split: grown toward MAX until the fixed pages and both needs fit BUDGET_PERCENT of it at the stored rate.
+static inline unsigned long long armsx3_jit_walk_budget_ms(const struct armsx3_jit_split* s, const struct armsx3_jit_pool_history* h,
+	unsigned long long fixed_pages, unsigned long long budget_ms)
+{
+	// A nonzero budget_pages means a counted session and a stored rate inside its bounds.
+	if (s->budget_pages == 0 || budget_ms >= ARMSX3_JIT_BUDGET_MAX_MS)
+	{
+		return budget_ms;
+	}
+
+	const unsigned long long pages = fixed_pages + s->need2 / ARMSX3_JIT_SPLIT_PAGE + s->need3 / ARMSX3_JIT_SPLIT_PAGE;
+	const unsigned long long per = ARMSX3_JIT_SPLIT_BUDGET_PERCENT * h->rate_pages;
+	const unsigned long long want = (pages * 100 * h->rate_ms + per - 1) / per;
+	return want <= budget_ms ? budget_ms : want < ARMSX3_JIT_BUDGET_MAX_MS ? want : ARMSX3_JIT_BUDGET_MAX_MS;
+}
+
 // The second StikDebug pass, mid-game when a pool nears its cap: two ranges, then four empty ones.
 #define ARMSX3_JIT_SECOND_WORDS 12
 

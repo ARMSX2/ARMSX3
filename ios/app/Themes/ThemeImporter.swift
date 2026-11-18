@@ -85,6 +85,8 @@ enum ThemeImporter {
                 }
             }
         }
+        // The theme's own icons and sounds, kept beside it for the XMB.
+        XmbThemeAssets.extract(DataByteSource(mapped), into: staging.appendingPathComponent(XmbThemeAssets.folderName, isDirectory: true))
         guard (try? fm.removeItem(at: copy)) != nil else { return .failure(.writeFailed) }
 
         let meta = ThemeMeta(version: 1,

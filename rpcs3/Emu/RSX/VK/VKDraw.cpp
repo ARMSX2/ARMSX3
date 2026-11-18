@@ -10,6 +10,9 @@
 #include "Emu/RSX/rsx_profiler.h"
 #include "vkutils/buffer_object.h"
 #include "vkutils/chip_class.h"
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+#include "ios_jit_dual_map.h"
+#endif
 #include <vulkan/vulkan_core.h>
 
 #include "Emu/RSX/NV47/HW/context_accessors.define.h"
@@ -1441,10 +1444,42 @@ bool VKGSRender::resolve_sampler_state(rsx::flags32_t& invalidated_programs)
 		m_current_frame->flags &= ~frame_context_state::dirty;
 	}
 
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+	// At its 128 MiB ceiling a full upload ring can only swap mid-upload, and holding two gets 4 GB iPhones killed
+	static u64 s_upload_ring_reclaim_frame = umax;
+	if (utils::low_memory_device() && m_texture_upload_buffer_ring_info.size() >= 128 * 0x100000 &&
+		m_texture_upload_buffer_ring_info.needs_room(32 * 0x100000) && s_upload_ring_reclaim_frame != vk::get_current_frame_id())
+	{
+		s_upload_ring_reclaim_frame = vk::get_current_frame_id();
+		flush_command_queue(true);
+	}
+#endif
+
 	invalidated_programs = load_texture_env();
 	return true;
 }
 
+#ifdef __APPLE__
+bool VKGSRender::bound_target_unwritten()
+{
+	// dirty() stays true until the first write after creation or re-format.
+	if (auto ds = std::get<1>(res()->surface_cache.m_bound_depth_stencil); ds && ds->dirty())
+	{
+		return true;
+	}
+
+	for (auto& rtt : res()->surface_cache.m_bound_render_targets)
+	{
+		if (auto surface = std::get<1>(rtt); surface && surface->dirty())
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+#endif
 bool VKGSRender::end_draw()
 {
 	// begin_draw() carries a scope and end_draw() did not, so every per-draw cost here fell
@@ -1466,25 +1501,12 @@ bool VKGSRender::end_draw()
 		// Program is not ready, skip drawing this
 #ifdef __APPLE__
 		m_async_skipped_draws++;
-		if (m_ctx->program.fragment_program.ucode_length <= sync_compile_max_fp_ucode_bytes)
+		if (m_ctx->program.fragment_program.ucode_length <= tiny_fp_max_ucode_bytes)
 		{
 			m_async_skipped_tiny++;
 		}
 
-		// dirty() stays true until the first write after creation or re-format.
-		bool first_write = false;
-		if (auto ds = std::get<1>(res()->surface_cache.m_bound_depth_stencil); ds && ds->dirty())
-		{
-			first_write = true;
-		}
-		for (auto& rtt : res()->surface_cache.m_bound_render_targets)
-		{
-			if (auto surface = std::get<1>(rtt); surface && surface->dirty())
-			{
-				first_write = true;
-			}
-		}
-		m_async_skipped_first_write += first_write;
+		m_async_skipped_first_write += bound_target_unwritten();
 
 #endif
 		std::this_thread::yield();

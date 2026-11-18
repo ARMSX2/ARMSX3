@@ -171,7 +171,19 @@ private:
 	u32 m_async_skipped_draws = 0;
 	u32 m_async_skipped_tiny = 0;
 	u32 m_async_skipped_first_write = 0;
-	static constexpr u32 sync_compile_max_fp_ucode_bytes = 32;
+	static constexpr u32 tiny_fp_max_ucode_bytes = 32;
+
+	// A bound colour or depth surface has not been drawn to since it was created or re-formatted
+	bool bound_target_unwritten();
+
+	// Program loads that missed the cache this frame and how long the RSX thread spent in them, logged in flip()
+	u32 m_program_misses = 0;
+	u64 m_program_miss_us = 0;
+	u64 m_program_miss_max_us = 0;
+	u32 m_program_inline = 0;
+	u32 m_program_inline_tiny = 0;
+	u64 m_program_inline_us = 0;
+	u64 m_program_inline_max_us = 0;
 
 	// iOS kills the app before the GPU reports pressure, so the texture cache is held to its quota at frame end
 	void enforce_texture_cache_quota();
@@ -317,6 +329,19 @@ private:
 	rsx::context* m_offloader_fault_ctx = nullptr;
 	utils::address_range32 m_offloader_fault_range;
 	rsx::invalidation_cause m_offloader_fault_cause;
+
+#ifdef __APPLE__
+	// Deferred readbacks running on guest threads: whose cache, and the memory their sections cover
+	struct flush_in_flight
+	{
+		const void* cache;
+		utils::address_range32 range;
+	};
+
+	shared_mutex m_flushes_in_flight_mutex;
+	std::vector<flush_in_flight> m_flushes_in_flight;
+	atomic_t<u32> m_flushes_in_flight_done = 0;
+#endif
 
 	vk::draw_call_t m_current_draw {};
 

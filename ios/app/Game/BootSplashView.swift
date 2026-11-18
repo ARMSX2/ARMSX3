@@ -6,6 +6,8 @@ import SwiftUI
 import UIKit
 
 struct BootSplashView: View {
+    // Off until the intro fits a portrait screen; the square video shows boxed in black on a phone.
+    nonisolated static let plays = false
     private static let hardTimeout: UInt64 = 6_000_000_000
     private static let idleVMPrewarmResolved = Notification.Name(
         "ARMSX2iOSIdleVMPrewarmResolved"

@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "swapchain.h"
 #ifdef __APPLE__
+#include "../VKHelpers.h"
 // Forward-declared rather than including Emu/RSX/RSXThread.h, as vkutils/shared.cpp does.
 namespace rsx { void request_device_lost_shutdown(const char* reason); }
 #endif
@@ -697,6 +698,9 @@ namespace vk
 			present.pWaitSemaphores = &semaphore;
 		}
 
+#ifdef __APPLE__
+		wait_while_gpu_work_refused();
+#endif
 		return _vkQueuePresentKHR(dev.get_present_queue(), &present);
 	}
 }

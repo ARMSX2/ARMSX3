@@ -34,6 +34,25 @@
 
 #include <algorithm>
 
+#if defined(__APPLE__) && defined(__aarch64__)
+#include <arm_neon.h>
+
+// Every Apple arm64 CPU has the AES instructions, even when -march leaves them out.
+// The round keys are already in the byte order AESE takes.
+__attribute__((target("aes")))
+static void aes_encrypt_block_arm( const aes_context *ctx, const unsigned char input[16], unsigned char output[16] )
+{
+    const uint8_t *rk = reinterpret_cast<const uint8_t*>( ctx->rk );
+    uint8x16_t b = vld1q_u8( input );
+
+    for( int i = 0; i < ctx->nr - 1; i++, rk += 16 )
+        b = vaesmcq_u8( vaeseq_u8( b, vld1q_u8( rk ) ) );
+
+    b = veorq_u8( vaeseq_u8( b, vld1q_u8( rk ) ), vld1q_u8( rk + 16 ) );
+    vst1q_u8( output, b );
+}
+#endif
+
 /*
  * 32-bit integer manipulation macros (little endian)
  */
@@ -668,6 +687,14 @@ int aes_crypt_ecb( aes_context *ctx,
 #if defined(__SSE2__) || defined(_M_X64)
     if( aesni_supports( POLARSSL_AESNI_AES ) )
         return( aesni_crypt_ecb( ctx, mode, input, output ) );
+#endif
+
+#if defined(__APPLE__) && defined(__aarch64__)
+    if( mode == AES_ENCRYPT )
+    {
+        aes_encrypt_block_arm( ctx, input, output );
+        return( 0 );
+    }
 #endif
 
     RK = ctx->rk;

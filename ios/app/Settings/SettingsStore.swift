@@ -5,6 +5,36 @@ import Foundation
 import Observation
 import SwiftUI
 
+// Standard keeps the button top centre on a sideways phone, between the shoulder buttons, and top right otherwise.
+enum MenuButtonPosition: String, CaseIterable {
+    case standard, topCentre, topLeft, topRight
+
+    var title: String {
+        switch self {
+        case .standard: String(localized: "Default")
+        case .topCentre: String(localized: "Top Centre")
+        case .topLeft: String(localized: "Top Left")
+        case .topRight: String(localized: "Top Right")
+        }
+    }
+
+    func resolved(landscape: Bool) -> MenuButtonPosition {
+        self == .standard ? (landscape ? .topCentre : .topRight) : self
+    }
+}
+
+enum MenuButtonVisibility: String, CaseIterable {
+    case always, fadeWhenIdle, hidden
+
+    var title: String {
+        switch self {
+        case .always: String(localized: "Always")
+        case .fadeWhenIdle: String(localized: "Fade When Idle")
+        case .hidden: String(localized: "Hidden")
+        }
+    }
+}
+
 @MainActor @Observable final class SettingsStore {
     static let shared = SettingsStore()
 
@@ -34,6 +64,14 @@ import SwiftUI
 
     var padVibrates: Bool {
         didSet { defaults.set(padVibrates, forKey: Self.key("padVibrates")) }
+    }
+
+    var menuButtonPosition: MenuButtonPosition {
+        didSet { defaults.set(menuButtonPosition.rawValue, forKey: Self.key("menuButtonPosition")) }
+    }
+
+    var menuButtonVisibility: MenuButtonVisibility {
+        didSet { defaults.set(menuButtonVisibility.rawValue, forKey: Self.key("menuButtonVisibility")) }
     }
 
     var backgroundDim: Double {
@@ -74,6 +112,36 @@ import SwiftUI
     }
 
     var hasCustomBackground: Bool { dynamicBackgroundsEnabled || backgroundPrimaryAsset != nil }
+
+    /// The console's XrossMediaBar in place of the library tabs, kept across launches.
+    var xmbMode: Bool {
+        didSet { defaults.set(xmbMode, forKey: Self.key("xmbMode")) }
+    }
+
+    /// The XMB's colour: -1 follows the month as the console's Original does, 0 to 11 is a month, 12 cycles through them.
+    var xmbThemeColor: Int {
+        didSet { defaults.set(xmbThemeColor, forKey: Self.key("xmbThemeColor")) }
+    }
+
+    /// A focused game's PIC1 behind the XMB.
+    var xmbGameBackgrounds: Bool {
+        didSet { defaults.set(xmbGameBackgrounds, forKey: Self.key("xmbGameBackgrounds")) }
+    }
+
+    /// A focused game's ICON1 playing in place of its icon.
+    var xmbAnimatedIcons: Bool {
+        didSet { defaults.set(xmbAnimatedIcons, forKey: Self.key("xmbAnimatedIcons")) }
+    }
+
+    /// A focused game's SND0 playing.
+    var xmbGameMusic: Bool {
+        didSet { defaults.set(xmbGameMusic, forKey: Self.key("xmbGameMusic")) }
+    }
+
+    /// The XMB's theme, a saved theme's folder name, or nil for Original. The library's background is its own.
+    var xmbTheme: String? {
+        didSet { defaults.set(xmbTheme, forKey: Self.key("xmbTheme")) }
+    }
 
     // MARK: - Glass
 
@@ -160,10 +228,6 @@ import SwiftUI
         didSet { defaults.set(stikdebugRequestedAt, forKey: Self.key("stikdebugRequestedAt")) }
     }
 
-    var forceJitScript: Bool {
-        didSet { defaults.set(forceJitScript, forKey: Self.key("forceJitScript")) }
-    }
-
     // MARK: - First-run setup
 
     /// Setup never opens by itself once this is set; Run Setup Again does not clear it.
@@ -202,6 +266,11 @@ import SwiftUI
         didSet { defaults.set(controllerTiltInvert, forKey: Self.key("controllerTiltInvert")) }
     }
 
+    /// Percent, by player. Clamped where it is applied.
+    var controllerTiltSensitivity: [String: Int] {
+        didSet { defaults.set(controllerTiltSensitivity, forKey: Self.key("controllerTiltSensitivity")) }
+    }
+
     var gyroStickTarget: [String: Int] {
         didSet { defaults.set(gyroStickTarget, forKey: Self.key("gyroStickTarget")) }
     }
@@ -209,6 +278,11 @@ import SwiftUI
     /// Clamped where it is applied.
     var gyroStickSensitivity: [String: Int] {
         didSet { defaults.set(gyroStickSensitivity, forKey: Self.key("gyroStickSensitivity")) }
+    }
+
+    /// MotionBinding.key to a motion's name to the element that plays it.
+    var motionBindings: [String: [String: String]] {
+        didSet { defaults.set(motionBindings, forKey: Self.key("motionBindings")) }
     }
 
     /// The core's own switch is that title's `Input/Output@@Move` = `Fake`, which the Controllers pane writes beside it.
@@ -263,11 +337,19 @@ import SwiftUI
         func double(_ member: String, _ fallback: Double) -> Double { defaults.object(forKey: Self.key(member)) as? Double ?? fallback }
 
         dynamicBackgroundsEnabled = bool("dynamicBackgroundsEnabled", true)
+        xmbMode = bool("xmbMode", false)
+        xmbThemeColor = min(max(defaults.object(forKey: Self.key("xmbThemeColor")) as? Int ?? -1, -1), 12)
+        xmbGameBackgrounds = bool("xmbGameBackgrounds", true)
+        xmbAnimatedIcons = bool("xmbAnimatedIcons", true)
+        xmbGameMusic = bool("xmbGameMusic", true)
+        xmbTheme = defaults.string(forKey: Self.key("xmbTheme"))
         dynamicAppearancePreferences = defaults.data(forKey: Self.key("dynamicAppearancePreferences"))
             .flatMap { try? JSONDecoder().decode(DynamicAppearancePreferences.self, from: $0) } ?? .standard
         backgroundDim = min(max(double("backgroundDim", 0), 0), 1)
         padOpacity = min(max(double("padOpacity", 0.75), 0.2), 1)
         padVibrates = bool("padVibrates", true)
+        menuButtonPosition = defaults.string(forKey: Self.key("menuButtonPosition")).flatMap(MenuButtonPosition.init(rawValue:)) ?? .standard
+        menuButtonVisibility = defaults.string(forKey: Self.key("menuButtonVisibility")).flatMap(MenuButtonVisibility.init(rawValue:)) ?? .always
         func asset(_ member: String) -> BackgroundAsset? {
             defaults.data(forKey: Self.key(member)).flatMap { try? JSONDecoder().decode(BackgroundAsset.self, from: $0) }
         }
@@ -297,16 +379,17 @@ import SwiftUI
         jitMethodAtLaunch = method
         jitMethod = method
         stikdebugRequestedAt = double("stikdebugRequestedAt", 0)
-        forceJitScript = bool("forceJitScript", false)
         setupFinished = bool("setupFinished", false)
         setupStep = defaults.object(forKey: Self.key("setupStep")) as? Int ?? 0
         controllerMacroBindings = defaults.dictionary(forKey: Self.key("controllerMacroBindings")) as? [String: String] ?? [:]
         controllerPins = defaults.dictionary(forKey: Self.key("controllerPins")) as? [String: Int] ?? [:]
         controllerTiltOff = defaults.array(forKey: Self.key("controllerTiltOff")) as? [Int] ?? []
         controllerTiltInvert = defaults.dictionary(forKey: Self.key("controllerTiltInvert")) as? [String: Int] ?? [:]
+        controllerTiltSensitivity = defaults.dictionary(forKey: Self.key("controllerTiltSensitivity")) as? [String: Int] ?? [:]
         gyroStickTarget = defaults.dictionary(forKey: Self.key("gyroStickTarget")) as? [String: Int] ?? [:]
         gyroStickSensitivity = defaults.dictionary(forKey: Self.key("gyroStickSensitivity")) as? [String: Int] ?? [:]
         moveSlot = defaults.dictionary(forKey: Self.key("moveSlot")) as? [String: Int] ?? [:]
+        motionBindings = defaults.dictionary(forKey: Self.key("motionBindings")) as? [String: [String: String]] ?? [:]
         movePointer = defaults.dictionary(forKey: Self.key("movePointer")) as? [String: Int] ?? [:]
         let keyboard = defaults.object(forKey: Self.key("keyboardSlot")) as? Int ?? -1
         keyboardSlot = (0...3).contains(keyboard) ? keyboard : -1

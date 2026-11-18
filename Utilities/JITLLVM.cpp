@@ -221,7 +221,12 @@ static u64 make_null_function(const std::string& name)
 			// AArch64 implementation
 			Label data = c.newLabel();
 			Label jump_address = c.newLabel();
+#ifdef __APPLE__
+			// null() takes the name's address, not its first eight bytes
+			c.adr(args[0], data);
+#else
 			c.ldr(args[0], arm::ptr(data, 0));
+#endif
 			c.ldr(a64::x14, arm::ptr(jump_address, 0));
 			c.br(a64::x14);
 

@@ -12,7 +12,7 @@ struct DiscPicker: View {
     @State private var discs: [Rpcs3GameEntry] = []
     @State private var filesShown = false
 
-    static let fileTypes: [UTType] = [.folder] + [UTType(filenameExtension: "iso")].compactMap { $0 }
+    static let fileTypes: [UTType] = [.folder] + ["iso", "chd"].compactMap { UTType(filenameExtension: $0) }
 
     static func isDisc(_ game: Rpcs3GameEntry) -> Bool { game.isISO || game.category == "DG" }
 

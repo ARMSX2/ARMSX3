@@ -291,7 +291,11 @@ dependencies {
     // without this the :discord process aborts with ClassNotFoundException even
     // though the .so links fine. proguard-rules.pro keeps them from being
     // renamed for the same reason.
-    implementation(files("libs/discord_partner_sdk.aar"))
+    //
+    // Absent in a build that has no SDK, which then ships without Discord sign-in.
+    if (file("libs/discord_partner_sdk.aar").exists()) {
+        implementation(files("libs/discord_partner_sdk.aar"))
+    }
 
     implementation(libs.androidx.browser)
 

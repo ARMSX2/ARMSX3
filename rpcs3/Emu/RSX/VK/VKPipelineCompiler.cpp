@@ -7,6 +7,10 @@
 #if defined(__APPLE__) && defined(ARCH_ARM64)
 #include <sys/sysctl.h>
 #endif
+#ifdef __APPLE__
+#include "Emu/Cell/timers.hpp"
+#include <pthread.h>
+#endif
 #include "Emu/system_config.h"
 
 #include "util/sysinfo.hpp"
@@ -20,6 +24,24 @@ namespace vk
 #ifdef __APPLE__
 	// Set by destroy only, so a Stop drops queued compiles; a resize must still compile them.
 	atomic_t<bool> g_pipe_compilers_stopping{};
+	pipe_compile_stats g_pipe_compile_stats;
+
+	static void note_pipe_compile(u64 started_us)
+	{
+		const u64 us = get_system_time() - started_us;
+		qos_class_t qos = QOS_CLASS_UNSPECIFIED;
+		pthread_get_qos_class_np(pthread_self(), &qos, nullptr);
+
+		g_pipe_compile_stats.jobs++;
+		g_pipe_compile_stats.total_us += us;
+
+		// Racy max, good enough for a log line.
+		if (us > g_pipe_compile_stats.max_us.observe())
+		{
+			g_pipe_compile_stats.max_us.release(us);
+			g_pipe_compile_stats.max_qos.release(static_cast<u32>(qos));
+		}
+	}
 #endif
 	VkPipelineCache g_pipeline_cache = VK_NULL_HANDLE;
 
@@ -126,9 +148,12 @@ namespace vk
 #endif
 		while (thread_ctrl::state() != thread_state::aborting)
 		{
-			for (auto&& job : m_work_queue.pop_all())
-			{
 #ifdef __APPLE__
+			while (auto* queue = next_job_queue())
+			{
+				pipe_compiler_job job = std::move(queue->front());
+				queue->pop_front();
+
 				// Stopping: the rest of the queue is dropped and compiled again on a later boot.
 				if (g_pipe_compilers_stopping)
 				{
@@ -168,6 +193,9 @@ namespace vk
 				}
 #endif
 
+#else
+			for (auto&& job : m_work_queue.pop_all())
+			{
 #endif
 				if (!job.is_graphics_job)
 				{
@@ -179,9 +207,15 @@ namespace vk
 					continue;
 				}
 
+#ifdef __APPLE__
+				const u64 started_us = get_system_time();
+#endif
 				if (job.create_info_func)
 				{
 					auto compiled = int_compile_graphics_pipe(job.create_info_func, job.inputs, {}, job.flags);
+#ifdef __APPLE__
+					note_pipe_compile(started_us);
+#endif
 					job.callback_func(compiled);
 #ifdef __APPLE__
 					m_pending_jobs--;
@@ -190,6 +224,9 @@ namespace vk
 				}
 
 				auto compiled = int_compile_graphics_pipe(job.graphics_data, job.graphics_modules, job.inputs, {}, job.flags, &job.vtx_spec);
+#ifdef __APPLE__
+				note_pipe_compile(started_us);
+#endif
 				job.callback_func(compiled);
 #ifdef __APPLE__
 				m_pending_jobs--;
@@ -199,6 +236,24 @@ namespace vk
 			thread_ctrl::wait_on(m_work_queue);
 		}
 	}
+
+#ifdef __APPLE__
+	std::deque<pipe_compiler::pipe_compiler_job>* pipe_compiler::next_job_queue()
+	{
+		// Looked at before every job, so an urgent one waits only for the compile in hand.
+		for (auto&& job : m_work_queue.pop_all())
+		{
+			(job.flags & COMPILE_URGENT ? m_urgent_jobs : m_queued_jobs).push_back(std::move(job));
+		}
+
+		if (!m_urgent_jobs.empty())
+		{
+			return &m_urgent_jobs;
+		}
+
+		return m_queued_jobs.empty() ? nullptr : &m_queued_jobs;
+	}
+#endif
 
 	std::unique_ptr<glsl::program> pipe_compiler::int_compile_compute_pipe(
 		const VkComputePipelineCreateInfo& create_info,

@@ -133,6 +133,15 @@ private extension UIKeyboardHIDUsage {
         default: nil
         }
     }
+
+    /// Return, keypad Enter and Escape: the XMB's Cross and Circle, as Android's library confirms with Enter.
+    var xmbCommand: MenuControllerCommand? {
+        switch rawValue {
+        case 40, 88: .activate
+        case 41: .back
+        default: nil
+        }
+    }
 }
 
 /// A small bridge between UIKit presses and the SwiftUI-owned
@@ -156,11 +165,14 @@ final class ControllerEventDeliveryCoordinator {
     /// Keyboard arrows are bridged here, for Simulator and hardware keyboards.
     func handleMenuPressesEvent(_ presses: Set<UIPress>) -> Bool {
         guard menuActive else { return false }
-        if let keyboardPress = presses.first(where: {
-            $0.key?.keyCode.menuControllerCommand != nil
-        }) {
-            if keyboardPress.phase == .began,
-               let command = keyboardPress.key?.keyCode.menuControllerCommand {
+        // Other screens keep Return and Escape for their own fields and buttons.
+        let xmb = router?.isPadFirstCaptured == true
+        func command(_ press: UIPress) -> MenuControllerCommand? {
+            guard let code = press.key?.keyCode else { return nil }
+            return code.menuControllerCommand ?? (xmb ? code.xmbCommand : nil)
+        }
+        if let keyboardPress = presses.first(where: { command($0) != nil }) {
+            if keyboardPress.phase == .began, let command = command(keyboardPress) {
                 router?.handleKeyboardDirectionalPress(command)
             }
             return true

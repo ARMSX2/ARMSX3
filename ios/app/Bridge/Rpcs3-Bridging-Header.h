@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Exactly one import, and no C layer behind it.
+// The facade and its XMB category, and no C layer behind them.
 
 #import "Rpcs3Bridge.h"
+#import "Rpcs3Bridge+Xmb.h"

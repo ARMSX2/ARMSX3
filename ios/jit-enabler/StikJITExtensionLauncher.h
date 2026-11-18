@@ -18,11 +18,13 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)resetDDIWithReply:(void (^)(NSDictionary<NSString*, id>* result))reply;
 // Mounts the disk image with the pairing bytes, reporting stages through helperStage: as it works.
 - (void)mountDDIWithPairing:(NSData*)pairing withReply:(void (^)(NSDictionary<NSString*, id>* result))reply;
+// Asks only whether the disk image is mounted; reports connecting and pairing through helperStage:.
+- (void)checkSetupWithPairing:(NSData*)pairing withReply:(void (^)(NSDictionary<NSString*, id>* result))reply;
 @end
 
 @protocol Armsx3JITEnablerHost
 - (void)helperLog:(NSString*)line;
-// One stage word, forward only: connecting, downloading, mounting, checking.
+// One stage word, forward only: connecting, pairing, downloading, mounting, checking.
 - (void)helperStage:(NSString*)word;
 @end
 
@@ -34,7 +36,7 @@ extern NSString* const kArmsx3ResultDetachMs;        // NSNumber (ms), or -1
 extern NSString* const kArmsx3ResultPagesRequested;  // NSNumber, or -1
 extern NSString* const kArmsx3ResultPagesWritten;    // NSNumber, or -1
 // Disk-image reply keys: a closed result word and a [a-z0-9:/-] reason of at most 47 characters.
-extern NSString* const kArmsx3DDIResult;             // NSString: deleted | failed for Reset; ready | unreachable | download | pairing | mount | other for Mount
+extern NSString* const kArmsx3DDIResult;             // NSString: deleted | failed for Reset; ready | unreachable | download | pairing | mount | other for Mount; ready | unreachable | pairing | unmounted | other for Check
 extern NSString* const kArmsx3DDIReason;             // NSString: a path-free reason token
 
 @interface StikJITExtensionLauncher : NSObject
@@ -87,9 +89,20 @@ typedef struct {
     char reason[48];
 } armsx3_jit_enabler_ddi_result;
 
+// The words describe this launch's pre-main pairing lookup and never carry a path, a name on disk or the file's contents.
+typedef struct {
+    char used[24]; // own | sidestore-lc-rp | sidestore-lc-alt, or "" when no file was sent
+    char format[16]; // rp | rp-lockdown, or ""
+    char result[16]; // accepted | rejected | not-tried
+    char rejected[24]; // the source word of a file the device rejected earlier this launch, or ""
+    char documents[16]; // moved | invalid | lockdown, or "": what pre-main did with Documents/pairingFile.plist
+    int32_t tried; // files sent to the helper this launch, 0 to 3
+} armsx3_jit_pairing_report;
+
 typedef enum {
     ARMSX3_JIT_DDI_OP_MOUNT = 1,
     ARMSX3_JIT_DDI_OP_RESET = 2,
+    ARMSX3_JIT_DDI_OP_CHECK = 3,
 } armsx3_jit_ddi_op;
 
 // extern "C" only for a C++ includer; the .m defines both with plain C linkage.
@@ -108,9 +121,12 @@ int armsx3_jit_enabler_prepare_ranges(const uint64_t* _Nullable ranges, uint32_t
 // Copies the last published result under a lock: 0 when there is one, -1 when there is none or result is NULL.
 int armsx3_jit_enabler_last_result(armsx3_jit_enabler_result* _Nullable result);
 
-// One disk-image operation, after main() and off the main queue: it blocks up to 30 s, or 900 s for Mount; 0 on a valid reply, else -1.
+// One disk-image operation, after main() and off the main queue: it blocks up to 30 s, 60 s for Check, or 900 s for Mount; 0 on a valid reply, else -1.
 int armsx3_jit_enabler_ddi(int32_t op, void (^ _Nullable stage)(const char* word),
                            armsx3_jit_enabler_ddi_result* _Nullable out);
+
+// Copies the report under a lock: 0 when the lookup ran this launch, -1 when it did not or out is NULL.
+int armsx3_jit_enabler_pairing_report(armsx3_jit_pairing_report* _Nullable out);
 
 #ifdef __cplusplus
 }

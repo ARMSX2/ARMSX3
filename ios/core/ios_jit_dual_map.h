@@ -65,8 +65,8 @@ namespace utils
 	// Gives a pool 3 unit back after the caller decommitted it; upstream never releases, but iOS cannot spare the address space.
 	void jit_dual_map_release(jit_pool pool, void* unit) noexcept;
 
-	// Matches MemoryManager1::c_page_size, the unit LLVM commits in.
-	constexpr usz jit_pool3_unit_granularity = 2 * 1024 * 1024;
+	// One 16 KiB page, the unit the prepare proves: each PPU module has its own chunks, and most hold a few hundred KiB.
+	constexpr usz jit_pool3_unit_granularity = 16 * 1024;
 
 	// A pool 3 carve that waits this long is exhausted for good, so it stops with the unit table instead of hanging.
 	constexpr unsigned long long jit_pool3_carve_wait_ms = 30000;
@@ -173,7 +173,7 @@ namespace utils
 		const char*        script_text;
 		unsigned long long script_report_addr;
 
-		// Pool 3's unit accounting, filled for every pool; carved and released count chunks, live, peak and capacity count 2 MiB granules.
+		// Pool 3's unit accounting, filled for every pool; carved and released count chunks, live, peak and capacity count granules.
 		unsigned long long llvm_units_carved;
 		unsigned long long llvm_units_released;
 		unsigned long long llvm_units_live;

@@ -21,6 +21,7 @@ enum GameLibraryControllerMenuAction: String, Identifiable, Equatable {
     case clearGameCache
     case deleteGameData
     case deleteGame
+    case removeGame
     case rename
     // The PS3 library's favourite row, which ARMSX2's library keeps outside this menu.
     case favourite
@@ -117,6 +118,8 @@ struct ControllerGameContextMenu: View {
                         menuItems(maxHeight: menuHeight, isCompact: isCompact)
                     }
                     .padding(isCompact ? 11 : 18)
+                    // A panel this large shows the cards behind through plain glass as sharp-edged patches.
+                    .background(.ultraThinMaterial, in: .rect(cornerRadius: 26))
                 }
                 .frame(width: panelWidth)
                 .environment(\.clearLiquidGlassUIEnabled, false)
@@ -257,7 +260,10 @@ struct ControllerGameContextMenu: View {
                     }
                 }
             }
+            // Drop the page's tab-bar margin, and clip what the list draws into the safe area below the panel.
+            .contentMargins(.vertical, 0, for: .scrollContent)
             .frame(height: maxHeight)
+            .clipped()
             .scrollIndicators(.visible)
             .onChange(of: selectedAction) { _, action in
                 guard let action else { return }

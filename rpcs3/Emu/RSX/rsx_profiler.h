@@ -113,12 +113,19 @@ namespace rsx::prof
 	/** Cheap identity check: one register read, no TLS machinery. */
 	inline const void* current_thread_token()
 	{
+#if defined(__APPLE__) && defined(__aarch64__)
+		// Darwin shares TPIDR_EL0 between threads; the thread's own TSD base is in TPIDRRO_EL0
+		uptr tsd;
+		__asm__("mrs %0, TPIDRRO_EL0" : "=r"(tsd));
+		return reinterpret_cast<const void*>(tsd & ~uptr{7});
+#else
 #if defined(__aarch64__)
 		return __builtin_thread_pointer();
 #else
 		// Falls back to a real thread local off the hot path's critical arch.
 		static thread_local char anchor = 0;
 		return &anchor;
+#endif
 #endif
 	}
 

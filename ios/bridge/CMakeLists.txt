@@ -23,6 +23,7 @@ add_library(armsx3_bridge STATIC
     rpcs3_ios_abi_settings.cpp
     settings_engine.cpp
     stderr_log_listener.cpp
+    xmb_media.cpp
 )
 
 # These import frameworks the macOS SDK lacks, so they build for iOS only; the app target links the frameworks.

@@ -22,7 +22,7 @@ DIAGNOSTICS = ROOT / "ios" / "app" / "Diagnostics" / "DiagnosticsStore.swift"
 VFS_CONFIG = ROOT / "rpcs3" / "Emu" / "vfs_config.h"
 SYSINFO = ROOT / "rpcs3" / "util" / "sysinfo.cpp"
 
-SAVED = (-3, 0, 1, 3, 6, 7, 9)
+SAVED = (-3, 0, 1, 3, 6, 7, 8, 9)
 LAUNCH_CASES = list(itertools.product((False, True), SAVED, (False, True), (False, True)))
 STEPS = range(-1, 9)
 SUPPORT = "/AppSupport"
@@ -53,7 +53,7 @@ FIRMWARE_VALUES = [
 
 def expected_launch(finished, saved, folders, firmware):
     """The first rule that holds: (present, markFinished)."""
-    if 1 <= saved <= 6:
+    if 1 <= saved <= 7:
         return saved, False
     if finished:
         return None, False
@@ -146,11 +146,11 @@ def rules_problems(out, marker):
         if launch.get(case) != want:
             problems.append("launch: finished={0} saved={1} folders={2} firmware={3} gave {4}, wanted {5}".format(
                 case[0], case[1], case[2], case[3], launch.get(case), want))
-    if count != 6:
-        problems.append("order: stepCount is {0}, wanted 6".format(count))
+    if count != 7:
+        problems.append("order: stepCount is {0}, wanted 7".format(count))
     for n in STEPS:
-        want_next = n + 1 if 1 <= n <= 5 else None
-        want_prev = n - 1 if 2 <= n <= 6 else None
+        want_next = n + 1 if 1 <= n <= 6 else None
+        want_prev = n - 1 if 2 <= n <= 7 else None
         if nexts.get(n, "absent") != want_next:
             problems.append("order: next({0}) gave {1}, wanted {2}".format(n, nexts.get(n, "absent"), want_next))
         if prevs.get(n, "absent") != want_prev:
@@ -262,6 +262,20 @@ def firmware_wiring_problems(flow):
     return problems
 
 
+def primary_problems(flow):
+    """Step 3 with JIT off takes the JIT-off screen's primary on every row, reopen rows included."""
+    problems = []
+    code, _ = scan(flow)
+    if "static func primary(step: Int" not in code:
+        return ["primary: SetupFlow declares no static func primary(step: Int"]
+    body = braced(code, "static func primary(step: Int")
+    if "model.step.primary.map(SetupStepPrimary.jit)" not in body:
+        problems.append("primary: step 3 does not return model.step.primary.map(SetupStepPrimary.jit)")
+    if "reopenRows" in body:
+        problems.append("primary: step 3 drops the primary on reopen rows")
+    return problems
+
+
 def controller_problems(flow):
     """Step 6's live name and its announcement."""
     problems = []
@@ -355,7 +369,7 @@ class Launch(unittest.TestCase):
     def test_control_the_expected_table_is_d_15_08(self):
         self.assertEqual(expected_launch(True, 3, True, True), (3, False))
         self.assertEqual(expected_launch(True, 0, False, False), (None, False))
-        self.assertEqual(expected_launch(False, 7, False, False), (1, False))
+        self.assertEqual(expected_launch(False, 8, False, False), (1, False))
         self.assertEqual(expected_launch(False, 0, True, False), (None, True))
         self.assertEqual(expected_launch(False, -3, False, True), (None, True))
 
@@ -399,6 +413,11 @@ class Firmware(unittest.TestCase):
 
     def test_step_6_names_the_controller_on_screen_only(self):
         self.assertEqual(controller_problems(read(FLOW)), [])
+
+
+class Primary(unittest.TestCase):
+    def test_step_3_takes_the_jit_off_screens_primary_on_every_row(self):
+        self.assertEqual(primary_problems(read(FLOW)), [])
 
 
 class Mutations(unittest.TestCase):
@@ -491,6 +510,15 @@ class Mutations(unittest.TestCase):
     def test_mutation_firmware_wiring_the_guard_removed(self):
         text = self.edited(self.flow, "guard jitOn else { return }\n            steps.reading = true", "steps.reading = true")
         self.caught("firmware-wiring:", firmware_wiring_problems(text))
+
+    def test_mutation_primary_the_reopen_row_check_put_back(self):
+        old = "            return model.step.primary.map(SetupStepPrimary.jit)"
+        text = self.edited(self.flow, old, "            if JitCard.reopenRows.contains(model.step.row) { return nil }\n" + old)
+        self.caught("primary:", primary_problems(text))
+
+    def test_mutation_primary_step_3_returns_none(self):
+        text = self.edited(self.flow, "return model.step.primary.map(SetupStepPrimary.jit)", "return nil")
+        self.caught("primary:", primary_problems(text))
 
     def test_mutation_controller_disconnect_unobserved(self):
         text = self.edited(self.flow, ".GCControllerDidDisconnect", ".GCControllerDidBecomeCurrent")

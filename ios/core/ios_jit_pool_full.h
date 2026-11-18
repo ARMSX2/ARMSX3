@@ -18,6 +18,9 @@ namespace utils
 	// Apple ARM64: true when pool 2's code half is near its limit, so the SPU block runs in the interpreter instead.
 	bool jit_pool2_refuse_spu_block();
 
+	// Apple ARM64: true once pool 2's code half is half used, where the SPU cache build stops.
+	bool jit_pool2_precompile_full();
+
 	// Blocks refused since pool 2 last had room; 0 elsewhere.
 	u64 jit_pool2_refused_blocks();
 }

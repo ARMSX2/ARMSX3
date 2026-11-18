@@ -35,6 +35,26 @@
 #include "ios_jit_dual_map.h"
 #endif
 
+#if TARGET_OS_IPHONE
+namespace
+{
+	// glslang builds its built-in symbol tables on the first parse of a GLSL version, which costs tens of
+	// milliseconds on the RSX thread. The empty shader pays that at boot instead. It uses "#version 450" like the RSX
+	// programs, because glslang keeps one set of tables per version.
+	std::unique_ptr<named_thread<std::function<void()>>> s_glslang_prewarm;
+
+	void start_glslang_prewarm()
+	{
+		s_glslang_prewarm = std::make_unique<named_thread<std::function<void()>>>("RSX glslang prewarm"sv, []()
+		{
+			std::string source = "#version 450\nlayout(location=0) out vec4 ocol;\nvoid main()\n{\n\tocol = vec4(0.);\n}\n";
+			std::vector<u32> spv;
+			spirv::compile_glsl_to_spv(spv, source, ::glsl::glsl_fragment_program, ::glsl::glsl_rules_vulkan);
+		});
+	}
+}
+#endif
+
 namespace vk
 {
 	VkCompareOp get_compare_func(rsx::comparison_function op, bool reverse_direction = false);
@@ -692,6 +712,9 @@ VKGSRender::VKGSRender(rsx::context* ctx, rsx::display_output* output) noexcept 
 #endif
 
 	spirv::initialize_compiler_context();
+#if TARGET_OS_IPHONE
+	start_glslang_prewarm();
+#endif
 	vk::initialize_pipe_compiler(preferred_compiler_threads);
 
 	m_prog_buffer = std::make_unique<vk::program_cache>
@@ -1046,6 +1069,9 @@ VKGSRender::~VKGSRender()
 
 	// Shaders
 	vk::destroy_pipe_compiler();        // Ensure no pending shaders being compiled
+#if TARGET_OS_IPHONE
+	s_glslang_prewarm.reset();
+#endif
 	spirv::finalize_compiler_context(); // Shut down the glslang compiler
 	m_prog_buffer->clear();             // Delete shader objects
 	vk::glsl::destroy_shared_descriptor_pools(); // ARMSX3: the draw programs' pools, after them
@@ -1202,10 +1228,45 @@ bool VKGSRender::on_access_violation(rsx::context* ctx, u32 address, bool is_wri
 	}
 
 	vk::texture_cache::thrashed_set result;
+#ifdef __APPLE__
+	// A fault on memory another guest thread is already reading back waits for that readback and
+	// then retries, instead of queueing a second flush that invalidates the range all over again.
+	const auto flush_cache = &resources->texture_cache;
+	const bool may_register = !g_fxo->get<rsx::dma_manager>().is_current_thread();
+	const bool may_wait = may_register && !RSX(m_ctx)->is_current_thread();
+	utils::address_range32 flush_range{};
+	bool wait_for_flush = false;
+	bool registered = false;
+	{
+		std::lock_guard lock(m_flushes_in_flight_mutex);
+
+		const rsx::invalidation_cause cause = is_writing ? rsx::invalidation_cause::deferred_write : rsx::invalidation_cause::deferred_read;
+		result = resources->texture_cache.invalidate_address(*m_secondary_cb_list.get(), address, cause);
+
+		if (result.violation_handled && result.num_flushable > 0 && may_register)
+		{
+			for (const auto* section : result.sections_to_flush)
+			{
+				const auto range = section->get_section_range();
+				flush_range = flush_range.valid() ? flush_range.get_min_max(range) : range;
+			}
+
+			wait_for_flush = may_wait && std::any_of(m_flushes_in_flight.cbegin(), m_flushes_in_flight.cend(),
+				[&](const flush_in_flight& f) { return f.cache == flush_cache && f.range.overlaps(flush_range); });
+
+			if (!wait_for_flush)
+			{
+				m_flushes_in_flight.push_back({ flush_cache, flush_range });
+				registered = true;
+			}
+		}
+	}
+#else
 	{
 		const rsx::invalidation_cause cause = is_writing ? rsx::invalidation_cause::deferred_write : rsx::invalidation_cause::deferred_read;
 		result = resources->texture_cache.invalidate_address(*m_secondary_cb_list.get(), address, cause);
 	}
+#endif
 
 	if (result.invalidate_samplers)
 	{
@@ -1218,6 +1279,30 @@ bool VKGSRender::on_access_violation(rsx::context* ctx, u32 address, bool is_wri
 		return false;
 	}
 
+#ifdef __APPLE__
+	if (wait_for_flush)
+	{
+		vm::temporary_unlock();
+
+		while (true)
+		{
+			const u32 done = m_flushes_in_flight_done.load();
+			{
+				reader_lock lock(m_flushes_in_flight_mutex);
+				if (std::none_of(m_flushes_in_flight.cbegin(), m_flushes_in_flight.cend(),
+					[&](const flush_in_flight& f) { return f.cache == flush_cache && f.range.overlaps(flush_range); }))
+				{
+					break;
+				}
+			}
+
+			m_flushes_in_flight_done.wait(done);
+		}
+
+		return true;
+	}
+
+#endif
 	if (result.num_flushable > 0)
 	{
 		if (g_fxo->get<rsx::dma_manager>().is_current_thread())
@@ -1282,6 +1367,22 @@ bool VKGSRender::on_access_violation(rsx::context* ctx, u32 address, bool is_wri
 
 		resources->texture_cache.flush_all(*m_secondary_cb_list.next(), result, data_transfer_completed_callback);
 
+#ifdef __APPLE__
+		if (registered)
+		{
+			{
+				std::lock_guard lock(m_flushes_in_flight_mutex);
+				const auto found = std::find_if(m_flushes_in_flight.begin(), m_flushes_in_flight.end(),
+					[&](const flush_in_flight& f) { return f.cache == flush_cache && f.range == flush_range; });
+				ensure(found != m_flushes_in_flight.end());
+				m_flushes_in_flight.erase(found);
+			}
+
+			m_flushes_in_flight_done++;
+			m_flushes_in_flight_done.notify_all();
+		}
+
+#endif
 		if (has_queue_ref)
 		{
 			// Release RSX thread if it's still locked
@@ -2465,22 +2566,47 @@ bool VKGSRender::load_program()
 
 		// Load current program from cache
 		// The shader interpreter does not emulate the depth range; compile those programs synchronously instead
-#ifdef __APPLE__
-		// Async Recompiler skips a draw whose pipeline is not ready, and a skipped fill or copy leaves its target unwritten
-		const bool tiny_fp = shadermode == shader_mode::async_recompiler && fragment_program.ucode_length <= sync_compile_max_fp_ucode_bytes;
-		const bool allow_async = shadermode != shader_mode::recompiler &&
-			!(fragment_program.ctrl & RSX_SHADER_CONTROL_EMULATE_DEPTH_RANGE) && !tiny_fp;
-#else
 		const bool allow_async = shadermode != shader_mode::recompiler &&
 			!(fragment_program.ctrl & RSX_SHADER_CONTROL_EMULATE_DEPTH_RANGE);
-#endif
+
+#ifdef __APPLE__
+		const u64 load_started_us = get_system_time();
+
+		// A skipped fill or copy, or a skipped first write, leaves its target unwritten
+		const bool urgent = allow_async && (fragment_program.ucode_length <= tiny_fp_max_ucode_bytes || bound_target_unwritten());
 
 		std::tie(m_program, m_vertex_prog, m_fragment_prog) = m_prog_buffer->get_graphics_pipeline(
 			&m_ctx->program.cache_hint,
 			vertex_program,
 			fragment_program,
 			m_pipeline_properties,
+			allow_async, true, urgent);
+#else
+		std::tie(m_program, m_vertex_prog, m_fragment_prog) = m_prog_buffer->get_graphics_pipeline(
+			&m_ctx->program.cache_hint,
+			vertex_program,
+			fragment_program,
+			m_pipeline_properties,
 			allow_async, true);
+#endif
+#ifdef __APPLE__
+		if (m_prog_buffer->check_cache_missed())
+		{
+			const u64 us = get_system_time() - load_started_us;
+			m_program_misses++;
+			m_program_miss_us += us;
+			m_program_miss_max_us = std::max(m_program_miss_max_us, us);
+
+			// A missed load with async off built its pipeline here unless it was already pending.
+			if (!allow_async)
+			{
+				m_program_inline++;
+				m_program_inline_tiny += fragment_program.ucode_length <= tiny_fp_max_ucode_bytes;
+				m_program_inline_us += us;
+				m_program_inline_max_us = std::max(m_program_inline_max_us, us);
+			}
+		}
+#endif
 
 		if (vk::vspec::active())
 		{

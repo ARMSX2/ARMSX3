@@ -25,6 +25,22 @@ struct TouchPadCard: View {
             }
             OverlayToggleRow(controllerNavigationID: "settings.controllers.touch.vibrate", label: "Vibrate on Press",
                              systemImage: "iphone.radiowaves.left.and.right", isOn: Bindable(SettingsStore.shared).padVibrates)
+            OverlayActionRow(controllerNavigationID: "settings.controllers.touch.menubutton", label: "Menu Button",
+                             systemImage: "line.3.horizontal", trailingValue: SettingsStore.shared.menuButtonVisibility.title,
+                             keepsTrailingValue: true) {
+                let all = MenuButtonVisibility.allCases
+                SettingsStore.shared.menuButtonVisibility = all[(all.firstIndex(of: SettingsStore.shared.menuButtonVisibility)! + 1) % all.count]
+            }
+            OverlayActionRow(controllerNavigationID: "settings.controllers.touch.menubuttonposition", label: "Menu Button Position",
+                             systemImage: "rectangle.inset.topright.filled", trailingValue: SettingsStore.shared.menuButtonPosition.title,
+                             keepsTrailingValue: true) {
+                let all = MenuButtonPosition.allCases
+                SettingsStore.shared.menuButtonPosition = all[(all.firstIndex(of: SettingsStore.shared.menuButtonPosition)! + 1) % all.count]
+            }
+            Text("Hidden removes the button. Touch and hold the pad's PS button to open the menu.")
+                .font(.subheadline)
+                .foregroundStyle(OverlayTheme.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
             Text("Games with their own layout, set from inside a game, aren't changed here.")
                 .font(.subheadline)
                 .foregroundStyle(OverlayTheme.textSecondary)

@@ -8,6 +8,10 @@ import GameController
 @MainActor final class RumbleFeed {
     static let shared = RumbleFeed()
 
+    /// A slot's rumble switch and strength in UserDefaults, as the Controllers screen and the XMB keep them.
+    nonisolated static func enabledKey(_ slot: Int) -> String { "armsx3.rumble.enabled.\(slot)" }
+    nonisolated static func strengthKey(_ slot: Int) -> String { "armsx3.rumble.strength.\(slot)" }
+
     // One slot's haptic target: the controller it was built for, and one engine and one player per locality.
     private final class Target {
         // nil for the phone's target.
@@ -143,8 +147,8 @@ import GameController
                 routes[slot] = route
             }
             guard route != .none else { continue }
-            let enabled = defaults.object(forKey: "armsx3.rumble.enabled.\(slot)") as? Bool ?? true
-            let strength = defaults.object(forKey: "armsx3.rumble.strength.\(slot)") as? Int ?? 100
+            let enabled = defaults.object(forKey: Self.enabledKey(slot)) as? Bool ?? true
+            let strength = defaults.object(forKey: Self.strengthKey(slot)) as? Int ?? 100
             let large = bytes.count == 2 * PlayerSlots.count ? bytes[2 * slot] : 0
             let small = bytes.count == 2 * PlayerSlots.count ? bytes[2 * slot + 1] : 0
             let motors = RumbleMath.motors(large: large, small: small, strengthPercent: strength, enabled: enabled)

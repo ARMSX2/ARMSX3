@@ -38,6 +38,10 @@ import Observation
     private(set) var liveOverrides: [Int: Int] = [:]
     // Lets the menu router navigate the quick menu while the library underneath stays inert.
     var quickMenuOpen = false
+    // A test build opened the menus without JIT: the core was never prepared, so nothing may boot or scan.
+    var browsing = false
+    // What an install or a sign-in says instead while `browsing`.
+    static var browsingRefusal: String { String(localized: "This needs JIT. This test build is only showing the menus.") }
     // For play time. Never written to the session record or a log.
     private var playingSerial: String?
 

@@ -12,6 +12,7 @@ enum PadPiece: String, Codable, CaseIterable, CodingKeyRepresentable {
     case l1, l2, r1, r2
     case lstick, rstick, l3, r3
     case select, ps, start
+    case flickUp, flickDown, shake, tiltLeft, tiltRight, tiltForward, tiltBack, turnLeft, turnRight
 
     static let dpadButtons: [PadPiece] = [.up, .down, .left, .right]
     static let faceButtons: [PadPiece] = [.triangle, .circle, .square, .cross]
@@ -54,11 +55,23 @@ enum PadPiece: String, Codable, CaseIterable, CodingKeyRepresentable {
         case .r3: return .l3
         case .select: return .start
         case .start: return .select
-        case .ps: return nil
+        case .tiltLeft: return .tiltRight
+        case .tiltRight: return .tiltLeft
+        case .turnLeft: return .turnRight
+        case .turnRight: return .turnLeft
+        case .ps, .flickUp, .flickDown, .shake, .tiltForward, .tiltBack: return nil
         }
     }
 
     var isStick: Bool { self == .lstick || self == .rstick }
+
+    // Plays a motion instead of pressing a PS3 button.
+    var isMotion: Bool {
+        switch self {
+        case .flickUp, .flickDown, .shake, .tiltLeft, .tiltRight, .tiltForward, .tiltBack, .turnLeft, .turnRight: return true
+        default: return false
+        }
+    }
 }
 
 // How a piece differs from where the default pad puts it. A fresh value is the default pad.
@@ -76,10 +89,10 @@ struct PadPlacement: Codable, Equatable {
     static let opacities: ClosedRange<CGFloat> = 0.1...1
     static let step: CGFloat = 0.05
 
-    // Their own buttons, L3 and R3, start hidden: a tap on the stick already clicks it.
+    // Their own buttons, L3 and R3, start hidden: a tap on the stick already clicks it. So do the motion pieces.
     static func standard(_ piece: PadPiece) -> PadPlacement {
         var placement = PadPlacement()
-        placement.hidden = piece == .l3 || piece == .r3
+        placement.hidden = piece == .l3 || piece == .r3 || piece.isMotion
         return placement
     }
 

@@ -166,7 +166,7 @@ def saves_problems(sheet, store):
     gate = uninstall.find("guard status == 0, alsoSaves else")
     if gate < 0 or uninstall.find("deleteSaves(") < gate:
         problems.append("UNI-GATED: the saves are not deleted only for a ticked box after a successful uninstall")
-    delete = body_of(code, "private static func deleteSaves") or ""
+    delete = body_of(code, "static func deleteSaves") or ""
     if (".saves(forSerial: serial)" not in delete or "Rpcs3Bridge.saveStateDirectory(forSerial: serial" not in delete
             or re.search(r"contentsOfDirectory|enumerator\(|subpathsOfDirectory", code)):
         problems.append("UNI-LISTS: the saves and states are not found through saves(forSerial:) and saveStateDirectory(forSerial:) only")

@@ -19,6 +19,7 @@
 #include "Emu/RSX/RSXThread.h"
 #include "Emu/RSX/Core/RSXRendererFactory.h"
 #include "Emu/RSX/GSFrameBase.h"
+#include "Emu/RSX/VK/VKHelpers.h"
 
 #include "util/logs.hpp"
 
@@ -408,6 +409,9 @@ namespace armsx3::ios_render
 			armsx3::bridge::ios_dispatcher::install(services);
 			install_services(services);
 			armsx3::bridge::set_host_services(services);
+
+			// Mid-frame submits and the paused RSX loop never reach the flip hold, so the core asks the same gate itself.
+			vk::g_gpu_work_refused = armsx3::ios_frame::present_gate_closed;
 
 			// iOS starts apps in /, which is not writable, and vm.cpp opens its block files by relative name, so chdir to the config directory.
 			const char* home = std::getenv("HOME");

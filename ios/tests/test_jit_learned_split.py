@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """The learned JIT pool split: a C driver over ios/core/ios_jit_split.h gives the same prepare sizes and walk shares as
 this file's model for every stored history, and the launcher, dual map and perf loop store, read and log the
-history and budget as pinned. Rows measured over 10 s run at STORED_10S; it says nothing about a device."""
+history and budget as pinned. The built-in pool sizes do not depend on the walk budget. Rows measured over 10 s run at STORED_10S; it says nothing about a device."""
 
 import re
 import shutil
@@ -28,7 +28,7 @@ ROUND = 0x200000
 MAGIC = 0x41334A31
 RING = 8
 POOL2_MAX = 0x40000000
-POOL3_MAX = 1054867456  # (k_stub_off - k_pool3_off) / k_pool3_granule * k_pool3_granule, 1006 MiB
+POOL3_MAX = 1056931840  # (k_stub_off - k_pool3_off) / k_pool3_granule * k_pool3_granule, 1008 MiB less 32 KiB
 FIXED_PAGES = 1026      # (k_exec_half_size - k_stub_off + k_pool1_size) / 0x4000: the stubs and pool 1
 BUDGET_MS = 15000  # the compiled default
 STORED_10S = 10000  # a stored 10 s budget, the one the 10 s rates below were measured under
@@ -39,6 +39,7 @@ IPAD = (18563, 10000)    # inferred from an iPad14,6 report
 MK_IPAD = (18500, 10000)  # Mortal Kombat KE on a tester iPad
 TLOU = (11606, 15000)  # The Last of Us demo, iPhone14,5: the walk ended with pool 2 at 0 MiB
 IPHONE_15S = (34151, 15000)  # iPhone18,2, Debug, Mortal Kombat KE through StikDebug
+SONIC = (16844, 15000)  # iPhone13,2, Sonic Unleashed through StikDebug, the walk before the last
 
 # Stored budgets and what armsx3_jit_budget_ms(stored, BUDGET_MS) must return.
 BUDGET_CASES = (0, -1, 4999, 5000, 12000, 15000, 18000, 25000, 25001, 30000, 4294982296, -4294967296)
@@ -99,14 +100,21 @@ SCENARIOS = [
     # Pool 2's walk floor keeps a slow device at 16 MiB, and a pool 2 smaller than the floor keeps its whole size.
     ("rayman_slow", hist([(2, 162, 0, 0)], TLOU), True),
     ("tiny_pool2", hist([(2, 162, 0, 0)], TLOU), True),
+    # Sonic Unleashed, iPhone13,2 through StikDebug: pool 3 full at 230 MiB, then the walk's 15 s proved 248 MiB of 432.
+    ("sonic_15s", hist([(16, 230, 0, 1)], SONIC), True),
+    ("sonic_grown", hist([(16, 230, 0, 1)], SONIC), True),
+    # A slow walk with a modest need still grows to the ceiling.
+    ("mk_slow_15s", hist([(17, 228, 0, 0)], TLOU), False),
 ]
 # Pool 2's largest size, where a scenario overrides POOL2_MAX.
 POOL2_MAX_OF = {"tiny_pool2": 8 * MIB}
-AT_DEFAULT = ("both_iphone_15s", "mk_ipad_15s", "both_ipad_15s")
+AT_DEFAULT = ("both_iphone_15s", "mk_ipad_15s", "both_ipad_15s", "sonic_15s", "mk_slow_15s")
+# Rows that run at the budget armsx3_jit_walk_budget_ms grew them to.
+GROWN = {"sonic_grown": 25000}
 
 
 def budget_of(name):
-    return BUDGET_MS if name in AT_DEFAULT else STORED_10S
+    return GROWN.get(name, BUDGET_MS if name in AT_DEFAULT else STORED_10S)
 
 # MiB: size2 size3 share2 share3 need2 need3 sessions budget_pages; a rate with no counted session is ignored.
 NONE_NORMAL = (256, 576, 152, 240, 0, 0, 0, 0)
@@ -137,7 +145,12 @@ PINNED = {
     "both_ipad_15s": (256, 576, 186, 230, 240, 296, 2, 27844),
     "rayman_slow": (64, 204, 16, 128, 64, 204, 1, 7737),
     "tiny_pool2": (8, 204, 8, 128, 8, 204, 1, 7737),
+    "sonic_15s": (64, 432, 16, 236, 64, 432, 1, 16844),
+    "sonic_grown": (64, 432, 20, 356, 64, 432, 1, 28073),
 }
+# The grown walk budget in ms, per row at its own budget; every other row keeps its budget.
+PINNED_WALK = {"sonic_15s": 25000, "sonic_grown": 25000, "mk_slow_15s": 25000, "mk_ipad_15s": 15000,
+               "both_iphone_15s": 17243, "bo2_hit_rate": 10407, "des_wwe": 10000}
 # merge: r(1 MiB), r(2 MiB), noted.peak2, r(new hit2), r(same again); put: slot counts, then the oldest and newest left.
 PINNED_MERGE = (0, 1, 2, 1, 0)
 PINNED_PUT = (0, 1, 0, 1, 2, 7, 8, 1, 99)
@@ -193,6 +206,15 @@ def model_split(h, low, tier2, tier3, pool2_max, pool3_max, fixed_pages, budget_
     return (size2, size3, share2, share3, need2, need3, sessions, budget)
 
 
+def model_walk(row, h, fixed_pages, budget_ms):
+    """A Python mirror of armsx3_jit_walk_budget_ms over a model_split row."""
+    if row[7] == 0 or budget_ms >= 25000:
+        return budget_ms
+    pages = fixed_pages + row[4] // PAGE + row[5] // PAGE
+    want = -(-pages * 100 * h["rate_ms"] // (90 * h["rate_pages"]))
+    return min(max(want, budget_ms), 25000)
+
+
 def model_for(name, h, low):
     tier2, tier3 = SMALL if low else NORMAL
     return model_split(h, low, tier2, tier3, POOL2_MAX_OF.get(name, POOL2_MAX), POOL3_MAX, FIXED_PAGES, budget_of(name))
@@ -230,6 +252,13 @@ static void row(const char* name, const struct armsx3_jit_pool_history* h, int l
     armsx3_jit_split_compute(h, low, t2, t3, p2max, %dull, %dull, budget, &s);
     printf("%%s %%llu %%llu %%llu %%llu %%llu %%llu %%u %%llu\n", name, s.size2, s.size3, s.share2, s.share3, s.need2, s.need3,
            s.sessions, s.budget_pages);
+    printf("walk %%s %%llu\n", name, armsx3_jit_walk_budget_ms(&s, h, %dull, budget));
+    {
+        struct armsx3_jit_split none, most;
+        armsx3_jit_split_compute(h, low, t2, t3, p2max, %dull, %dull, 0ull, &none);
+        armsx3_jit_split_compute(h, low, t2, t3, p2max, %dull, %dull, ARMSX3_JIT_BUDGET_MAX_MS, &most);
+        printf("sizes_%%s %%llu %%llu %%llu %%llu\n", name, none.size2, none.size3, most.size2, most.size3);
+    }
 }
 
 int main(void)
@@ -275,12 +304,12 @@ int main(void)
     }
     return 0;
 }
-""" % (POOL3_MAX, FIXED_PAGES, "\n".join(rows), ", ".join("%dLL" % v for v in BUDGET_CASES),
+""" % (POOL3_MAX, FIXED_PAGES, FIXED_PAGES, POOL3_MAX, FIXED_PAGES, POOL3_MAX, FIXED_PAGES, "\n".join(rows), ", ".join("%dLL" % v for v in BUDGET_CASES),
        BUDGET_MS)
 
 
 def run_driver(header_text):
-    """Compile the driver against `header_text`; return (rows, merge, put, budget) or raise AssertionError."""
+    """Compile the driver against `header_text`; return (rows, merge, put, budget, walk) or raise AssertionError."""
     compiler = shutil.which("cc")
     if compiler is None:
         raise unittest.SkipTest("no `cc` on PATH; a skip is not a pass")
@@ -298,10 +327,12 @@ def run_driver(header_text):
                              timeout=RUN_TIMEOUT_SECONDS, universal_newlines=True)
         if ran.returncode != 0:
             raise AssertionError("the driver failed: " + ran.stdout)
-    rows, merge, put, budget = {}, None, None, {}
+    rows, merge, put, budget, walk = {}, None, None, {}, {}
     for line in ran.stdout.splitlines():
         f = line.split()
-        if f[0] == "budget":
+        if f[0] == "walk":
+            walk[f[1]] = int(f[2])
+        elif f[0] == "budget":
             budget[int(f[1])] = int(f[2])
         elif f[0] == "merge":
             merge = tuple(int(v) for v in f[1:])
@@ -309,7 +340,7 @@ def run_driver(header_text):
             put = tuple(int(v) for v in f[1:])
         else:
             rows[f[0]] = tuple(int(v) for v in f[1:])
-    return rows, merge, put, budget
+    return rows, merge, put, budget, walk
 
 
 def read(path):
@@ -340,10 +371,19 @@ LN9_HEAD = ("#if TARGET_OS_IPHONE available_at_launch = static_cast<unsigned lon
             "const bool small = available_at_launch != 0 && available_at_launch < k_prep_small_below; "
             "prep_pool2_bytes = small ? k_prep_pool2_small : k_prep_pool2_bytes; "
             "prep_pool3_bytes = small ? k_prep_pool3_small : k_prep_pool3_bytes;")
-COMPUTE = ("armsx3_jit_split_compute(&history, small ? 1 : 0, prep_pool2_bytes, prep_pool3_bytes, k_pool2_size, "
-           "(k_stub_off - k_pool3_off) / k_pool3_granule * k_pool3_granule, (k_exec_half_size - k_stub_off + k_pool1_size) / "
-           "0x4000ull, static_cast<unsigned long long>(s_script_budget_ms), &split);")
-APPLY = "{ " + LN9_HEAD + " read_pool_history(); " + COMPUTE + " prep_pool2_bytes = split.size2; prep_pool3_bytes = split.size3; }"
+COMPUTE = ("const unsigned long long pool3_max = (k_stub_off - k_pool3_off) / k_pool3_granule * k_pool3_granule; "
+           "const unsigned long long fixed_pages = (k_exec_half_size - k_stub_off + k_pool1_size) / 0x4000ull; "
+           "armsx3_jit_split_compute(&history, small ? 1 : 0, prep_pool2_bytes, prep_pool3_bytes, k_pool2_size, pool3_max, "
+           "fixed_pages, static_cast<unsigned long long>(s_script_budget_ms), &split);")
+# The walk grows only from the compiled default, and the split is computed again at the grown budget.
+GROW = ("const unsigned long long grown_ms = armsx3_jit_walk_budget_ms(&split, &history, fixed_pages, "
+        "static_cast<unsigned long long>(s_script_budget_ms)); "
+        "if (!budget_stored && grown_ms != static_cast<unsigned long long>(s_script_budget_ms)) { "
+        "s_script_budget_ms = static_cast<int>(grown_ms); "
+        "armsx3_jit_split_compute(&history, small ? 1 : 0, prep_pool2_bytes, prep_pool3_bytes, k_pool2_size, pool3_max, "
+        "fixed_pages, grown_ms, &split); }")
+APPLY = ("{ " + LN9_HEAD + " read_pool_history(); " + COMPUTE + " " + GROW
+         + " prep_pool2_bytes = split.size2; prep_pool3_bytes = split.size3; }")
 LAYOUT = (
     "static_assert(ARMSX3_JIT_SPLIT_MIB(ARMSX3_JIT_SPLIT_SHARE2_MIB) % ARMSX3_JIT_SPLIT_ROUND == 0 && "
     "ARMSX3_JIT_SPLIT_MIB(ARMSX3_JIT_SPLIT_SHARE2_MIB) <= k_prep_pool2_bytes,",
@@ -353,10 +393,12 @@ LAYOUT = (
     "ARMSX3_JIT_SPLIT_MIB(ARMSX3_JIT_SPLIT_FLOOR2_MIB) <= k_prep_pool2_small,",
     "static_assert(ARMSX3_JIT_SPLIT_MIB(ARMSX3_JIT_SPLIT_FLOOR3_MIB) % ARMSX3_JIT_SPLIT_ROUND == 0 && "
     "ARMSX3_JIT_SPLIT_MIB(ARMSX3_JIT_SPLIT_FLOOR3_MIB) <= k_prep_pool3_small,",
-    "static_assert(ARMSX3_JIT_SPLIT_ROUND == k_pool3_granule && ARMSX3_JIT_SPLIT_PAGE == 0x4000ull,",
+    "static_assert(ARMSX3_JIT_SPLIT_ROUND % k_pool3_granule == 0 && ARMSX3_JIT_SPLIT_PAGE == 0x4000ull && "
+    "k_pool3_granule % ARMSX3_JIT_SPLIT_PAGE == 0,",
 )
 STORE_NAMES = ("armsx3_jit_pool_history_read", "armsx3_jit_pool_history_write")
 BUDGET_TAKEN = "s_script_budget_ms = armsx3_jit_budget_ms(stored_budget_ms, k_script_budget_ms);"
+BUDGET_KEPT = "budget_stored = armsx3_jit_budget_ms(stored_budget_ms, 0) != 0;"
 
 
 def layout_values(dual):
@@ -368,7 +410,7 @@ def layout_values(dual):
         if m is None:
             raise AssertionError(name + " not found")
         return int(m.group(1), 16)
-    granule = ROUND  # utils::jit_pool3_unit_granularity; the layout static_assert pins ROUND == k_pool3_granule
+    granule = PAGE  # utils::jit_pool3_unit_granularity; the layout static_assert pins it to whole pages dividing ROUND
     pool3_max = (const("k_stub_off") - const("k_pool3_off")) // granule * granule
     fixed = (const("k_exec_half_size") - const("k_stub_off") + const("k_pool1_size")) // PAGE
     return pool3_max, fixed
@@ -382,13 +424,21 @@ def problems(texts):
     out = []
 
     try:
-        rows, merge, put, budget = run_driver(split)
+        rows, merge, put, budget, walk = run_driver(split)
         for name, h, low in SCENARIOS:
             want = model_for(name, h, low)
             if rows.get(name) != want:
                 out.append("rule: {0}: the driver gives {1}, the model {2}".format(name, rows.get(name), want))
             elif name in PINNED and in_mib(want) != PINNED[name]:
                 out.append("rule: {0}: {1} MiB, pinned {2}".format(name, in_mib(want), PINNED[name]))
+            sizes = rows.get("sizes_" + name)
+            if sizes is None or sizes[0] != sizes[2] or sizes[1] != sizes[3]:
+                out.append("sizes: {0}: the prepare sizes {1} differ between walk budget 0 and the largest budget".format(name, sizes))
+            grown = model_walk(want, h, FIXED_PAGES, budget_of(name))
+            if walk.get(name) != grown:
+                out.append("walk: {0}: the driver gives {1} ms, the model {2}".format(name, walk.get(name), grown))
+            elif name in PINNED_WALK and grown != PINNED_WALK[name]:
+                out.append("walk: {0}: {1} ms, pinned {2}".format(name, grown, PINNED_WALK[name]))
         if merge != PINNED_MERGE:
             out.append("rule: merge gives {0}, pinned {1}".format(merge, PINNED_MERGE))
         if put != PINNED_PUT:
@@ -433,14 +483,15 @@ def problems(texts):
                        "reinterpret_cast<history_read_fn>(read_entry)(&history, &stored_budget_ms)"):
             if needle not in reader:
                 out.append("reader: read_pool_history() lacks " + needle)
-        if not reader.endswith(BUDGET_TAKEN + " }") or reader.find(BUDGET_TAKEN) < reader.find("history.magic = ARMSX3_JIT_HISTORY_MAGIC;"):
-            out.append("reader: read_pool_history() does not end with {0} after the reset block".format(BUDGET_TAKEN))
+        if not reader.endswith(BUDGET_TAKEN + " " + BUDGET_KEPT + " }") \
+                or reader.find(BUDGET_TAKEN) < reader.find("history.magic = ARMSX3_JIT_HISTORY_MAGIC;"):
+            out.append("reader: read_pool_history() does not end with {0} {1} after the reset block".format(BUDGET_TAKEN, BUDGET_KEPT))
     if "using history_read_fn = int (*)(armsx3_jit_pool_history*, long long*);" not in d:
         out.append("reader: history_read_fn does not take the budget out-parameter")
     assigned = re.findall(r"\bs_script_budget_ms\s*=(?!=)", code)
-    if len(assigned) != 2 or "int s_script_budget_ms = k_script_budget_ms;" not in d:
-        out.append("reader: s_script_budget_ms is assigned {0} times, not only at its definition and in "
-                   "read_pool_history()".format(len(assigned)))
+    if len(assigned) != 3 or "int s_script_budget_ms = k_script_budget_ms;" not in d:
+        out.append("reader: s_script_budget_ms is assigned {0} times, not only at its definition, in "
+                   "read_pool_history() and where choose_prepare_sizes() grows it".format(len(assigned)))
     bare = without_strings(code)
     for name in STORE_NAMES:
         if re.search(r"\b" + name + r"\b", bare):
@@ -574,6 +625,8 @@ def perf_problems(diag):
         out.append("line: the jit prepare line is not a notice inside if (!prepare_told), which sets prepare_told = true;")
     if told is None or not re.search(r'diag_log\.notice\("jit prepare route=[^;]*, jit\.script_budget_ms\);', told):
         out.append("line: the jit prepare notice's last argument is not jit.script_budget_ms")
+    if told is None or not re.search(r'diag_log\.notice\("jit prepare route=[^"]*",\s*jit_route_word\(reason\),', told):
+        out.append("line: the jit prepare notice's first argument is not jit_route_word(reason)")
     return out
 
 
@@ -615,6 +668,31 @@ class TheSplitHolds(unittest.TestCase):
             self.assertEqual(pinned, in_mib(model_for(name, h, low)), name)
 
 
+    def test_route_word_names_the_route_that_ran(self):
+        diag = without_comments(read(DIAG))
+        at = diag.index("const char* jit_route_word(const char* reason)")
+        function = brace_block(diag, at)[0]
+        source = ("#include <stdio.h>\n#include <string.h>\n#define nullptr NULL\n"
+                  "static const char* jit_route_word(const char* reason)\n" + function.replace("std::strcmp", "strcmp") +
+                  "\nint main(void)\n{\n"
+                  "    const char* reasons[] = {NULL, \"helper-ok\", \"already-traced\", \"debugger-attached\", \"no-debugger\","
+                  " \"helper-absent\", \"helper-failed\", \"pairing-absent\", \"anything-else\"};\n"
+                  "    for (unsigned i = 0; i < sizeof reasons / sizeof reasons[0]; i++)\n"
+                  "        printf(\"%s\\n\", jit_route_word(reasons[i]));\n    return 0;\n}\n")
+        compiler = shutil.which("cc")
+        if compiler is None:
+            self.skipTest("no `cc` on PATH; a skip is not a pass")
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "route.c").write_text(source, encoding="utf-8")
+            built = subprocess.run([compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", str(Path(tmp) / "route.c"),
+                                    "-o", str(Path(tmp) / "route")], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   timeout=COMPILE_TIMEOUT_SECONDS, universal_newlines=True)
+            self.assertEqual(0, built.returncode, built.stdout)
+            ran = subprocess.run([str(Path(tmp) / "route")], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 timeout=RUN_TIMEOUT_SECONDS, universal_newlines=True)
+        self.assertEqual(["none", "builtin", "pre-traced", "wait", "wait", "none", "stikdebug-fallback",
+                          "stikdebug-fallback", "stikdebug-fallback"], ran.stdout.split())
+
     def test_walk_proves_the_mk_peaks_on_a_slow_walk(self):
         # Host simulation of the real script_walk for one MK session; mk_ipad runs at STORED_10S, its measured budget.
         dual = dual_map_text(CORE_DIR)
@@ -648,6 +726,19 @@ class TheGuardCanFail(unittest.TestCase):
 
     def test_floor3_lowered(self):
         self.mutated("split", "#define ARMSX3_JIT_SPLIT_FLOOR3_MIB 128ull", "#define ARMSX3_JIT_SPLIT_FLOOR3_MIB 96ull", "defaults")
+
+    def test_walk_grows_past_the_ceiling(self):
+        self.mutated("split", "want < ARMSX3_JIT_BUDGET_MAX_MS ? want : ARMSX3_JIT_BUDGET_MAX_MS", "want", "walk")
+
+    def test_walk_ignores_the_percent(self):
+        self.mutated("split", "ARMSX3_JIT_SPLIT_BUDGET_PERCENT * h->rate_pages;", "100 * h->rate_pages;", "walk")
+
+    def test_walk_overrides_a_stored_budget(self):
+        self.mutated("dual", "if (!budget_stored && grown_ms", "if (grown_ms", "apply")
+
+    def test_walk_not_recomputed(self):
+        self.mutated("dual", "\t\t\t\t\tgrown_ms, &split);", "\t\t\t\t\tstatic_cast<unsigned long long>(k_script_budget_ms), &split);",
+                     "apply")
 
     def test_compute_removed(self):
         self.mutated("dual", "\t\t\tarmsx3_jit_split_compute(", "\t\t\t(void)sizeof(", "apply")
@@ -688,6 +779,14 @@ class TheGuardCanFail(unittest.TestCase):
 
     def test_budget_out_of_range_saturates(self):
         self.mutated("split", ": fallback;", ": ARMSX3_JIT_BUDGET_MAX_MS;", "rule")
+
+    def test_sizes_follow_the_walk_budget(self):
+        self.mutated("split", "out->size2 = low_memory || out->need2 > tier2 ? out->need2 : tier2;",
+                     "out->size2 = (low_memory || out->need2 > tier2 ? out->need2 : tier2) + (budget_ms == 0 ? 0 : ARMSX3_JIT_SPLIT_ROUND);",
+                     "sizes")
+
+    def test_line_route_word_bypassed(self):
+        self.mutated("diag", "\t\t\t\t\tjit_route_word(reason),", '\t\t\t\t\treason == nullptr ? "none" : "builtin",', "line")
 
     def test_budget_not_taken(self):
         self.mutated("dual", "\t\t\t" + BUDGET_TAKEN + "\n", "", "reader")

@@ -22,6 +22,10 @@ import UIKit
     // The chord's physical elements, by default name, held at zero in every reading; empty when none.
     private var consumed: Set<String> = []
     var mappings = Array(repeating: PlayerMapping(), count: PlayerSlots.count)
+    var motionBindings = Array(repeating: [String: String](), count: PlayerSlots.count)
+    private var playback = Array(repeating: MotionPlayback(), count: PlayerSlots.count)
+    // The touch pad's motion pieces held now; they play for player 1 while the touch pad holds it.
+    var touchGestures = Set<MotionGesture>()
     private(set) var serial: String?
     private var lastMotion: [Sixaxis?] = Array(repeating: nil, count: PlayerSlots.count)
     // stop() switches these sensors off again, for the battery.
@@ -32,6 +36,11 @@ import UIKit
         manager.deviceMotionUpdateInterval = 1.0 / 60
         return manager
     }()
+    // How far the player's grip tips the phone back, read as level. Stale until the next touch takes it again.
+    private var grip = 0.0
+    private var gripStale = true
+    private var gripOrientation: ScreenOrientation?
+    private var foregroundObserver: NSObjectProtocol?
     // Each slot's smoothed gyro offset, nil while that slot is not steered.
     private var steering: [(Double, Double)?] = Array(repeating: nil, count: PlayerSlots.count)
     static let keyboardKey = ControllerKey(category: "Keyboard", vendor: "", ordinal: 0)
@@ -77,6 +86,14 @@ import UIKit
         connectObserver = NotificationCenter.default.addObserver(forName: .GCControllerDidConnect, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { GamepadPoller.shared.setSystemGestures(.disabled) }
         }
+        grip = 0
+        gripStale = true
+        gripOrientation = nil
+        // Back from the background the phone was likely picked up again in another grip.
+        foregroundObserver = NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification,
+                                                                    object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { GamepadPoller.shared.gripStale = true }
+        }
     }
 
     func stop() {
@@ -84,6 +101,8 @@ import UIKit
         link = nil
         if let connectObserver { NotificationCenter.default.removeObserver(connectObserver) }
         connectObserver = nil
+        if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) }
+        foregroundObserver = nil
         setSystemGestures(.enabled)
         releasePads()
         moveOff()
@@ -92,6 +111,7 @@ import UIKit
         activated = []
         phone.stopDeviceMotionUpdates()
         lastMotion = Array(repeating: nil, count: PlayerSlots.count)
+        playback = Array(repeating: MotionPlayback(), count: PlayerSlots.count)
         // A touch pad steered at the end of the game is let go (released controller slots already were).
         if steering[0] != nil, !slots.playerOneHasController { steerTouchPad(rateX: 0, rateY: 0, setting: nil) }
         steering = Array(repeating: nil, count: PlayerSlots.count)
@@ -108,6 +128,11 @@ import UIKit
             let (data, status) = await EmulatorSession.shared.inputConfigDump(serial: serial)
             guard self.serial == serial else { return }
             mappings = status == 0 ? PlayerMapping.decode(data) : Array(repeating: PlayerMapping(), count: PlayerSlots.count)
+            let root = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            let perGame = status == 0 && root?["perGame"] as? Int == 1
+            motionBindings = (0..<PlayerSlots.count).map {
+                MotionBinding.resolve(SettingsStore.shared.motionBindings, serial: serial, perGame: perGame, player: $0)
+            }
         }
     }
 
@@ -136,6 +161,7 @@ import UIKit
             consumed = []
         }
         var readings: [(slot: Int, snapshot: GamepadSnapshot, controller: GCController)] = []
+        var gestures = Array(repeating: Set<MotionGesture>(), count: PlayerSlots.count)
         for (controller, rawReading) in raw {
             let id = ObjectIdentifier(controller)
             let key = live[id] ?? PlayerSlots.key(category: controller.productCategory, vendor: controller.vendorName ?? "",
@@ -146,6 +172,7 @@ import UIKit
             let pressed = GamepadMapping.snapshot(reading: reading, mapping: PlayerMapping()).mask != 0
             guard let slot = slots.slot(of: key) ?? (pressed ? claim(key, controller) : nil) else { continue }
             readings.append((slot, GamepadMapping.snapshot(reading: reading, mapping: mappings[slot]), controller))
+            gestures[slot].formUnion(MotionBinding.pressed(reading: reading, bindings: motionBindings[slot]))
         }
         let setting = gyroSetting()
         for (slot, snapshot, controller) in readings {
@@ -160,6 +187,7 @@ import UIKit
         if let held = slots.slot(of: Self.keyboardKey) {
             let reading = Dictionary(uniqueKeysWithValues: keyboardKeys.map { ($0, Float(1)) })
             let snapshot = GamepadMapping.snapshot(reading: reading, mapping: mappings[held], keyboard: true)
+            gestures[held].formUnion(MotionBinding.pressed(reading: reading, bindings: motionBindings[held]))
             let pad = PadSnapshot.slot(held)
             if snapshot != lastSent[held] || snapshot != pad.current {
                 lastSent[held] = snapshot
@@ -180,7 +208,7 @@ import UIKit
         var motion = Array(repeating: Sixaxis.rest, count: PlayerSlots.count)
         for (controller, _) in raw {
             guard let slot = self.slot(of: controller), tiltOn(slot), let sensors = controller.motion else { continue }
-            motion[slot] = inverted(sixaxis(sensors, of: controller), slot: slot)
+            motion[slot] = inverted(sixaxis(sensors, of: controller, sensitivity: tiltSensitivity(slot)), slot: slot)
         }
         // The phone feeds slot 0 only while no controller holds it, so the two never mix.
         let phoneWanted = !slots.playerOneHasController && (tiltOn(0) || setting != nil)
@@ -188,12 +216,24 @@ import UIKit
             if phoneWanted { phone.startDeviceMotionUpdates() } else { phone.stopDeviceMotionUpdates() }
         }
         if phoneWanted, tiltOn(0), let sample = phone.deviceMotion {
-            motion[0] = inverted(Self.sixaxis(sample), slot: 0)
+            let orientation = Self.orientation()
+            if let previous = gripOrientation, previous != orientation { gripStale = true }
+            gripOrientation = orientation
+            motion[0] = inverted(Self.sixaxis(sample, grip: grip, sensitivity: tiltSensitivity(0), orientation: orientation), slot: 0)
         }
         // A touch-pad player 1 is steered by the phone, handed only an offset.
         if !slots.playerOneHasController, setting != nil || steering[0] != nil {
             let rate = phone.deviceMotion.map(Self.steeringRates) ?? (0, 0)
             steerTouchPad(rateX: rate.0, rateY: rate.1, setting: phoneWanted ? setting : nil)
+        }
+        // A motion button takes over its player's sensors while it plays, uninverted.
+        if !slots.playerOneHasController { gestures[0].formUnion(touchGestures) }
+        let now = CACurrentMediaTime()
+        for slot in playback.indices {
+            playback[slot].update(pressed: gestures[slot], at: now)
+            guard playback[slot].active(at: now) else { continue }
+            let s = playback[slot].sample(at: now)
+            motion[slot] = MotionMath.sixaxis(ax: s.0, ay: s.1, az: s.2, yaw: s.3)
         }
         for slot in motion.indices {
             let value = motion[slot]
@@ -324,17 +364,38 @@ import UIKit
         !SettingsStore.shared.controllerTiltOff.contains(slot)
     }
 
+    private func tiltSensitivity(_ slot: Int) -> Int {
+        SettingsStore.shared.controllerTiltSensitivity[String(slot)] ?? 100
+    }
+
     // Invert Tilt X is bit 1 and Invert Tilt Y bit 2.
     private func inverted(_ value: Sixaxis, slot: Int) -> Sixaxis {
         let bits = SettingsStore.shared.controllerTiltInvert[String(slot)] ?? 0
         return value.applying(invertX: bits & 1 != 0, invertY: bits & 2 != 0)
     }
 
-    // Gravity plus user acceleration (a shake is signal), rotated into the screen frame.
-    private static func sixaxis(_ sample: CMDeviceMotion) -> Sixaxis {
-        let g = sample.gravity
-        let a = MotionMath.screenFrame(x: g.x + sample.userAcceleration.x, y: g.y + sample.userAcceleration.y,
-                                       z: g.z + sample.userAcceleration.z, orientation: orientation())
+    // While the phone feeds player 1's tilt, which is when Recentre Tilt does anything.
+    var phoneTilts: Bool { !slots.playerOneHasController && tiltOn(0) }
+
+    // The first touch after a game starts, returns from the background or rotates takes the grip.
+    func padTouched() {
+        if gripStale { recentreTilt() }
+    }
+
+    // Reads the phone's grip now as level; false while the phone reports no motion.
+    @discardableResult func recentreTilt() -> Bool {
+        guard phone.isDeviceMotionActive, let g = phone.deviceMotion?.gravity else { return false }
+        grip = MotionMath.gripPitch(gravity: MotionMath.screenFrame(x: g.x, y: g.y, z: g.z, orientation: Self.orientation()))
+        gripStale = false
+        return true
+    }
+
+    // Gravity and the hand's movement (a shake is signal, tremor is not), in the screen frame and levelled at the grip.
+    private static func sixaxis(_ sample: CMDeviceMotion, grip: Double, sensitivity: Int, orientation: ScreenOrientation) -> Sixaxis {
+        let g = sample.gravity, m = sample.userAcceleration
+        let a = MotionMath.shaped(gravity: MotionMath.screenFrame(x: g.x, y: g.y, z: g.z, orientation: orientation),
+                                  movement: MotionMath.screenFrame(x: m.x, y: m.y, z: m.z, orientation: orientation),
+                                  grip: grip, sensitivity: sensitivity, tremor: MotionMath.tremor)
         let r = sample.rotationRate
         let length = (g.x * g.x + g.y * g.y + g.z * g.z).squareRoot()
         let yaw = length > 0 ? (r.x * g.x + r.y * g.y + r.z * g.z) / length : 0
@@ -354,13 +415,14 @@ import UIKit
     }
 
     // shortcut: the DS3 axes and the negated yaw follow RPCS3's DualSense handler; GCMotion's axes are not measured.
-    private func sixaxis(_ sensors: GCMotion, of controller: GCController) -> Sixaxis {
+    // Raw acceleration counts as all tilt; no grip and no tremor drop, as a controller is held like a DS3.
+    private func sixaxis(_ sensors: GCMotion, of controller: GCController, sensitivity: Int) -> Sixaxis {
         activate(sensors, of: controller)
-        let a = sensors.hasGravityAndUserAcceleration
-            ? GCAcceleration(x: sensors.gravity.x + sensors.userAcceleration.x, y: sensors.gravity.y + sensors.userAcceleration.y,
-                             z: sensors.gravity.z + sensors.userAcceleration.z)
-            : sensors.acceleration
-        return MotionMath.sixaxis(ax: a.x, ay: a.y, az: a.z, yaw: -sensors.rotationRate.y)
+        let split = sensors.hasGravityAndUserAcceleration
+        let g = split ? sensors.gravity : sensors.acceleration
+        let m = split ? sensors.userAcceleration : GCAcceleration(x: 0, y: 0, z: 0)
+        let a = MotionMath.shaped(gravity: (g.x, g.y, g.z), movement: (m.x, m.y, m.z), grip: 0, sensitivity: sensitivity, tremor: 0)
+        return MotionMath.sixaxis(ax: a.0, ay: a.1, az: a.2, yaw: -sensors.rotationRate.y)
     }
 
     // Remembered so stop() switches them off, for the battery.

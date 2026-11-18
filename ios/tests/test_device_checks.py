@@ -48,10 +48,30 @@ CASES = {
     "notxm": case(txm=MISSING),
     "nolc": case(liveContainer=MISSING),
     "empty": {},
+    "eva0lc": case(extendedVirtualAddressing=0, liveContainer=1),
+    "evaulc": case(extendedVirtualAddressing=-1, liveContainer=1),
+    "evalc": case(extendedVirtualAddressing=1, liveContainer=1),
 }
 
-GTA_FIX = "No JIT method works without it. Sign ARMSX3 again with get-task-allow turned on, then reinstall it."
+# Cases run again with the two inputs the pane sets: the LiveContainer version text and the other-install flag.
+EXTRAS = {
+    "lc-ver": ("lc", "3.8.13", False),
+    "lc-noversion": ("lc", None, False),
+    "lc-emptyversion": ("lc", "", False),
+    "lc-other": ("lc", "3.8.13", True),
+    "lc-other-noversion": ("lc", None, True),
+    "eva0lc-ver-other": ("eva0lc", "3.8.13", True),
+    "all-ver-other": ("all", "3.8.13", True),
+}
+
+# Cases also run with a Pairing File row set: one without the LiveContainer row and one with it.
+PAIRING_CASES = ("all", "lc")
+
+GTA_FIX ="No JIT method works without it. Sign ARMSX3 again with get-task-allow turned on, then reinstall it."
 IML_FIX = "Games are more likely to close when memory runs low. Sign ARMSX3 again with the increased-memory-limit entitlement."
+SPACE_FIX_LC = ("Inside LiveContainer this stays Standard unless LiveContainer itself has the extended "
+                "virtual addressing entitlement.")
+OTHER_INSTALL_FIX = "JIT came from the helper of ARMSX3 installed outside LiveContainer."
 IML_FIX_LC = ("Games are more likely to close when memory runs low. "
               "Sign LiveContainer again with the increased-memory-limit entitlement.")
 
@@ -70,7 +90,7 @@ def word(value, present, missing):
     return {1: present, 0: missing}.get(value, "Unknown")
 
 
-def expected_rows(checks):
+def expected_rows(checks, version=None, other=False):
     """The Device card's rows as `label|value|problem|fix`, or None when a key is absent."""
     if any(key not in checks for key in KEYS):
         return None
@@ -82,26 +102,43 @@ def expected_rows(checks):
          (IML_FIX_LC if lc else IML_FIX) if iml == 0 else None),
         ("Memory Limit", MEMORY.get(memory, "%.1f GB" % (memory / 1073741824)) if memory >= 1 else "Unknown", False, None),
         ("TXM", word(checks["txm"], "Present", "Not present"), False, None),
-        ("Address Space", word(checks["extendedVirtualAddressing"], "Extended", "Standard"), False, None),
+        ("Address Space", word(checks["extendedVirtualAddressing"], "Extended", "Standard"), False,
+         SPACE_FIX_LC if lc and checks["extendedVirtualAddressing"] == 0 else None),
     ]
     if lc:
-        rows.append(("LiveContainer", "Detected", False, None))
+        rows.append(("LiveContainer", version or "Detected", False, OTHER_INSTALL_FIX if other else None))
     return ["{0}|{1}|{2}|{3}".format(label, value, 1 if problem else 0, fix or "none") for label, value, problem, fix in rows]
 
 
 def driver():
     lines = [
         "import Foundation",
-        "func show(_ name: String, _ checks: [String: NSNumber]) {",
-        "    guard let report = DeviceReport(checks) else { print(\"case \\(name) unreadable\"); return }",
+        "func show(_ name: String, _ checks: [String: NSNumber], version: String? = nil, other: Bool = false) {",
+        "    guard var report = DeviceReport(checks) else { print(\"case \\(name) unreadable\"); return }",
+        "    report.liveContainerVersion = version",
+        "    report.helperFromOtherInstall = other",
+        "    if name.hasSuffix(\"+pairing\") { report.pairingRow = DeviceRow(label: \"Pairing File\", value: \"Own\", isProblem: false, fix: nil) }",
         "    for row in report.rows {",
         "        print(\"row \\(name) \\(row.label)|\\(row.value)|\\(row.isProblem ? 1 : 0)|\\(row.fix ?? \"none\")\")",
         "    }",
+        "}",
+        "func pairing(_ name: String, _ checks: [String: NSNumber], set: Bool) {",
+        "    guard var report = DeviceReport(checks) else { return }",
+        "    if set { report.pairingRow = DeviceRow(label: \"Pairing File\", value: \"Own\", isProblem: false, fix: nil) }",
+        "    print(\"pair \\(name) \\(report.rows.map { $0.label }.joined(separator: \"|\"))\")",
         "}",
     ]
     for name, checks in sorted(CASES.items()):
         body = ", ".join('"{0}": NSNumber(value: Int64({1}))'.format(k, v) for k, v in sorted(checks.items()))
         lines.append("show(\"{0}\", [{1}])".format(name, body or ":"))
+        if name in PAIRING_CASES:
+            for state in ("nil", "set"):
+                lines.append("pairing(\"{0}-{1}\", [{2}], set: {3})".format(name, state, body, str(state == "set").lower()))
+    for name, (base, version, other) in sorted(EXTRAS.items()):
+        body = ", ".join('"{0}": NSNumber(value: Int64({1}))'.format(k, v) for k, v in sorted(CASES[base].items()))
+        text = "nil" if version is None else '"{0}"'.format(version)
+        for suffix in ("", "+pairing"):
+            lines.append("show(\"{0}{1}\", [{2}], version: {3}, other: {4})".format(name, suffix, body, text, str(other).lower()))
     for value in sorted(MEMORY):
         lines.append("print(\"mem {0} \\(DeviceReport.memoryText(Int64({0})))\")".format(value))
     return "\n".join(lines) + "\n"
@@ -116,10 +153,12 @@ def read(path):
 
 
 def device_checks_problems(out):
-    rows, unreadable, memory = {}, set(), {}
+    rows, unreadable, memory, labels = {}, set(), {}, {}
     for line in out.splitlines():
         parts = line.split(" ", 2)
-        if len(parts) == 3 and parts[0] == "row":
+        if len(parts) == 3 and parts[0] == "pair":
+            labels[parts[1]] = parts[2].split("|")
+        elif len(parts) == 3 and parts[0] == "row":
             rows.setdefault(parts[1], []).append(parts[2])
         elif len(parts) == 3 and parts[0] == "case" and parts[2] == "unreadable":
             unreadable.add(parts[1])
@@ -135,6 +174,18 @@ def device_checks_problems(out):
             problems.append("unreadable: {0} gave no report, wanted {1}".format(name, want))
         elif rows.get(name) != want:
             problems.append("rows: {0} gave {1}, wanted {2}".format(name, rows.get(name), want))
+    for name, (base, version, other) in sorted(EXTRAS.items()):
+        want = expected_rows(CASES[base], version, other)
+        if rows.get(name) != want:
+            problems.append("rows: {0} gave {1}, wanted {2}".format(name, rows.get(name), want))
+        if rows.get(name + "+pairing") != want + ["Pairing File|Own|0|none"]:
+            problems.append("pairing: {0} gave {1}, wanted the Pairing File row last".format(name, rows.get(name + "+pairing")))
+    for name in PAIRING_CASES:
+        base = [row.split("|")[0] for row in expected_rows(CASES[name])]
+        if labels.get(name + "-nil") != base:
+            problems.append("pairing: {0} without the row gave {1}, wanted {2}".format(name, labels.get(name + "-nil"), base))
+        if labels.get(name + "-set") != base + ["Pairing File"]:
+            problems.append("pairing: {0} with the row gave {1}, wanted it last after {2}".format(name, labels.get(name + "-set"), base))
     for value, text in sorted(MEMORY.items()):
         if memory.get(value) != text:
             problems.append("memory: {0} gave {1!r}, wanted {2!r}".format(value, memory.get(value), text))
@@ -175,6 +226,10 @@ class RealFiles(unittest.TestCase):
         self.assertEqual(expected_rows(CASES["gta0"])[0], "Debugging Entitlement|Missing|1|" + GTA_FIX)
         self.assertEqual(expected_rows(CASES["iml0lc"])[1], "Increased Memory Limit|Missing|1|" + IML_FIX_LC)
         self.assertEqual(expected_rows(CASES["iml0lc"])[5], "LiveContainer|Detected|0|none")
+        self.assertEqual(expected_rows(CASES["eva0lc"])[4], "Address Space|Standard|0|" + SPACE_FIX_LC)
+        self.assertEqual(expected_rows(CASES["eva0"])[4], "Address Space|Standard|0|none")
+        self.assertEqual(expected_rows(CASES["lc"], "3.8.13", True)[5], "LiveContainer|3.8.13|0|" + OTHER_INSTALL_FIX)
+        self.assertEqual(expected_rows(CASES["lc"], None, False)[5], "LiveContainer|Detected|0|none")
         self.assertEqual(len(expected_rows(CASES["all"])), 5)
         self.assertIsNone(expected_rows(CASES["empty"]))
 
@@ -204,6 +259,15 @@ class Mutations(unittest.TestCase):
     def test_mutation_the_livecontainer_fix_names_armsx3(self):
         self.assert_caught("Sign LiveContainer again", "Sign ARMSX3 again", "rows:")
 
+    def test_mutation_the_standard_address_space_fix_shows_outside_livecontainer(self):
+        self.assert_caught("liveContainer && extendedVirtualAddressing == .missing", "extendedVirtualAddressing == .missing", "rows:")
+
+    def test_mutation_the_livecontainer_version_is_ignored(self):
+        self.assert_caught("liveContainerVersion.flatMap", "Optional<String>.none.flatMap", "rows:")
+
+    def test_mutation_the_other_install_line_always_shows(self):
+        self.assert_caught("fix: helperFromOtherInstall\n", "fix: true\n", "rows:")
+
     def test_mutation_txm_not_present_marked_as_a_problem(self):
         self.assert_caught("value: txmWord, isProblem: false", "value: txmWord, isProblem: txm == .missing", "rows:")
 
@@ -212,6 +276,9 @@ class Mutations(unittest.TestCase):
 
     def test_mutation_a_missing_key_still_makes_a_report(self):
         self.assert_caught("guard Self.keys.allSatisfy({ checks[$0] != nil }) else { return nil }", "", "unreadable:")
+
+    def test_mutation_the_pairing_row_listed_first(self):
+        self.assert_caught("if let pairingRow { rows.append(pairingRow) }", "if let pairingRow { rows.insert(pairingRow, at: 0) }", "pairing:")
 
     def test_mutation_the_spdx_line_dropped(self):
         text = self.edited(self.text, "SPDX-License-Identifier: GPL-2.0-only", "License: see COPYING")

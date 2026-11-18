@@ -157,6 +157,14 @@ struct VirtualControllerView: View {
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 20)
+        // Laid over the pad, so switching them on moves no other piece.
+        .overlay(alignment: .top) {
+            VStack(spacing: 6) {
+                HStack(spacing: 6) { ForEach(Self.motionPieces.prefix(5), id: \.self, content: motion) }
+                HStack(spacing: 6) { ForEach(Self.motionPieces.suffix(4), id: \.self, content: motion) }
+            }
+            .padding(.top, 8)
+        }
         .overlay { FloatingStickZones() }
         .environment(\.padSlot, layout)
         .environment(\.padArea, padSize)
@@ -169,6 +177,9 @@ struct VirtualControllerView: View {
         }
         .onPreferenceChange(PadStickFrames.self) { frames in
             MainActor.assumeIsolated { PadTouches.shared.sticks = frames }
+        }
+        .onPreferenceChange(PadMotionFrames.self) { frames in
+            MainActor.assumeIsolated { PadTouches.shared.layoutMotions(frames) }
         }
         .onChange(of: layout.split) { _, _ in
             PadTouches.shared.layout(PadTouches.shared.frames, clusters: Self.clusters(layout))
@@ -188,6 +199,14 @@ struct VirtualControllerView: View {
 
     private func button(_ piece: PadPiece, _ button: Rpcs3PadButton, _ base: CGSize) -> some View {
         PadPieceView(piece: piece, base: base) { PadButton(control: Self.control(button), size: $0) }
+    }
+
+    // Each left piece mirrors its right partner across the middle.
+    static let motionPieces: [PadPiece] = [.turnLeft, .flickUp, .shake, .flickDown, .turnRight,
+                                           .tiltLeft, .tiltForward, .tiltBack, .tiltRight]
+
+    private func motion(_ piece: PadPiece) -> some View {
+        PadPieceView(piece: piece, base: Self.small) { PadMotionButton(gesture: piece.gesture!, size: $0) }
     }
 
     private func stick(_ piece: PadPiece, click: Rpcs3PadButton) -> some View {
@@ -244,6 +263,22 @@ private struct DpadBacking<S: Shape>: View {
 }
 
 extension PadPiece {
+    // The motion a motion piece plays; nil for a PS3 piece.
+    var gesture: MotionGesture? {
+        switch self {
+        case .flickUp: return .flickUp
+        case .flickDown: return .flickDown
+        case .shake: return .shake
+        case .tiltLeft: return .tiltLeft
+        case .tiltRight: return .tiltRight
+        case .tiltForward: return .tiltForward
+        case .tiltBack: return .tiltBack
+        case .turnLeft: return .turnLeft
+        case .turnRight: return .turnRight
+        default: return nil
+        }
+    }
+
     init?(_ button: Rpcs3PadButton) {
         switch button {
         case .up: self = .up
@@ -310,6 +345,7 @@ private struct PadPieceView<Content: View>: View {
             .opacity(waiting ? 0 : placement.hidden ? (editing ? 0.3 : 0) : 1)
             .transformPreference(PadArtFrames.self) { if placement.hidden { $0 = [:] } }
             .transformPreference(PadStickFrames.self) { if placement.hidden { $0 = [:] } }
+            .transformPreference(PadMotionFrames.self) { if placement.hidden { $0 = [:] } }
             .offset(offset(placement))
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(VirtualControllerView.space)) } action: { home = $0 }
     }
@@ -329,8 +365,15 @@ private struct PadPieceView<Content: View>: View {
     // Observed, so a floating stick's zone redraws its cut-outs when a button moves.
     private(set) var frames: [Rpcs3PadButton: CGRect] = [:]
     @ObservationIgnored private var tracker = PadTouchTracker<ObjectIdentifier, Rpcs3PadButton>()
+    // Motion pieces play a motion instead of pressing a button, so they keep a tracker of their own.
+    private(set) var heldMotions: Set<MotionGesture> = []
+    @ObservationIgnored private var motionTracker = PadTouchTracker<ObjectIdentifier, MotionGesture>()
     @ObservationIgnored private let haptic = UIImpactFeedbackGenerator(style: .light)
     @ObservationIgnored private var aiming = Set<ObjectIdentifier>()
+    // With the menu button hidden, a long press on PS opens the menu and a short one is still the game's PS press.
+    @ObservationIgnored private var psHold = PadHoldButton<Rpcs3PadButton>(key: .PS)
+    @ObservationIgnored private var psTimer: Task<Void, Never>?
+    @ObservationIgnored var onMenuHold: (() -> Void)?
 
     // The sticks' frames, so a finger on one never aims.
     var sticks: [Bool: CGRect] = [:]
@@ -348,6 +391,10 @@ private struct PadPieceView<Content: View>: View {
         }
     }
 
+    func layoutMotions(_ frames: [MotionGesture: CGRect]) {
+        motionTracker.clusters = frames.isEmpty ? [] : [PadCluster(rule: .nearest, art: frames)]
+    }
+
     // The generator is readied before the first press.
     func prepare() {
         haptic.prepare()
@@ -357,9 +404,19 @@ private struct PadPieceView<Content: View>: View {
     func touch(began: [(ObjectIdentifier, CGPoint)] = [], moved: [(ObjectIdentifier, CGPoint)] = [],
                lifted: [ObjectIdentifier] = []) {
         let before = tracker.held
-        for (finger, point) in began { tracker.down(finger, at: point) }
-        for (finger, point) in moved { tracker.move(finger, to: point) }
-        for finger in lifted { tracker.lift(finger) }
+        for (finger, point) in began {
+            tracker.down(finger, at: point)
+            motionTracker.down(finger, at: point)
+        }
+        for (finger, point) in moved {
+            tracker.move(finger, to: point)
+            motionTracker.move(finger, to: point)
+        }
+        for finger in lifted {
+            tracker.lift(finger)
+            motionTracker.lift(finger)
+        }
+        applyMotions()
         aiming.subtract(lifted)
         // The uDraw pen lifts with the last aiming finger.
         if aiming.isEmpty { AimFeed.shared.pen(false, from: .pad) }
@@ -380,21 +437,39 @@ private struct PadPieceView<Content: View>: View {
 
     private func claims(_ point: CGPoint) -> Bool {
         tracker.clusters.contains { PadHit.covers($0, point) }
+            || motionTracker.clusters.contains { PadHit.covers($0, point) }
             || sticks.values.contains { $0.contains(point) }
     }
 
     func liftAll() {
         let before = tracker.held
         tracker.liftAll()
+        motionTracker.liftAll()
+        applyMotions()
         aiming = []
         // And the uDraw pen with them.
         AimFeed.shared.pen(false, from: .pad)
         apply(PadHit.change(from: before, to: tracker.held))
     }
 
+    // The poller plays what is held each frame, for player 1.
+    private func applyMotions() {
+        let held = motionTracker.held
+        guard held != heldMotions else { return }
+        let pressed = !held.subtracting(heldMotions).isEmpty
+        heldMotions = held
+        if !muted { GamepadPoller.shared.touchGestures = held }
+        if pressed {
+            if SettingsStore.shared.padVibrates { haptic.impactOccurred() }
+            haptic.prepare()
+        }
+    }
+
     private func apply(_ change: PadChange<Rpcs3PadButton>) {
         guard !change.isEmpty else { return }
-        if !muted {
+        var change = change
+        if !muted, SettingsStore.shared.menuButtonVisibility == .hidden { holdPS(&change) }
+        if !muted, !change.isEmpty {
             for button in change.released { PadSnapshot.shared.set(button, pressed: false) }
             for button in change.pressed { PadSnapshot.shared.set(button, pressed: true) }
             PadSnapshot.shared.send(source: .touch)
@@ -405,6 +480,31 @@ private struct PadPieceView<Content: View>: View {
             haptic.prepare()
         }
     }
+
+    private func holdPS(_ change: inout PadChange<Rpcs3PadButton>) {
+        let wasWaiting = psHold.waiting
+        if psHold.filter(&change) {
+            psTimer?.cancel()
+            tapPS()
+        } else if psHold.waiting, !wasWaiting {
+            psTimer = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(800))
+                guard !Task.isCancelled, let self, self.psHold.expire() else { return }
+                self.onMenuHold?()
+            }
+        }
+    }
+
+    // The press was held back until the finger lifted, so the game gets it now, briefly.
+    private func tapPS() {
+        PadSnapshot.shared.set(.PS, pressed: true)
+        PadSnapshot.shared.send(source: .touch)
+        Task {
+            try? await Task.sleep(for: .milliseconds(60))
+            PadSnapshot.shared.set(.PS, pressed: false)
+            PadSnapshot.shared.send(source: .touch)
+        }
+    }
 }
 
 private struct PadArtFrames: PreferenceKey {
@@ -412,6 +512,50 @@ private struct PadArtFrames: PreferenceKey {
 
     static func reduce(value: inout [Rpcs3PadButton: CGRect], nextValue: () -> [Rpcs3PadButton: CGRect]) {
         value.merge(nextValue()) { $1 }
+    }
+}
+
+private struct PadMotionFrames: PreferenceKey {
+    static let defaultValue: [MotionGesture: CGRect] = [:]
+
+    static func reduce(value: inout [MotionGesture: CGRect], nextValue: () -> [MotionGesture: CGRect]) {
+        value.merge(nextValue()) { $1 }
+    }
+}
+
+// A motion piece: Select's pill with the motion's name, the same in every skin.
+private struct PadMotionButton: View {
+    let gesture: MotionGesture
+    let size: CGSize
+    @Environment(\.padPieceOpacity) private var pieceOpacity
+    @Environment(\.padTouchScale) private var touchScale
+
+    var body: some View {
+        let pressed = PadTouches.shared.heldMotions.contains(gesture)
+        Capsule().fill(.black.opacity(0.45))
+            .overlay(Capsule().stroke(.white.opacity(0.7), lineWidth: 1.5))
+            .overlay(Text(gesture.rawValue)
+                .font(.system(size: 9, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .padding(.horizontal, 3)
+                .foregroundStyle(.white))
+            .frame(width: size.width, height: size.height)
+            .background {
+                GeometryReader { geometry in
+                    let art = geometry.frame(in: .named(VirtualControllerView.space))
+                    Color.clear.preference(key: PadMotionFrames.self,
+                                           value: [gesture: art.insetBy(dx: art.width * (1 - touchScale) / 2,
+                                                                        dy: art.height * (1 - touchScale) / 2)])
+                }
+            }
+            .opacity(pressed ? 1 : SettingsStore.shared.padOpacity * pieceOpacity)
+            .scaleEffect(pressed ? 0.9 : 1)
+            .brightness(pressed ? 0.2 : 0)
+            .shadow(color: .white.opacity(pressed ? 0.9 : 0), radius: 10)
+            .allowsHitTesting(false)
+            .accessibilityLabel(gesture.rawValue)
+            .accessibilityAddTraits(pressed ? .isSelected : [])
     }
 }
 
@@ -457,6 +601,7 @@ final class PadTouchView: UIView {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        GamepadPoller.shared.padTouched()
         PadTouches.shared.prepare()
         PadTouches.shared.touch(began: touches.map { (ObjectIdentifier($0), $0.location(in: self)) })
         PadTouches.shared.aim(aimed(touches), began: true)

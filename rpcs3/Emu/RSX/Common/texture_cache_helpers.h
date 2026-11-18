@@ -759,6 +759,28 @@ namespace rsx
 					// Framebuffer feedback avoidance. For MSAA, we do not need to make copies; just use the resolve target
 					if (texptr->samples() == 1)
 					{
+#ifdef __APPLE__
+						if (!requires_processing && !requires_clip && texptr->get_spp() > 1)
+						{
+							// Without host MSAA the image holds one texel per pixel, so copy it at that size, as binding it would sample
+							const coord3u src_rect = { 0, 0, 0, attr2.width, attr2.height, 1 };
+							attr2.width /= texptr->samples_x;
+							attr2.height /= texptr->samples_y;
+							const coord3u dst_rect = { 0, 0, 0, attr2.width, attr2.height, 1 };
+
+							texptr->memory_barrier(cmd, rsx::surface_access::transfer_read);
+							return
+							{
+								deferred_subresource_type::create_copy(
+									texptr->get_surface(rsx::surface_access::transfer_read),
+									attr2, src_rect, dst_rect, rsx::surface_transform::coordinate_transform, decoded_remap, surface_is_rop_target),
+								texture_upload_context::framebuffer_storage,
+								texptr->format_class(), scale, extended_dimension,
+								texptr->base_addr
+							};
+						}
+
+#endif
 						requires_processing = true;
 					}
 					else if (!requires_processing)

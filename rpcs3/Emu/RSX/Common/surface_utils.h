@@ -13,6 +13,12 @@ namespace rsx
 {
 	struct context;
 
+#ifdef __APPLE__
+	// Shared by all surfaces, so a serial never repeats for a new surface at a reused address
+	inline u64 g_surface_write_serial = 0;
+
+#endif
+
 	enum surface_state_flags : u32
 	{
 		ready               = 0x00,
@@ -134,6 +140,9 @@ namespace rsx
 		rsx::context* ctx = nullptr; // Context owning the surface cache this surface belongs to
 		u64 last_use_tag = 0;         // tag indicating when this block was last confirmed to have been written to
 		u32 base_addr = 0;
+#ifdef __APPLE__
+		u64 write_serial = ++g_surface_write_serial;
+#endif
 
 #if (ENABLE_SURFACE_CACHE_DEBUG)
 		u64 memory_hash = 0;
@@ -655,6 +664,10 @@ namespace rsx
 				last_use_tag = write_tag;
 			}
 
+#ifdef __APPLE__
+			note_write();
+
+#endif
 			// Tag unconditionally without introducing new data
 			sync_tag();
 
@@ -677,6 +690,14 @@ namespace rsx
 			}
 		}
 
+#ifdef __APPLE__
+		// Changes on every write, unlike last_use_tag, which a run of draws into one binding shares
+		void note_write()
+		{
+			write_serial = ++g_surface_write_serial;
+		}
+
+#endif
 		void on_write_copy(u64 write_tag = 0,
 			bool keep_optimizations = false,
 			surface_raster_type type = rsx::surface_raster_type::undefined)
@@ -694,6 +715,9 @@ namespace rsx
 		{
 			ensure(write_tag);
 			last_use_tag = write_tag;
+#ifdef __APPLE__
+			note_write();
+#endif
 
 			if (spp > 1 && sample_layout != surface_sample_layout::null)
 			{

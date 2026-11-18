@@ -5,6 +5,7 @@
 #include "Emu/RSX/Utils/algorithm.hpp"
 #include "Emu/system_config.h"
 #ifdef __APPLE__
+#include <TargetConditionals.h>
 #include <atomic>
 #include "ios_jit_dual_map.h"
 #endif
@@ -361,6 +362,13 @@ namespace vk
 					// makes is already its own VkDeviceMemory.
 					create_info.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
 				}
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+				// Streamed textures come and go; alone they return their memory on release instead of pinning a block
+				else if (mem_req.size >= 0x100000)
+				{
+					create_info.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+				}
+#endif
 
 				error_code = vmaAllocateMemory(m_allocator, &mem_req, &create_info, &vma_alloc, nullptr);
 				if (error_code == VK_SUCCESS)
@@ -583,7 +591,12 @@ namespace vk
 
 	void mem_allocator_vma::set_fastest_allocation_flags()
 	{
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+		// A phone is killed for memory long before the load switch picks best fit, so pack from the start
+		m_allocation_flags = VMA_ALLOCATION_CREATE_STRATEGY_MIN_MEMORY_BIT;
+#else
 		m_allocation_flags = VMA_ALLOCATION_CREATE_STRATEGY_MIN_TIME_BIT;
+#endif
 	}
 
 	mem_allocator_vk::mem_handle_t mem_allocator_vk::alloc(const memory_allocation_request& request)

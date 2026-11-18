@@ -154,13 +154,58 @@ struct ProblemReportView: View {
         return settings
     }
 
-    // The dropped-line count belongs to this launch only, so a report on an earlier session passes none.
+    // The pairing lookup ran in this launch, so words only; the file's name, path and contents stay out.
+    private func pairingFacts() -> (file: String, ladder: String?) {
+        let report = Rpcs3Bridge.jitPairingReport()
+        let own = PairingImport.destination
+        let ownFound = own.map(PairingImport.isNonEmptyRegularFile) ?? false
+        let sidecar = own?.deletingLastPathComponent().appendingPathComponent(PairingSource.originName, isDirectory: false)
+        let origin = PairingSource.origin(sidecar.flatMap { try? String(contentsOf: $0, encoding: .utf8) })
+        var inUse = own
+        if report["used"]?.hasPrefix("sidestore") == true {
+            let home = ProcessInfo.processInfo.environment["LC_HOME_PATH"]
+            inUse = PairingSource.sideStoreFile(liveContainerHome: home) { try? Data(contentsOf: $0) }
+        }
+        let attributes = inUse.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path) }
+        let date = (attributes?[.creationDate] ?? attributes?[.modificationDate]) as? Date
+        return (PairingSource.reportLine(report: report, ownFileFound: ownFound, origin: origin, fileDate: date),
+                PairingSource.ladderLine(report: report))
+    }
+
+    // Nil until the JIT query has answered, which leaves the launch record's words in the report.
+    private func jitRoute() -> String? {
+        let emulator = EmulatorSession.shared
+        guard let on = emulator.jitAvailable else { return nil }
+        let method = SettingsStore.shared.jitMethodAtLaunch
+        let verdict = JitFallback.decide(jitOn: on, jitReason: emulator.jitReason, helperWord: emulator.jitHelperOutcome,
+                                         methodAtLaunch: method, storedCause: UserDefaults.standard.string(forKey: JitFallback.causeKey),
+                                         probe: LiveContainerProbe.current)
+        if !on { return "none (\(emulator.jitReason))" }
+        if emulator.jitReason == "helper-ok" { return verdict.otherInstall ? "built-in helper (other install)" : "built-in helper" }
+        if method == "wait" { return "Wait for Debugger" }
+        guard let cause = verdict.cause, cause != .preTraced else { return "opened through StikDebug" }
+        return "StikDebug fallback (\(cause.rawValue))"
+    }
+
+    // Only LiveContainer's version is named; no bundle id or path.
+    private func liveContainerDetail() -> String {
+        let probe = LiveContainerProbe.current
+        guard probe.insideLiveContainer else { return "no" }
+        let hooks = probe.hooksActive.map { $0 ? "on" : "off" } ?? "unknown"
+        return "yes, \(probe.version ?? "version unknown"), Helper Process Support \(hooks)"
+    }
+
+    // The dropped-line count, the pairing lookup, the JIT route, the LiveContainer detail and the JIT test belong to this launch only, so a report on an earlier session passes none.
     private func processFacts() -> ReportProcess {
         let running = session.lastPathComponent == DiagnosticsSession.shared.current?.lastPathComponent
         let info = Bundle.main.infoDictionary
         let build = (info?["CFBundleShortVersionString"] as? String).map { "\($0) (\(info?["CFBundleVersion"] as? String ?? "?"))" }
+        let pairing = running ? pairingFacts() : nil
         return ReportProcess(liveContainer: Rpcs3Bridge.deviceChecks()["liveContainer"].map { $0.intValue == 1 },
-                             stderrDropped: running ? Rpcs3Bridge.stderrWitnessDropped() : nil, appBuild: build)
+                             stderrDropped: running ? Rpcs3Bridge.stderrWitnessDropped() : nil, appBuild: build,
+                             pairingFile: pairing?.file, pairingLadder: pairing?.ladder, jitRoute: running ? jitRoute() : nil,
+                             liveContainerDetail: running ? liveContainerDetail() : nil,
+                             jitTest: running ? JitDeviceModel.shared.testResult?.reportWord : nil)
     }
 
     private func shareZip() async {

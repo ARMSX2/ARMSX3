@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// On 4 GB-class devices a first-boot PPU precompile with every core got the app killed, so those boots compile on one thread.
+// On 4 GB-class devices a first-boot PPU precompile with every core got the app killed, so those boots compile on two threads.
 #pragma once
 
 namespace armsx3::bridge::low_memory
 {
 	constexpr unsigned long long k_small_limit = 3ull << 30; // a jetsam limit below this is a 4 GB-class device
-	constexpr unsigned k_llvm_threads = 1;                   // compile workers on such a device
+	constexpr unsigned k_llvm_threads = 2;                   // compile workers on such a device
 
 	// 0 for no change; an unknown limit (the Mac) changes nothing.
 	inline unsigned llvm_threads_clamp(unsigned long long jetsam_limit, unsigned long long configured)

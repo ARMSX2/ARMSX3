@@ -12,6 +12,7 @@
 #include <sys/resource.h>
 #include <unistd.h>
 #include "jit_launch_plan.h"
+#include "pairing_shape.h"
 #include "../core/ios_jit_split.h"
 
 static NSString* const kArmsx3ListenerEndpointKey = @"Armsx3JITEnablerListenerEndpoint";
@@ -19,6 +20,7 @@ static NSString* const kArmsx3ListenerEndpointKey = @"Armsx3JITEnablerListenerEn
 // Path components inside this app's Library/Application Support, resolved at run time.
 static NSString* const kArmsx3PairingSubdir = @"StikJIT";
 static NSString* const kArmsx3PairingName = @"pairingFile.plist";
+static NSString* const kArmsx3PairingOriginName = @"pairingFile.origin";
 
 NSString* const kArmsx3ResultOutcome = @"outcome";
 NSString* const kArmsx3ResultAttachMs = @"attach_ms";
@@ -65,9 +67,99 @@ static void Armsx3ExcludeFromBackup(NSString* path) {
     [[NSURL fileURLWithPath:path] setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:nil];
 }
 
-static NSData* _Nullable Armsx3ReadPairingBytes(void) {
+// One file the launch can send: its bytes, the source word and the shape word the pairing report uses.
+@interface Armsx3PairingCandidate : NSObject
+@property(nonatomic, strong) NSData* data;
+@property(nonatomic, copy) NSString* source;
+@property(nonatomic, copy) NSString* format;
+// Set only for SideStore's files, whose fixed names are the one thing the log may say.
+@property(nonatomic, copy, nullable) NSString* fileName;
+@end
+
+@implementation Armsx3PairingCandidate
+@end
+
+static NSString* Armsx3FormatWord(armsx3_pairing_shape shape) {
+    switch (shape) {
+        case ARMSX3_PAIRING_RP: return @"rp";
+        case ARMSX3_PAIRING_RP_LOCKDOWN: return @"rp-lockdown";
+        default: return @"";
+    }
+}
+
+// One byte past the cap, so an oversize file reads as invalid instead of filling memory.
+static NSData* _Nullable Armsx3ReadCapped(NSString* path) {
+    NSFileHandle* handle = [NSFileHandle fileHandleForReadingAtPath:path];
+    if (handle == nil) return nil;
+    NSData* data = [handle readDataUpToLength:ARMSX3_PAIRING_MAX_BYTES + 1 error:nil];
+    [handle closeAndReturnError:nil];
+    return data;
+}
+
+// A file dropped in the file-sharing folder is moved out before main(), so Files and computer tools stop seeing it.
+// Returns moved, lockdown or invalid, or nil when there was nothing to take or the move failed (the file then stays).
+static NSString* _Nullable Armsx3TakeDocumentsDrop(NSString* folder, NSString* ownPath) {
+    NSArray<NSString*>* docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    if (docs.count == 0) return nil;
+    NSString* dropPath = [docs.firstObject stringByAppendingPathComponent:kArmsx3PairingName];
+    NSFileManager* files = [NSFileManager defaultManager];
+    if (![files fileExistsAtPath:dropPath]) return nil;
+    NSData* data = Armsx3ReadCapped(dropPath);
+    const armsx3_pairing_shape shape = armsx3_pairing_shape_of(data.bytes, data.length);
+    if (shape == ARMSX3_PAIRING_LOCKDOWN) return @"lockdown";
+    if (shape == ARMSX3_PAIRING_INVALID) return @"invalid";
+
+    [files createDirectoryAtPath:folder withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString* incomingPath = [folder stringByAppendingPathComponent:@".incoming-pairingFile.plist"];
+    NSURL* incoming = [NSURL fileURLWithPath:incomingPath];
+    NSURL* own = [NSURL fileURLWithPath:ownPath];
+    BOOL swapped = [data writeToURL:incoming options:0 error:nil];
+    if (swapped) {
+        swapped = [files fileExistsAtPath:ownPath]
+            ? [files replaceItemAtURL:own withItemAtURL:incoming backupItemName:nil options:0 resultingItemURL:nil error:nil]
+            : [files moveItemAtURL:incoming toURL:own error:nil];
+    }
+    if (!swapped) {
+        [files removeItemAtPath:incomingPath error:nil];
+        return nil;
+    }
+    Armsx3ExcludeFromBackup(folder);
+    Armsx3ExcludeFromBackup(ownPath);
+    [@"documents" writeToFile:[folder stringByAppendingPathComponent:kArmsx3PairingOriginName]
+                   atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    [files removeItemAtPath:dropPath error:nil];
+    NSLog(@"[JITEnablerHost] pairingFile.plist moved out of Documents");
+    return @"moved";
+}
+
+// SideStore's file is read in place and never moved; only a Remote Pairing file is kept.
+static NSArray<Armsx3PairingCandidate*>* Armsx3SideStoreCandidates(void) {
+    const char* home = getenv("LC_HOME_PATH");
+    if (home == NULL) return @[];
+    NSString* folder = [[NSString stringWithUTF8String:home] stringByAppendingPathComponent:@"Documents/SideStore/Documents"];
+    NSArray<NSString*>* names = @[@"PairingFile_RemoteRP.plist", @"ALTPairingFile.mobiledevicepairing"];
+    NSArray<NSString*>* sources = @[@"sidestore-lc-rp", @"sidestore-lc-alt"];
+    NSMutableArray<Armsx3PairingCandidate*>* found = [NSMutableArray array];
+    for (NSUInteger i = 0; i < names.count; i++) {
+        NSData* data = Armsx3ReadCapped([folder stringByAppendingPathComponent:names[i]]);
+        const armsx3_pairing_shape shape = armsx3_pairing_shape_of(data.bytes, data.length);
+        if (shape != ARMSX3_PAIRING_RP && shape != ARMSX3_PAIRING_RP_LOCKDOWN) continue;
+        Armsx3PairingCandidate* candidate = [Armsx3PairingCandidate new];
+        candidate.data = data;
+        candidate.source = sources[i];
+        candidate.format = Armsx3FormatWord(shape);
+        candidate.fileName = names[i];
+        [found addObject:candidate];
+    }
+    return found;
+}
+
+// The files to try, in order. Pre-main also handles a Documents drop, first, so a valid one replaces the old file; the
+// word for what happened to it goes to documentsWord (moved, lockdown, invalid, or nil).
+static NSArray<Armsx3PairingCandidate*>* Armsx3PairingLookup(BOOL premain, NSString* _Nullable * _Nullable documentsWord) {
     NSString* folder = Armsx3PairingFolder(NSApplicationSupportDirectory);
-    if (folder == nil) return nil;
+    if (documentsWord != NULL) *documentsWord = nil;
+    if (folder == nil) return @[];
     NSString* path = [folder stringByAppendingPathComponent:kArmsx3PairingName];
     NSString* legacy = [Armsx3PairingFolder(NSDocumentDirectory) stringByAppendingPathComponent:kArmsx3PairingName];
     NSFileManager* files = [NSFileManager defaultManager];
@@ -75,12 +167,25 @@ static NSData* _Nullable Armsx3ReadPairingBytes(void) {
         [files createDirectoryAtPath:folder withIntermediateDirectories:YES attributes:nil error:nil];
         [files moveItemAtPath:legacy toPath:path error:nil];
     }
+    NSString* dropWord = nil;
+    if (premain) dropWord = Armsx3TakeDocumentsDrop(folder, path);
+    if (documentsWord != NULL) *documentsWord = dropWord;
+
+    NSMutableArray<Armsx3PairingCandidate*>* candidates = [NSMutableArray array];
     if ([files fileExistsAtPath:path]) {
         Armsx3ExcludeFromBackup(folder);
         Armsx3ExcludeFromBackup(path);
     }
     NSData* data = [NSData dataWithContentsOfFile:path options:0 error:nil];
-    return (data.length > 0) ? data : nil;
+    if (data.length > 0) {
+        Armsx3PairingCandidate* own = [Armsx3PairingCandidate new];
+        own.data = data;
+        own.source = @"own";
+        own.format = Armsx3FormatWord(armsx3_pairing_shape_of(data.bytes, data.length));
+        [candidates addObject:own];
+    }
+    [candidates addObjectsFromArray:Armsx3SideStoreCandidates()];
+    return candidates;
 }
 
 // ---- the last-result snapshot ----
@@ -88,6 +193,31 @@ static NSData* _Nullable Armsx3ReadPairingBytes(void) {
 static os_unfair_lock g_last_result_lock = OS_UNFAIR_LOCK_INIT;
 static armsx3_jit_enabler_result g_last_result;
 static bool g_last_result_valid = false;
+
+// The pairing report: words only, published once per launch by the pre-main pass.
+static os_unfair_lock g_pairing_report_lock = OS_UNFAIR_LOCK_INIT;
+static armsx3_jit_pairing_report g_pairing_report;
+static bool g_pairing_report_valid = false;
+
+static void Armsx3CopyWord(char* dest, size_t size, NSString* _Nullable word) {
+    strlcpy(dest, word.UTF8String ?: "", size);
+}
+
+static void Armsx3PublishPairingReport(Armsx3PairingCandidate* _Nullable used, const char* helperWord,
+                                       NSString* _Nullable rejected, NSString* _Nullable documents, int tried) {
+    armsx3_jit_pairing_report report;
+    memset(&report, 0, sizeof report);
+    Armsx3CopyWord(report.used, sizeof report.used, used.source);
+    Armsx3CopyWord(report.format, sizeof report.format, used.format);
+    strlcpy(report.result, armsx3_pairing_result_word(helperWord), sizeof report.result);
+    Armsx3CopyWord(report.rejected, sizeof report.rejected, rejected);
+    Armsx3CopyWord(report.documents, sizeof report.documents, documents);
+    report.tried = tried;
+    os_unfair_lock_lock(&g_pairing_report_lock);
+    g_pairing_report = report;
+    g_pairing_report_valid = true;
+    os_unfair_lock_unlock(&g_pairing_report_lock);
+}
 
 static void Armsx3InitResult(armsx3_jit_enabler_result* r) {
     r->outcome = ARMSX3_JIT_ENABLER_LAUNCH_FAILED;
@@ -228,7 +358,7 @@ typedef struct {
 }
 @end
 
-// Forwards only the four stage words the UI knows to the caller's block, on the XPC queue they arrive on.
+// Forwards only the five stage words the UI knows to the caller's block, on the XPC queue they arrive on.
 @interface Armsx3DDIHost : Armsx3LauncherHost
 - (instancetype)initWithStage:(void (^ _Nullable)(const char* word))stage;
 @end
@@ -242,7 +372,7 @@ typedef struct {
 }
 - (void)helperStage:(NSString*)word {
     if (_stage == nil || ![word isKindOfClass:[NSString class]]) return;
-    if (![@[@"connecting", @"downloading", @"mounting", @"checking"] containsObject:word]) return;
+    if (![@[@"connecting", @"pairing", @"downloading", @"mounting", @"checking"] containsObject:word]) return;
     _stage(word.UTF8String);
 }
 @end
@@ -423,6 +553,17 @@ static const void* const kArmsx3CoordinatorQueueKey = &kArmsx3CoordinatorQueueKe
             ((void (*)(id, SEL, id))objc_msgSend)(s->_extension, interruptSel, onInterrupt);
         }
 
+        SEL cancelSel = NSSelectorFromString(@"setRequestCancellationBlock:");
+        if ([s->_extension respondsToSelector:cancelSel]) {
+            // LiveContainer reports a guest extension that fails to load only through cancellation.
+            void (^onCancel)(NSUUID*, NSError*) = ^(NSUUID* __unused req, NSError* __unused error) {
+                Armsx3LauncherCoordinator* coordinator = weakSelf;
+                if (!coordinator) return;
+                [coordinator dispatchInterruptionFrom:@"request-cancelled"];
+            };
+            ((void (*)(id, SEL, id))objc_msgSend)(s->_extension, cancelSel, onCancel);
+        }
+
         NSExtensionItem* input = [NSExtensionItem new];
         input.userInfo = @{ kArmsx3ListenerEndpointKey: s->_listener.endpoint };
 
@@ -490,6 +631,11 @@ static const void* const kArmsx3CoordinatorQueueKey = &kArmsx3CoordinatorQueueKe
         // And the Mount reply.
         [runnerIface setClasses:replyClasses
                     forSelector:@selector(mountDDIWithPairing:withReply:)
+                  argumentIndex:0
+                        ofReply:YES];
+        // And the Check reply.
+        [runnerIface setClasses:replyClasses
+                    forSelector:@selector(checkSetupWithPairing:withReply:)
                   argumentIndex:0
                         ofReply:YES];
         c.remoteObjectInterface = runnerIface;
@@ -700,39 +846,19 @@ int armsx3_jit_enabler_prepare(uint64_t base, uint64_t size, int32_t pid,
     return armsx3_jit_enabler_prepare_ranges(one, 1, pid, result);
 }
 
-// A NULL or empty list goes to the helper as an empty request, which it refuses, so it never reads as success.
-__attribute__((used, visibility("default")))
-int armsx3_jit_enabler_prepare_ranges(const uint64_t* ranges_in, uint32_t count, int32_t pid,
-                                      armsx3_jit_enabler_result* result) {
+// One launch of the extension with one pairing file; the wait ends at `deadline`.
+static armsx3_jit_enabler_result Armsx3PrepareAttempt(NSData* ranges, NSData* pairing, int32_t pid, dispatch_time_t deadline) {
     @autoreleasepool {
-        NSMutableData* ranges = [NSMutableData dataWithCapacity:(NSUInteger)count * 16];
-        for (uint32_t i = 0; ranges_in != NULL && i < count && i < 64; i++) {
-            const uint64_t pair[2] = {CFSwapInt64HostToLittle(ranges_in[2 * i]), CFSwapInt64HostToLittle(ranges_in[2 * i + 1])};
-            [ranges appendBytes:pair length:sizeof pair];
-        }
-        // The app reads its own pairing file and sends the bytes; a missing file is pairing-absent, with no launch and no wait.
-        NSData* pairing = Armsx3ReadPairingBytes();
-        if (pairing == nil) {
-            armsx3_jit_enabler_result r;
-            Armsx3InitResult(&r);
-            Armsx3SetOutcomeWord(&r, "pairing-absent");
-            // A code of its own, so the switch can send the walkthrough to the pairing step.
-            r.outcome = ARMSX3_JIT_ENABLER_PAIRING_ABSENT;
-            os_unfair_lock_lock(&g_last_result_lock);
-            g_last_result = r;
-            g_last_result_valid = true;
-            os_unfair_lock_unlock(&g_last_result_lock);
-            if (result) *result = r;
-            return r.outcome;
-        }
-
         Armsx3LauncherHost* host = [Armsx3LauncherHost new];
         StikJITExtensionLauncher* launcher = [[StikJITExtensionLauncher alloc] initWithHost:host];
         // The stored blocks capture the launcher weakly; this frame keeps it alive for the whole wait.
         __weak StikJITExtensionLauncher* weakLauncher = launcher;
         dispatch_semaphore_t done = [launcher completionSemaphore];
+        dispatch_semaphore_t started = dispatch_semaphore_create(0);
+        const dispatch_time_t attemptStart = dispatch_time(DISPATCH_TIME_NOW, 0);
 
         [launcher launchWithCompletion:^(int32_t childPID, id<Armsx3JITEnablerRunner> runner, NSError* error) {
+            dispatch_semaphore_signal(started);
             StikJITExtensionLauncher* l = weakLauncher;
             if (!l) return;
             if (error || !runner) {
@@ -780,8 +906,18 @@ int armsx3_jit_enabler_prepare_ranges(const uint64_t* ranges_in, uint32_t count,
             }];
         }];
 
-        // A monotonic deadline, not a main-queue timer: the caller is a static initialiser holding the main thread.
-        dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, 12LL * NSEC_PER_SEC);
+        // The short wait applies only inside LiveContainer, where a hook problem can hang the request.
+        if (getenv("LC_HOME_PATH") != NULL) {
+            dispatch_time_t connectBy = dispatch_time(attemptStart, 5LL * NSEC_PER_SEC);
+            if (connectBy > deadline) connectBy = deadline;
+            if (dispatch_semaphore_wait(started, connectBy) != 0) {
+                armsx3_jit_enabler_result cand;
+                Armsx3InitResult(&cand);
+                Armsx3SetOutcomeWord(&cand, "connect-timeout");
+                cand.outcome = ARMSX3_JIT_ENABLER_LAUNCH_FAILED;
+                [launcher submitTerminal:&cand];
+            }
+        }
         BOOL timedOut = (dispatch_semaphore_wait(done, deadline) != 0);
 
         if (timedOut) {
@@ -805,7 +941,59 @@ int armsx3_jit_enabler_prepare_ranges(const uint64_t* ranges_in, uint32_t count,
                                                       snapshotChildPid:ts.child_pid];
 
         [launcher invalidate];
+        return r;
+    }
+}
 
+// A NULL or empty list goes to the helper as an empty request, which it refuses, so it never reads as success.
+__attribute__((used, visibility("default")))
+int armsx3_jit_enabler_prepare_ranges(const uint64_t* ranges_in, uint32_t count, int32_t pid,
+                                      armsx3_jit_enabler_result* result) {
+    @autoreleasepool {
+        // A monotonic deadline, not a main-queue timer: the caller is a static initialiser holding the main thread.
+        // One deadline covers every attempt, so a second file never stretches the wait.
+        const dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, 12LL * NSEC_PER_SEC);
+        NSMutableData* ranges = [NSMutableData dataWithCapacity:(NSUInteger)count * 16];
+        for (uint32_t i = 0; ranges_in != NULL && i < count && i < 64; i++) {
+            const uint64_t pair[2] = {CFSwapInt64HostToLittle(ranges_in[2 * i]), CFSwapInt64HostToLittle(ranges_in[2 * i + 1])};
+            [ranges appendBytes:pair length:sizeof pair];
+        }
+        // The app reads its own pairing file and sends the bytes; a missing file is pairing-absent, with no launch and no wait.
+        NSString* documents = nil;
+        NSArray<Armsx3PairingCandidate*>* candidates = Armsx3PairingLookup(YES, &documents);
+        if (candidates.count == 0) {
+            Armsx3PublishPairingReport(nil, "pairing-absent", nil, documents, 0);
+            armsx3_jit_enabler_result r;
+            Armsx3InitResult(&r);
+            Armsx3SetOutcomeWord(&r, "pairing-absent");
+            // A code of its own, so the switch can send the walkthrough to the pairing step.
+            r.outcome = ARMSX3_JIT_ENABLER_PAIRING_ABSENT;
+            os_unfair_lock_lock(&g_last_result_lock);
+            g_last_result = r;
+            g_last_result_valid = true;
+            os_unfair_lock_unlock(&g_last_result_lock);
+            if (result) *result = r;
+            return r.outcome;
+        }
+
+        // The next file is tried only when the device refused this one and the budget is not spent.
+        armsx3_jit_enabler_result r;
+        Armsx3PairingCandidate* used = nil;
+        NSString* rejected = nil;
+        int tried = 0;
+        for (NSUInteger i = 0; i < candidates.count; i++) {
+            used = candidates[i];
+            if (used.fileName != nil) NSLog(@"[JITEnablerHost] pairing from SideStore in LiveContainer: %@", used.fileName);
+            r = Armsx3PrepareAttempt(ranges, used.data, pid, deadline);
+            tried++;
+            if (!armsx3_pairing_should_retry(r.helper_outcome) || i + 1 == candidates.count
+                || dispatch_time(DISPATCH_TIME_NOW, 0) >= deadline) {
+                break;
+            }
+            if (rejected == nil) rejected = used.source;
+        }
+
+        Armsx3PublishPairingReport(used, r.helper_outcome, rejected, documents, tried);
         os_unfair_lock_lock(&g_last_result_lock);
         g_last_result = r;
         g_last_result_valid = true;
@@ -823,6 +1011,16 @@ int armsx3_jit_enabler_last_result(armsx3_jit_enabler_result* result) {
     bool valid = g_last_result_valid;
     if (valid) *result = g_last_result;
     os_unfair_lock_unlock(&g_last_result_lock);
+    return valid ? 0 : -1;
+}
+
+__attribute__((used, visibility("default")))
+int armsx3_jit_enabler_pairing_report(armsx3_jit_pairing_report* out) {
+    if (out == NULL) return -1;
+    os_unfair_lock_lock(&g_pairing_report_lock);
+    bool valid = g_pairing_report_valid;
+    if (valid) *out = g_pairing_report;
+    os_unfair_lock_unlock(&g_pairing_report_lock);
     return valid ? 0 : -1;
 }
 
@@ -882,6 +1080,17 @@ void armsx3_jit_pool_history_write(const struct armsx3_jit_pool_history* in) {
 
 // Disk-image operations after main(), on the same coordinator; they never write the pre-main last result.
 
+// The file this launch's pre-main pass got accepted, else the first one.
+static NSData* _Nullable Armsx3MountPairing(NSArray<Armsx3PairingCandidate*>* candidates) {
+    armsx3_jit_pairing_report report;
+    if (armsx3_jit_enabler_pairing_report(&report) == 0 && strcmp(report.result, "accepted") == 0) {
+        for (Armsx3PairingCandidate* candidate in candidates) {
+            if (strcmp(candidate.source.UTF8String, report.used) == 0) return candidate.data;
+        }
+    }
+    return candidates.firstObject.data;
+}
+
 static os_unfair_lock g_ddi_lock = OS_UNFAIR_LOCK_INIT;
 static bool g_ddi_running = false;
 
@@ -907,8 +1116,16 @@ static bool Armsx3IsDDIToken(id value) {
 static bool Armsx3IsDDIWord(int32_t op, const char* word) {
     static const char* const reset[] = {"deleted", "failed"};
     static const char* const mount[] = {"ready", "unreachable", "download", "pairing", "mount", "other"};
-    const char* const* words = (op == ARMSX3_JIT_DDI_OP_MOUNT) ? mount : reset;
-    const size_t n = (op == ARMSX3_JIT_DDI_OP_MOUNT) ? sizeof mount / sizeof *mount : sizeof reset / sizeof *reset;
+    static const char* const check[] = {"ready", "unreachable", "pairing", "unmounted", "other"};
+    const char* const* words = reset;
+    size_t n = sizeof reset / sizeof *reset;
+    if (op == ARMSX3_JIT_DDI_OP_MOUNT) {
+        words = mount;
+        n = sizeof mount / sizeof *mount;
+    } else if (op == ARMSX3_JIT_DDI_OP_CHECK) {
+        words = check;
+        n = sizeof check / sizeof *check;
+    }
     for (size_t i = 0; word != NULL && i < n; i++) {
         if (strcmp(word, words[i]) == 0) return true;
     }
@@ -919,15 +1136,15 @@ __attribute__((used, visibility("default")))
 int armsx3_jit_enabler_ddi(int32_t op, void (^stage)(const char* word), armsx3_jit_enabler_ddi_result* out) {
     // The result starts as a failure; only a validated helper reply changes it.
     Armsx3SetDDIWords(out, "other", "none");
-    // Reset has no stages; Mount's reach `stage` through Armsx3DDIHost.
-    if (op != ARMSX3_JIT_DDI_OP_RESET && op != ARMSX3_JIT_DDI_OP_MOUNT) {
+    // Reset has no stages; the stages of Mount and Check reach `stage` through Armsx3DDIHost.
+    if (op != ARMSX3_JIT_DDI_OP_RESET && op != ARMSX3_JIT_DDI_OP_MOUNT && op != ARMSX3_JIT_DDI_OP_CHECK) {
         Armsx3SetDDIWords(out, "other", "invalid-request");
         return -1;
     }
-    // Mount sends the pairing bytes; a missing file starts no extension.
+    // Mount and Check send the pairing bytes; a missing file starts no extension.
     NSData* pairing = nil;
-    if (op == ARMSX3_JIT_DDI_OP_MOUNT) {
-        pairing = Armsx3ReadPairingBytes();
+    if (op != ARMSX3_JIT_DDI_OP_RESET) {
+        pairing = Armsx3MountPairing(Armsx3PairingLookup(NO, NULL));
         if (pairing == nil) {
             Armsx3SetDDIWords(out, "pairing", "pairing-absent");
             return -1;
@@ -945,7 +1162,7 @@ int armsx3_jit_enabler_ddi(int32_t op, void (^stage)(const char* word), armsx3_j
 
     int rc = -1;
     @autoreleasepool {
-        Armsx3DDIHost* host = [[Armsx3DDIHost alloc] initWithStage:(op == ARMSX3_JIT_DDI_OP_MOUNT) ? stage : nil];
+        Armsx3DDIHost* host = [[Armsx3DDIHost alloc] initWithStage:(op != ARMSX3_JIT_DDI_OP_RESET) ? stage : nil];
         StikJITExtensionLauncher* launcher = [[StikJITExtensionLauncher alloc] initWithHost:host];
         __weak StikJITExtensionLauncher* weakLauncher = launcher;
         dispatch_semaphore_t done = [launcher completionSemaphore];
@@ -992,13 +1209,15 @@ int armsx3_jit_enabler_ddi(int32_t op, void (^stage)(const char* word), armsx3_j
             };
             if (op == ARMSX3_JIT_DDI_OP_MOUNT) {
                 [runner mountDDIWithPairing:pairing withReply:onReply];
+            } else if (op == ARMSX3_JIT_DDI_OP_CHECK) {
+                [runner checkSetupWithPairing:pairing withReply:onReply];
             } else {
                 [runner resetDDIWithReply:onReply];
             }
         }];
 
-        // Monotonic and off the main thread; Reset 30 s, Mount 900 s because it may download the image first.
-        const int64_t waitSeconds = (op == ARMSX3_JIT_DDI_OP_MOUNT) ? 900LL : 30LL;
+        // Monotonic and off the main thread; Reset 30 s, Check 60 s, Mount 900 s because it may download the image first.
+        const int64_t waitSeconds = (op == ARMSX3_JIT_DDI_OP_MOUNT) ? 900LL : (op == ARMSX3_JIT_DDI_OP_CHECK) ? 60LL : 30LL;
         dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, waitSeconds * (int64_t)NSEC_PER_SEC);
         if (dispatch_semaphore_wait(done, deadline) != 0) {
             armsx3_jit_enabler_result cand;

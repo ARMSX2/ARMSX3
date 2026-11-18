@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // The game screen: render view, touch pad, quick menu, saves, recording and RPCN banners. Reproduces ARMSX2 PR 757's look.
 
+import AVFoundation
 import Combine
 import GameController
 import SwiftUI
@@ -12,6 +13,10 @@ struct GameScreenView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.menuControllerInputRouter) private var controllerInput
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @State private var menuButtonFaded = false
+    @State private var fadeTimer: Task<Void, Never>?
     @State private var bootRequested = false
     @State private var bootStatus: Int?
     @State private var aiming = false
@@ -35,6 +40,7 @@ struct GameScreenView: View {
     @State private var settingsOpen = false
     @State private var report: ReportRequest?
     @State private var controllersSheet: ControllersSheetRequest?
+    @State private var jitDeviceSheet: JitDeviceSheetRequest?
     @State private var shotFile: URL?
     @State private var shotFailed = false
     @StateObject private var shotBanner = TransientBannerController<String>(defaultDisplayDuration: 2.5)
@@ -43,6 +49,8 @@ struct GameScreenView: View {
     // Files picks keep their access until the game stops, because the game keeps reading the disc.
     @State private var discSwap = 0
     @State private var discPicker = false
+    // True while the picker is for Change Disc, which starts the picked disc in place of this game.
+    @State private var discBoots = false
     @State private var discChanging = false
     @State private var discAccess: [URL] = []
     @State private var portalSheet = false
@@ -132,17 +140,18 @@ struct GameScreenView: View {
                     GameplayControllerShortcutHelpOverlay(settings: SettingsStore.shared, controllerInput: controllerInput)
                 }
             }
-            // In landscape the menu button sits top centre, between the shoulder buttons, and the banner moves below it.
-            .overlay(alignment: .top) { banner.padding(.top, verticalSizeClass == .compact ? 48 : 0) }
-            .overlay(alignment: verticalSizeClass == .compact ? .top : .topTrailing) {
+            // With the menu button top centre the banner moves below it.
+            .overlay(alignment: .top) { banner.padding(.top, menuButtonBesideBanner ? 48 : 0) }
+            .overlay(alignment: menuButtonAlignment) {
                 // Hidden while the menu is open: the card's glass smeared the button through. The scrim takes every tap anyway.
                 if menuOpen {
                     EmptyView()
-                } else if verticalSizeClass == .compact {
+                } else if menuButtonPosition == .topCentre {
                     // Centred on the whole screen, as the pad is, not between unequal safe-area insets.
                     menuButton.frame(maxWidth: .infinity).ignoresSafeArea(.container, edges: .horizontal)
                 } else {
-                    menuButton
+                    // Sideways, the shoulder row starts 54 pt down, so a corner button rides 10 pt higher to leave 8 pt above it.
+                    menuButton.offset(y: verticalSizeClass == .compact ? -10 : 0)
                 }
             }
             // Over the game only, while a recording runs. The open menu covers it.
@@ -152,11 +161,16 @@ struct GameScreenView: View {
                         .fill(.red)
                         .frame(width: 10, height: 10)
                         .padding(16)
+                        // Clear of the menu button's 68 pt.
+                        .padding(.leading, menuButtonPosition == .topLeft && menuButtonVisible ? 56 : 0)
                         .accessibilityLabel("Recording")
                         .onAppear { RecordingStore.shared.dotDrawn = true }
                 }
             }
             .overlay { menuLayer }
+            .overlay {
+                if SettingsStore.shared.xmbMode { XmbGameNotices() }
+            }
             .overlay {
                 if session.restartPending || exitSaving { restartOverlay }
             }
@@ -165,7 +179,11 @@ struct GameScreenView: View {
             }
             .alert("Couldn't save. Stop anyway?", isPresented: $exitFailed) {
                 Button("Stop anyway", role: .destructive) { stop() }
-                Button("Keep playing", role: .cancel) {}
+                Button("Keep playing", role: .cancel) {
+                    // The disc Change Disc picked is not started after all, and the app stays on.
+                    XmbInGame.shared.nextDisc = nil
+                    XmbInGame.shared.turnOffAfterExit = false
+                }
             } message: {
                 exitFailureStatus == EmulatorSession.savestateSpuBusy
                     ? spuBusyText : Text("The game was not saved (status \(exitFailureStatus)).")
@@ -227,24 +245,46 @@ struct GameScreenView: View {
             .alert("Couldn't save the recording.", isPresented: $recordingFailed) {
                 Button("OK", role: .cancel) {}
             }
-            // Not now ends it for this session: the dual map offers once per game session.
+            // Not Now ends it for this session: the dual map offers once per game session. Set Up Built-in JIT keeps the game paused under the sheet.
             .alert("More JIT memory needed",
                    isPresented: Binding(get: { jitOffer != nil }, set: { if !$0 { jitOffer = nil } }), presenting: jitOffer) { trigger in
                 Button("Open StikDebug") { openStikDebugForMoreJit(trigger) }
-                Button("Not now", role: .cancel) {}
+                Button("Set Up Built-in JIT") {
+                    setMenu(open: true)
+                    jitDeviceSheet = JitDeviceSheetRequest()
+                }
+                Button("Not Now", role: .cancel) {}
             } message: { _ in
-                Text("Open StikDebug to prepare more. The game pauses while it works.")
+                Text("Open StikDebug to prepare more. The game pauses while it works. Built-in JIT prepares enough from the start, so setting it up avoids this.")
+            }
+            // The menu stays open beneath, so the game stays paused.
+            .sheet(item: $jitDeviceSheet) { _ in
+                NavigationStack {
+                    JitDevicePane(host: .inGame,
+                                  controller: SettingsControllerContext(input: controllerInput),
+                                  onBack: { jitDeviceSheet = nil; return true })
+                        .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Done") { jitDeviceSheet = nil } } }
+                }
+                .background(OverlayFrostBackground().ignoresSafeArea())
+                .presentationDetents([.large])
+                .preferredColorScheme(.dark)
             }
             .sheet(isPresented: $discPicker) {
                 DiscPicker(onPick: { path, url in
                     discPicker = false
-                    Task { await swapDisc(path: path, filesURL: url) }
+                    Task { if discBoots { await bootInstead(path: path) } else { await swapDisc(path: path, filesURL: url) } }
                 }, onCancel: { discPicker = false })
             }
             // The menu stays open beneath, so the game stays paused.
             .sheet(isPresented: $portalSheet) {
                 PortalSheet(onDone: { portalSheet = false })
             }
+            .onAppear {
+                PadTouches.shared.onMenuHold = { if !menuOpen { setMenu(open: true) } }
+                restartFade()
+            }
+            .onChange(of: menuOpen) { restartFade() }
+            .onChange(of: SettingsStore.shared.menuButtonVisibility) { restartFade() }
             .onChange(of: controllerInput?.latestQuickPauseRequest) { _, request in
                 guard request != nil, chordsReady, !menuOpen else { return }
                 setMenu(open: true)
@@ -293,7 +333,18 @@ struct GameScreenView: View {
             }
             // The RPCN status every 2 s while the game runs. .task ends it when the screen goes.
             .task { await pollRpcn() }
+            // A full phone ends the game without a word, so the banner comes first and repeats while space stays low.
+            .task { await watchStorage() }
+            // A controller does not reset the idle timer, so the phone would lock mid-game.
+            .onChange(of: bootStatus == 0 && !stopping && !menuOpen && scenePhase == .active, initial: true) { _, awake in
+                UIApplication.shared.isIdleTimerDisabled = awake
+            }
+            .onAppear { XmbInGame.shared.screenUp = true }
             .onDisappear {
+                PadTouches.shared.onMenuHold = nil
+                fadeTimer?.cancel()
+                XmbInGame.shared.screenUp = false
+                UIApplication.shared.isIdleTimerDisabled = false
                 // The screen closing finishes a running recording's file.
                 stopRecordingAutomatically()
                 GamepadPoller.shared.stop()
@@ -305,9 +356,15 @@ struct GameScreenView: View {
                 discAccess = []
                 session.quickMenuOpen = false
                 controllerInput?.setNavigationCaptured(false, owner: QuickMenuView.controllerScope, priority: 300)
+                XmbInGame.shared.end()
                 session.inputOwner = .menu
                 // Reactivating a background that was never released is a no-op.
                 NotificationCenter.default.post(name: EmulatorSession.menuBackgroundReturnNotification, object: nil)
+                // A chosen power-off, so the next launch does not take it for a crash.
+                if XmbInGame.shared.turnOffAfterExit {
+                    DiagnosticsSession.shared.mark(.turnedOff)
+                    _exit(0)
+                }
             }
             .onReceive(Publishers.MergeMany(GamepadPoller.controllerChanges.map { NotificationCenter.default.publisher(for: $0) })) { _ in
                 controllerConnected = GamepadPoller.playerOneHasController
@@ -315,6 +372,11 @@ struct GameScreenView: View {
             // A restarted game has a new video provider that holds no recording, so the file is finished first.
             .onChange(of: session.state == EmulatorSession.stateStopped || session.restartPending) { _, ended in
                 if ended { stopRecordingAutomatically() }
+            }
+            // In XMB mode a halt is also the console's error dialog, in the XMB over the stopped game; the banner keeps Close ARMSX3.
+            .onChange(of: stopStatus) { _, status in
+                guard SettingsStore.shared.xmbMode, let status, XmbInGame.shared.gameError(status, jitReason: session.jitReason) else { return }
+                showMenu(true)
             }
             .onChange(of: showPad) { _, shown in
                 if !shown { PadSnapshot.shared.reset() }
@@ -403,9 +465,47 @@ struct GameScreenView: View {
         }
     }
 
+    private var menuButtonPosition: MenuButtonPosition {
+        SettingsStore.shared.menuButtonPosition.resolved(landscape: verticalSizeClass == .compact)
+    }
+
+    private var menuButtonAlignment: Alignment {
+        switch menuButtonPosition {
+        case .topLeft: .topLeading
+        case .topRight: .topTrailing
+        default: .top
+        }
+    }
+
+    private var menuButtonVisible: Bool { SettingsStore.shared.menuButtonVisibility != .hidden }
+
+    private var menuButtonBesideBanner: Bool { menuButtonPosition == .topCentre && menuButtonVisible }
+
+    // After about 3 s without a touch on it the button fades; it keeps its hit area.
+    private func restartFade() {
+        fadeTimer?.cancel()
+        menuButtonFaded = false
+        guard SettingsStore.shared.menuButtonVisibility == .fadeWhenIdle, !menuOpen else { return }
+        fadeTimer = Task {
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            if reduceMotion { menuButtonFaded = true } else { withAnimation(.easeOut(duration: 0.4)) { menuButtonFaded = true } }
+        }
+    }
+
+    private func menuButtonTapped() {
+        // A faded button only comes back; VoiceOver cannot see it fade, so it opens the menu at once.
+        if menuButtonFaded, !voiceOver {
+            menuButtonFaded = false
+            restartFade()
+        } else {
+            setMenu(open: !menuOpen)
+        }
+    }
+
     private var menuButton: some View {
         Button {
-            setMenu(open: !menuOpen)
+            menuButtonTapped()
         } label: {
             Image(systemName: "line.3.horizontal")
                 .font(.title3.weight(.semibold))
@@ -415,6 +515,9 @@ struct GameScreenView: View {
         }
         .accessibilityLabel("Menu")
         .padding(12)
+        // Hidden keeps the button for VoiceOver only; it takes no touch and shows nothing.
+        .opacity(menuButtonVisible && !menuButtonFaded ? 1 : 0)
+        .allowsHitTesting(menuButtonVisible)
         .disabled(bootStatus == nil)
     }
 
@@ -486,9 +589,45 @@ struct GameScreenView: View {
     @ViewBuilder private var menuLayer: some View {
         if menuOpen, let layoutEditor {
             PadLayoutEditorView(editor: layoutEditor, overGame: true, onClose: { self.layoutEditor = nil })
+        } else if menuOpen, SettingsStore.shared.xmbMode, slotPanel == nil, !settingsOpen, !friendsOpen {
+            // In XMB mode the pause menu is the XMB; its save slots, settings and friends stay the app's panels.
+            XmbGameMenu(game: game, busy: session.restartPending || stopping, calls: xmbCalls, controllerInput: controllerInput,
+                        discSwap: discSwap != 0 && !discChanging, recording: RecordingStore.shared.active, invites: rpcnInvites,
+                        sheetUp: report != nil || discPicker || portalSheet || controllersSheet != nil || jitDeviceSheet != nil)
         } else if menuOpen {
             menuPanel
         }
+    }
+
+    private var menuActions: QuickMenuView.Actions {
+        QuickMenuView.Actions(
+            resume: { setMenu(open: false) },
+            saveState: { slotPanel = .save },
+            loadState: { slotPanel = .load },
+            exit: { exitWithAutosave() },
+            settings: { settingsOpen = true },
+            report: { openReport() },
+            screenshot: { Task { await captureScreenshot(fromMenu: true) } },
+            controllers: { controllersSheet = ControllersSheetRequest(serial: game.serial) },
+            changeDisc: { discBoots = false; discPicker = true },
+            bootDisc: { discBoots = true; discPicker = true },
+            record: { Task { await toggleRecording(fromMenu: true) } },
+            portal: { portalSheet = true },
+            friends: { friendsOpen = true },
+            touchLayout: controllerConnected ? nil : {
+                layoutEditor = PadEditor(serial: game.serial, library: PadLayoutStore.shared.library)
+            },
+            recentreTilt: GamepadPoller.shared.phoneTilts ? {
+                let done = GamepadPoller.shared.recentreTilt()
+                setMenu(open: false)
+                shotBanner.present(done ? String(localized: "Tilt recentred") : String(localized: "Couldn't read the phone's tilt"))
+            } : nil)
+    }
+
+    // The XMB asks before a restart and before overwriting a slot, so these act at once.
+    private var xmbCalls: XmbInGame.Calls {
+        XmbInGame.Calls(actions: menuActions, restart: { resetGame() }, saveSlot: { saveSlot($0) }, loadState: { loadState(at: $0) },
+                        declined: { id in rpcnInvites.removeAll { $0.id == id } })
     }
 
     private var menuPanel: some View {
@@ -499,22 +638,7 @@ struct GameScreenView: View {
                 title: game.title,
                 canLoad: hasStates,
                 busy: session.restartPending || stopping,
-                actions: QuickMenuView.Actions(
-                    resume: { setMenu(open: false) },
-                    saveState: { slotPanel = .save },
-                    loadState: { slotPanel = .load },
-                    exit: { exitWithAutosave() },
-                    settings: { settingsOpen = true },
-                    report: { openReport() },
-                    screenshot: { Task { await captureScreenshot(fromMenu: true) } },
-                    controllers: { controllersSheet = ControllersSheetRequest(serial: game.serial) },
-                    changeDisc: { discPicker = true },
-                    record: { Task { await toggleRecording(fromMenu: true) } },
-                    portal: { portalSheet = true },
-                    friends: { friendsOpen = true },
-                    touchLayout: controllerConnected ? nil : {
-                        layoutEditor = PadEditor(serial: game.serial, library: PadLayoutStore.shared.library)
-                    }),
+                actions: menuActions,
                 controllerInput: controllerInput,
                 slotPanel: slotPanelView,
                 settingsPanel: settingsOpen
@@ -550,9 +674,12 @@ struct GameScreenView: View {
         }
         guard status == 0, let json else { return }
         let current = RpcnSession.invites(json)
+        let xmb = SettingsStore.shared.xmbMode
         for invite in RpcnSession.inviteChanges(previous: rpcnSeenInvites, current: current) {
-            rpcnBanner(RpcnSession.inviteBanner(invite), seconds: 8)
+            if xmb { XmbNotices.shared.invited(by: invite.from) } else { rpcnBanner(RpcnSession.inviteBanner(invite), seconds: 8) }
         }
+        // In XMB mode a friend request is told over the game too, as the console tells it.
+        if xmb { await XmbNotices.shared.readRequests() }
         rpcnSeenInvites.formUnion(current.map(\.id))
         rpcnInvites = current
     }
@@ -579,6 +706,26 @@ struct GameScreenView: View {
         guard rpcnBackgroundTask != .invalid else { return }
         UIApplication.shared.endBackgroundTask(rpcnBackgroundTask)
         rpcnBackgroundTask = .invalid
+    }
+
+    private func watchStorage() async {
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let repeatEvery = 6
+        var sinceWarned = repeatEvery
+        while !Task.isCancelled {
+            if bootStatus == 0, !stopping, StorageWatch.isLow(StorageWatch.availableBytes(at: documents)) {
+                sinceWarned += 1
+                if sinceWarned >= repeatEvery {
+                    sinceWarned = 0
+                    let text = String(localized: "Storage is almost full. Free some space or the game may close.")
+                    shotBanner.present(text, displayDuration: 6)
+                    AccessibilityNotification.Announcement(text).post()
+                }
+            } else {
+                sinceWarned = repeatEvery
+            }
+            try? await Task.sleep(for: .seconds(10))
+        }
     }
 
     private func pollRpcn() async {
@@ -739,7 +886,10 @@ struct GameScreenView: View {
     private func captureScreenshot(fromMenu: Bool) async {
         if fromMenu { await leaveMenuUntilRunning() }
         let (_, file) = await ScreenshotStore.capture(serial: game.serial)
-        if fromMenu {
+        if fromMenu, SettingsStore.shared.xmbMode {
+            // The XMB says nothing for a shot, which shows in its Photo column; a miss is one of its notices.
+            if file == nil { XmbNotices.shared.post(String(localized: "Couldn't capture a frame")) }
+        } else if fromMenu {
             if let file { shotFile = file } else { shotFailed = true }
         } else {
             shotBanner.present(file != nil ? String(localized: "Screenshot saved") : String(localized: "Couldn't capture a frame"))
@@ -767,7 +917,14 @@ struct GameScreenView: View {
             return
         }
         let file = await store.stop()
-        if fromMenu {
+        if fromMenu, SettingsStore.shared.xmbMode {
+            // An alert over the XMB would leave its pad on the menu behind, so the XMB says it as a notice.
+            if file != nil {
+                XmbNotices.shared.post(String(localized: "Recording saved"), detail: String(localized: "Files › ARMSX3 › Recordings"))
+            } else {
+                XmbNotices.shared.post(String(localized: "Couldn't save the recording"))
+            }
+        } else if fromMenu {
             if let file { recordingFile = file } else { recordingFailed = true }
         } else {
             shotBanner.present(file != nil ? String(localized: "Recording saved") : String(localized: "Couldn't save the recording"))
@@ -794,6 +951,17 @@ struct GameScreenView: View {
         let (status, result) = await session.changeDisc(path: path)
         discChanging = false
         shotBanner.present(DiscPicker.message(for: status == 0 ? result : 2))
+    }
+
+    // The bridge boots only what the library scanned, so a disc from elsewhere is refused before the game closes.
+    private func bootInstead(path: String) async {
+        let picked = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        let games = await Rpcs3Bridge.scanLibrary().0
+        guard let disc = games.first(where: { URL(fileURLWithPath: $0.bootPath).resolvingSymlinksInPath().path == picked }) else {
+            return shotBanner.present(String(localized: "Only a disc in the library can be started here"))
+        }
+        XmbInGame.shared.nextDisc = disc.bootPath
+        exitWithAutosave()
     }
 
     private func leaveMenu() async {
@@ -844,6 +1012,7 @@ struct GameScreenView: View {
     }
 
     private func showMenu(_ open: Bool) {
+        let wasOpen = menuOpen
         menuOpen = open
         if !open { layoutEditor = nil }
         if bootStatus == 0 { session.inputOwner = open ? .menu : .game }
@@ -851,7 +1020,11 @@ struct GameScreenView: View {
         KeyboardMouseFeed.shared.refreshPointerLock()
         // The router navigates the open quick menu, and captures navigation from the library under it.
         session.quickMenuOpen = open && bootStatus == 0
-        controllerInput?.setNavigationCaptured(session.quickMenuOpen, owner: QuickMenuView.controllerScope, priority: 300)
+        // An open in-game XMB already holds its capture, or has let it go to a sheet, when a dropped pad opens the menu again.
+        if !(wasOpen && open && SettingsStore.shared.xmbMode) {
+            controllerInput?.setNavigationCaptured(session.quickMenuOpen, owner: QuickMenuView.controllerScope, priority: 300,
+                                                   padFirst: open && SettingsStore.shared.xmbMode)
+        }
         if open {
             // Change Disc is offered only while the game takes a swap, read now.
             discSwap = 0
@@ -874,18 +1047,22 @@ struct GameScreenView: View {
         guard !bootRequested else { return }
         bootRequested = true
         // A title with an exit autosave asks first, and never resumes without an answer.
-        var autosave = await session.slotFile(fileSlot: EmulatorSession.autoFileSlot, serial: game.serial)
+        // A state picked in the XMB's Load / Manage Saves is the one to start from, with nothing to ask.
+        let picked = XmbToolsStore.shared.takeState(serial: game.serial)
+        var autosave = if let picked { picked } else { await session.slotFile(fileSlot: EmulatorSession.autoFileSlot, serial: game.serial) }
         // An exit autosave from before the USB bus returned cannot be resumed, so the game boots fresh and says so once.
         let oldAutosave = autosave.map { EmulatorSession.stateEpoch(path: $0) < SaveStateFiles.formatEpoch } ?? false
         if oldAutosave {
             autosave = nil
         }
-        var resume = false
-        if autosave != nil {
+        var resume = picked != nil
+        if autosave != nil, picked == nil {
             guard let answer = await askResume() else { return }
             resume = answer
         }
         // Activated first, so the core's Cubeb stream opens against an active session. A refusal does not stop the boot.
+        // The XMB's music and videos may have left the session mixable, and the game's own setup runs once a run.
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
         _ = await session.activateAudio()
         let status: Int
         if let autosave, resume {
@@ -933,7 +1110,8 @@ struct GameScreenView: View {
             // A Stop in flight or a save or load restart skips the tick; a Stop that timed out lets the record carry on.
             if stopping || session.restartPending { continue }
             // The dual map latches at most one offer per game session; the read clears it.
-            if stopStatus == nil, jitOffer == nil {
+            // An open XMB leaves the offer latched, so its alert never comes up over the XMB, which keeps the pad.
+            if stopStatus == nil, jitOffer == nil, !(menuOpen && SettingsStore.shared.xmbMode) {
                 let taken = await withCheckedContinuation { continuation in
                     Rpcs3Bridge.takeJitSecondPassOffer { continuation.resume(returning: $0) }
                 }
@@ -972,6 +1150,8 @@ struct GameScreenView: View {
                 GamepadPoller.shared.onPlayerLost = nil
                 await SessionRecord.shared.finish(stopStatus: status)
                 DiagnosticsSession.shared.mark(.menu)
+                // Music picked in the open XMB is held before the screen goes; the home's cover hands it back after.
+                if menuOpen, SettingsStore.shared.xmbMode { XmbMedia.shared.stop() }
                 dismiss()
             } else {
                 stopStatus = status
@@ -1029,6 +1209,8 @@ struct GameScreenView: View {
         await SessionRecord.shared.finish(stopStatus: 0)
         DiagnosticsSession.shared.mark(.menu)
         await session.deactivateAudio()
+        // Music picked in the open XMB is held before the screen goes; the home's cover hands it back after.
+        if menuOpen, SettingsStore.shared.xmbMode { XmbMedia.shared.stop() }
         dismiss()
     }
 
@@ -1043,7 +1225,7 @@ struct GameScreenView: View {
         let start: (Bool) -> Void = { opened in
             Rpcs3Bridge.startJitSecondPass(trigger, opened: opened) { _ in }
         }
-        guard let url = JitSecondPassLink.url(bundleID: Bundle.main.bundleIdentifier ?? "",
+        guard let url = JitSecondPassLink.url(bundleID: LiveContainerProbe.stikDebugBundleID,
                                               pid: ProcessInfo.processInfo.processIdentifier) else {
             start(false)
             return
@@ -1069,8 +1251,8 @@ struct GameScreenView: View {
         guard stopStatus == EmulatorSession.jitExhausted else {
             return Text("The game's graphics crashed, so it can't be stopped safely. Close ARMSX3 and open it again to keep playing.")
         }
-        if session.jitReason == "stikdebug-handshake" {
-            return Text("The game ran out of JIT memory. Close ARMSX3, then open it from the home screen to use the built-in JIT, which prepares more.")
+        if session.jitReason != "helper-ok" {
+            return Text("The game ran out of JIT memory. Built-in JIT prepares more. Set it up in Settings › JIT and Device, then open ARMSX3 again.")
         }
         return Text("The game ran out of JIT memory. Close ARMSX3 and open it again.")
     }
@@ -1091,4 +1273,9 @@ struct GameScreenView: View {
         }
         return false
     }
+}
+
+// One request per opening, so the sheet is rebuilt each time.
+struct JitDeviceSheetRequest: Identifiable {
+    let id = UUID()
 }

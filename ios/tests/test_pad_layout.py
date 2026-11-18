@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""PadLayout.swift, run alone on the Mac host: an untouched layout is the default pad, Default is never written, saving
-for one game or for all games lands where the editor said, presets and pins follow renames and deletes, and a
-.armsx3pad file survives a round trip and is clamped on the way in. It does not draw the pad."""
+"""PadLayout.swift, run alone on the Mac host: an untouched layout is the default pad, motion pieces start hidden,
+Default is never written, saving for one game or for all games lands where the editor said, presets and pins follow
+renames and deletes, and a .armsx3pad file survives a round trip and is clamped on the way in. It does not draw the
+pad."""
 
 import re
 import tempfile
@@ -27,6 +28,11 @@ func check(_ name: String, _ ok: Bool) { print("\(name) \(ok ? 1 : 0)") }
 let empty = PadSlotLayout()
 check("default-l3-hidden", empty[.l3].hidden && empty[.r3].hidden)
 check("default-l1-shown", !empty[.l1].hidden && empty[.l1].centre == nil && empty[.l1].size == 1)
+// Motion pieces start hidden; tilt and turn swap sides under Mirror, the rest mirror in place.
+let motionPieces: [PadPiece] = [.flickUp, .flickDown, .shake, .tiltLeft, .tiltRight, .tiltForward, .tiltBack, .turnLeft, .turnRight]
+check("default-motion-hidden", motionPieces.allSatisfy { empty[$0].hidden && $0.isMotion } && !PadPiece.cross.isMotion)
+check("motion-partners", PadPiece.tiltLeft.partner == .tiltRight && PadPiece.turnRight.partner == .turnLeft
+      && PadPiece.shake.partner == nil && PadPiece.tiltForward.partner == nil)
 var touched = PadSlotLayout()
 touched[.l1] = PadPlacement.standard(.l1)
 check("standard-not-stored", touched.pieces.isEmpty)
@@ -128,7 +134,7 @@ let decoded = try! JSONDecoder().decode(PadLayoutLibrary.self, from: encoded)
 check("library-roundtrip", decoded == library)
 """
 
-EXPECTED = ["default-l3-hidden", "default-l1-shown", "standard-not-stored", "split-movable", "mine-written",
+EXPECTED = ["default-l3-hidden", "default-l1-shown", "default-motion-hidden", "motion-partners", "standard-not-stored", "split-movable", "mine-written",
             "default-untouched", "game-follows-shared", "game-own", "game-own-key", "others-shared", "pinned-default",
             "pin-keeps-own", "pin-back-to-own", "pin-follows-shared", "all-games-keeps-own", "save-target",
             "unique-name", "delete-unpins", "rename-trims", "choices-order", "layouts-edit-keeps-shared", "file-name", "file-clamped",

@@ -2933,7 +2933,7 @@ struct ControllerNavigationAnimatedOrbField: View {
             palette = .purple
             holdMilliseconds = 360
         case .up, .right, .down, .left,
-             .upRight, .downRight, .downLeft, .upLeft:
+             .upRight, .downRight, .downLeft, .upLeft, .start, .select:
             // Anchor travel owns the half-speed orbit program. A directional
             // repeat must not stack a second reaction burst on top of it.
             return

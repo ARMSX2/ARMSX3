@@ -38,12 +38,72 @@ struct Sixaxis: Equatable {
     // A flat DS3 at rest (pad_types.h DEFAULT_MOTION_X/Y/Z/G).
     static let rest = Sixaxis(x: 512, y: 399, z: 512, g: 512)
 
-    // An inverted axis is mirrored about 512, kept inside 0...1023.
+    // An inverted axis is mirrored about 512, kept inside 0...1023. Tilt Y is forward and back, which a DS3 reads on Z.
     func applying(invertX: Bool, invertY: Bool) -> Sixaxis {
         var s = self
         if invertX { s.x = min(1023, 1024 - x) }
-        if invertY { s.y = min(1023, 1024 - y) }
+        if invertY { s.z = min(1023, 1024 - z) }
         return s
+    }
+}
+
+// What a motion button plays on the SIXAXIS, named as the Controllers pane lists it.
+enum MotionGesture: String, CaseIterable {
+    case flickUp = "Flick Up", flickDown = "Flick Down", shake = "Shake"
+    case tiltLeft = "Tilt Left", tiltRight = "Tilt Right", tiltForward = "Tilt Forward", tiltBack = "Tilt Back"
+    case turnLeft = "Turn Left", turnRight = "Turn Right"
+}
+
+// One player's held motion buttons, with Android's strengths (MotionButtons.kt). Times are in seconds.
+struct MotionPlayback: Equatable {
+    static let tilt = 50.0 * Double.pi / 180
+    static let turn = 3.0
+    static let shakeHz = 10.0
+    static let shakeG = 2.5
+    static let flickPush = 0.07
+    static let flickTotal = 0.14
+    static let flickPushG = 2.5
+    static let flickStopG = 1.8
+
+    private(set) var held: Set<MotionGesture> = []
+    private var flickUp = true
+    private var flickStart = -Double.infinity
+    private var shakeStart = 0.0
+
+    // A flick plays once per press; a shake starts its wobble at the press.
+    mutating func update(pressed: Set<MotionGesture>, at now: Double) {
+        for gesture in pressed.subtracting(held) {
+            switch gesture {
+            case .flickUp, .flickDown:
+                flickUp = gesture == .flickUp
+                flickStart = now
+            case .shake: shakeStart = now
+            default: break
+            }
+        }
+        held = pressed
+    }
+
+    func active(at now: Double) -> Bool { !held.isEmpty || now - flickStart < Self.flickTotal }
+
+    // In the units MotionMath.sixaxis takes: g with a flat pad at y -1, and yaw in rad/s.
+    func sample(at now: Double) -> (Double, Double, Double, Double) {
+        let roll = (held.contains(.tiltLeft) ? Self.tilt : 0) - (held.contains(.tiltRight) ? Self.tilt : 0)
+        let pitch = (held.contains(.tiltForward) ? Self.tilt : 0) - (held.contains(.tiltBack) ? Self.tilt : 0)
+        // Android's values negated, since its frame reads +1 g flat.
+        var x = -sin(roll)
+        var y = -cos(roll) * cos(pitch)
+        let z = -sin(pitch)
+        var yaw = 0.0
+        if held.contains(.turnLeft) { yaw -= Self.turn }
+        if held.contains(.turnRight) { yaw += Self.turn }
+        if held.contains(.shake) { x -= Self.shakeG * sin(2 * Double.pi * Self.shakeHz * (now - shakeStart)) }
+        let t = now - flickStart
+        if t < Self.flickTotal {
+            let push = t < Self.flickPush ? Self.flickPushG : -Self.flickStopG
+            y -= flickUp ? push : -push
+        }
+        return (x, y, z, yaw)
     }
 }
 
@@ -82,6 +142,41 @@ enum MotionMath {
                       previous: (Double, Double)) -> (stick: (UInt8, UInt8), state: (Double, Double)) {
         let offset = gyroOffset(rateX: rateX, rateY: rateY, setting: setting, previous: previous)
         return (fold(stick: stick, offset: offset), offset)
+    }
+
+    // Hand movement shorter than this, in g, is tremor; a deliberate shake peaks far above it.
+    static let tremor = 0.15
+
+    // How far the grip tips the top edge away from upright, in radians, from gravity in the screen frame.
+    static func gripPitch(gravity g: (Double, Double, Double)) -> Double {
+        let pitch = atan2(-g.2, -g.1)
+        return pitch.isFinite ? pitch : 0
+    }
+
+    // Gravity and hand movement in the screen frame, in g, as the pad's acceleration: turned so the grip reads
+    // flat, tilt scaled by `sensitivity` percent, and movement under `tremor` dropped. Movement is never scaled.
+    static func shaped(gravity g: (Double, Double, Double), movement m: (Double, Double, Double),
+                       grip: Double, sensitivity: Int, tremor: Double) -> (Double, Double, Double) {
+        let shaking = (m.0 * m.0 + m.1 * m.1 + m.2 * m.2).squareRoot() >= tremor
+        let tilt = scaled(pitched(g, by: -grip), percent: sensitivity)
+        let move = shaking ? pitched(m, by: -grip) : (0, 0, 0)
+        return (tilt.0 + move.0, tilt.1 + move.1, tilt.2 + move.2)
+    }
+
+    // Turned about the pad's left-right axis; a positive angle tips the top edge away.
+    static func pitched(_ v: (Double, Double, Double), by angle: Double) -> (Double, Double, Double) {
+        (v.0, v.1 * cos(angle) - v.2 * sin(angle), v.1 * sin(angle) + v.2 * cos(angle))
+    }
+
+    // Roll from the horizon and pitch from flat, each multiplied and stopped at 90 degrees; the length is kept.
+    static func scaled(_ g: (Double, Double, Double), percent: Int) -> (Double, Double, Double) {
+        let k = Double(min(max(percent, 50), 200)) / 100
+        let length = (g.0 * g.0 + g.1 * g.1 + g.2 * g.2).squareRoot()
+        guard k != 1, length > 0, length.isFinite else { return g }
+        let limit = Double.pi / 2
+        let roll = min(max(asin(min(max(g.0 / length, -1), 1)) * k, -limit), limit)
+        let pitch = min(max(atan2(-g.2, -g.1) * k, -limit), limit)
+        return (length * sin(roll), -length * cos(roll) * cos(pitch), -length * cos(roll) * sin(pitch))
     }
 
     // Rounded and clamped to 0...1023.

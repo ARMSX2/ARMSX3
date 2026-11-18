@@ -4,6 +4,8 @@ import SwiftUI
 
 @main
 struct ARMSX3App: App {
+    @UIApplicationDelegateAdaptor(ARMSX3AppDelegate.self) private var appDelegate
+
     var body: some Scene {
         WindowGroup {
             ARMSX3FrontendRoot()

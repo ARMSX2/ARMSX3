@@ -49,10 +49,22 @@ namespace vk
 				const fragment_program_type& fragmentProgramData,
 				const vk::pipeline_props& pipelineProperties,
 				bool compile_async,
+#ifdef __APPLE__
+				std::function<pipeline_type*(pipeline_storage_type&)> callback,
+				bool urgent = false)
+#else
 				std::function<pipeline_type*(pipeline_storage_type&)> callback)
+#endif
 		{
 			vk::pipe_compiler::op_flags compiler_flags = compile_async ? vk::pipe_compiler::COMPILE_DEFERRED : vk::pipe_compiler::COMPILE_INLINE;
 			compiler_flags |= vk::pipe_compiler::SEPARATE_SHADER_OBJECTS;
+#ifdef __APPLE__
+
+			if (urgent)
+			{
+				compiler_flags |= vk::pipe_compiler::COMPILE_URGENT;
+			}
+#endif
 
 			if (vertexProgramData.Flags() & RSX_SHADER_CONTROL_FLAT_SHADING)
 			{

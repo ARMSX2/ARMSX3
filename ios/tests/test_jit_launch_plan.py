@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
 """The stored JIT method and LiveContainer decide the pre-main route: jit_launch_plan.h, compiled with cc, composes the
-plan as the table says, the launcher reads the key safely, and the dual map checks in order and never reaches the
-helper under LiveContainer. It is a host and source check, not device evidence."""
+plan as the table says, the launcher reads the key safely, and the dual map checks in order and refuses neither
+LiveContainer nor a stored StikDebug method before the helper. It is a host and source check, not device evidence."""
 
 import re
 import shutil
@@ -64,9 +64,7 @@ READER_FORBIDS = re.compile(r"armsx3_jit_enabler_prepare|NSExtension|beginExtens
 
 PLAN_NAME = "armsx3_jit_launch_plan"
 HELPER_LOOKUP = 'void* const entry = ::dlsym(RTLD_DEFAULT, "armsx3_jit_enabler_prepare_ranges");'
-NOT_ATTACHED = 'if ((plan & k_jit_plan_method_mask) == k_jit_plan_stikdebug) { enabler_reason = "stikdebug-not-attached"; return false; }'
-LC_RETURN = 'enabler_reason = "livecontainer";'
-HELPER_STRING = '"armsx3_jit_enabler_prepare_ranges"'
+REFUSALS = ('"livecontainer"', "stikdebug-not-attached")
 
 # The pre-main debugger wait.
 WAIT_SIGNATURE = "bool wait_for_debugger(int budget_ms)"
@@ -78,8 +76,6 @@ ORDER = (
     'if (process_is_traced() == 1) { enabler_reason = "already-traced"; return false; }',
     'void* const plan_entry = ::dlsym(RTLD_DEFAULT, "armsx3_jit_launch_plan");',
     "const int plan = plan_entry != nullptr ? reinterpret_cast<launch_plan_fn>(plan_entry)() : 0;",
-    'if ((plan & k_jit_plan_livecontainer) != 0 && (plan & k_jit_plan_method_mask) == 0) { enabler_reason = "livecontainer"; return false; }',
-    NOT_ATTACHED,
     WAIT_CALL,
     HELPER_LOOKUP,
 )
@@ -200,16 +196,13 @@ def launch_plan_problems(header_raw, launcher_raw, dual_raw, swift_raw=None):
         return problems + ["order: the launch-time switch prepare_through_builtin_enabler() not found"]
     at = [flat.find(step) for step in ORDER]
     if -1 in at or at != sorted(at):
-        problems.append("order: the switch does not run, in order, the traced check, the plan lookup, the LiveContainer return, the not-attached and wait returns and the helper lookup; positions {0}".format(at))
+        problems.append("order: the switch does not run, in order, the traced check, the plan lookup, the wait return and the helper lookup; positions {0}".format(at))
+    for refusal in REFUSALS:
+        if refusal in flat:
+            problems.append("refusal: the switch names {0}; neither LiveContainer nor a stored StikDebug method may stop the helper".format(refusal))
     named = [m.start() for m in re.finditer(r"\b" + PLAN_NAME + r"\b", code)]
     if len(named) != 1 or not start < named[0] < end or code[named[0] - 1] != '"':
         problems.append("order: {0} must appear once in the dual map, as the dlsym string inside the switch; found {1}".format(PLAN_NAME, len(named)))
-
-    # nohelper-lc
-    lc = code.find(LC_RETURN)
-    helper = code.find(HELPER_STRING)
-    if lc < 0 or helper < 0 or not lc < helper:
-        problems.append("nohelper-lc: the livecontainer return does not precede the helper's dlsym; LiveContainer could reach the helper")
 
     # wait
     budget = WAIT_BUDGET.findall(code)
@@ -295,16 +288,17 @@ class TheGuardFailsOnAMutation(unittest.TestCase):
                                "armsx3_jit_enabler_prepare_ranges(NULL, 0, 0, NULL);\n    return armsx3_jit_plan_compose(livecontainer, method);")
         has(self, self.problems(launcher=launcher), "reader")
 
-    def test_mutation_not_attached_return_dropped_is_caught(self):
-        dual = self.edited(self.dual, 'enabler_reason = "stikdebug-not-attached";\n\t\t\t\treturn false;', ";")
-        has(self, self.problems(dual=dual), "order")
-
-    def test_mutation_livecontainer_after_the_helper_lookup_is_caught(self):
+    def test_mutation_livecontainer_refusal_back_is_caught(self):
         lc = ('\t\t\tif ((plan & k_jit_plan_livecontainer) != 0 && (plan & k_jit_plan_method_mask) == 0)\n'
               '\t\t\t{\n\t\t\t\tenabler_reason = "livecontainer";\n\t\t\t\treturn false;\n\t\t\t}\n\n')
-        dual = self.edited(self.dual, lc, "")
-        dual = self.edited(dual, "\t\t\tif (entry == nullptr)\n", lc + "\t\t\tif (entry == nullptr)\n")
-        has(self, self.problems(dual=dual), "nohelper-lc")
+        dual = self.edited(self.dual, "\t\t\tif (entry == nullptr)\n", lc + "\t\t\tif (entry == nullptr)\n")
+        has(self, self.problems(dual=dual), "refusal")
+
+    def test_mutation_not_attached_refusal_back_is_caught(self):
+        refusal = ('\t\t\tif ((plan & k_jit_plan_method_mask) == k_jit_plan_stikdebug)\n'
+                   '\t\t\t{\n\t\t\t\tenabler_reason = "stikdebug-not-attached";\n\t\t\t\treturn false;\n\t\t\t}\n\n')
+        dual = self.edited(self.dual, "\t\t\tif (entry == nullptr)\n", refusal + "\t\t\tif (entry == nullptr)\n")
+        has(self, self.problems(dual=dual), "refusal")
 
     def test_mutation_plan_called_directly_is_caught(self):
         dual = self.edited(self.dual, "reinterpret_cast<launch_plan_fn>(plan_entry)()", "armsx3_jit_launch_plan()")

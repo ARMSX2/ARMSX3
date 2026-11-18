@@ -1388,6 +1388,9 @@ void spu_cache::initialize(bool build_existing_cache)
 
 	atomic_t<usz> fnext{};
 	atomic_t<u8> fail_flag{0};
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+	atomic_t<bool> pool_capped{false};
+#endif
 
 	auto data_list = g_fxo->get<spu_cache>().precompile_funcs.pop_all();
 	g_fxo->get<spu_cache>().collect_funcs_to_precompile = false;
@@ -1529,6 +1532,15 @@ void spu_cache::initialize(bool build_existing_cache)
 
 		auto compile_program = [&](spu_program&& program) -> spu_function_t
 		{
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+			// The cache can hold more than pool 2, and blocks the game builds while running need the other half.
+			if (utils::jit_pool2_precompile_full())
+			{
+				pool_capped = true;
+				return nullptr;
+			}
+
+#endif
 #ifdef ARCH_ARM64
 			return compile_spu_llvm_with_retry(compiler, program);
 #else
@@ -1852,7 +1864,15 @@ void spu_cache::initialize(bool build_existing_cache)
 	// The programs that DID build are valid and worth keeping; the rest are compiled on demand,
 	// which is the normal path for anything precompilation did not reach anyway. So report what
 	// was actually lost and fall through.
+#if defined(__APPLE__) && defined(ARCH_ARM64)
+	if (pool_capped)
+	{
+		spu_log.notice("SPU Runtime: stopped after building %u programs, at half of JIT pool 2. The rest are compiled on demand; cached programs are kept.", built_total);
+	}
+	else if (fail_flag)
+#else
 	if (fail_flag)
+#endif
 	{
 		spu_log.error("SPU Runtime: ran out of JIT memory after building %u programs."
 			" The rest are compiled on demand; cached programs are kept.", built_total);
@@ -3437,8 +3457,13 @@ spu_recompiler_base::~spu_recompiler_base()
 // (ESRCH); the install, or the boot, then waits forever. It only happened while a raw SPU was
 // compiling new code, and a run with that code already cached went through (Odin 3, 10-19).
 // Holding every other guest thread for the length of the compile makes it take no time as far as
-// the game's threads can tell. The guest clock still moves: the JITs bake the timebase offset, so
-// winding it back is not safe.
+// the game's threads can tell.
+#ifdef __APPLE__
+// The guest clocks are wound back by the compile time while everyone is still held, so a game's
+// own timeouts do not see the compile either.
+void amend_guest_time_for_pause(u64 paused_us);
+#endif
+
 static spu_function_t compile_spu_llvm_paused(spu_thread& spu, const spu_program& program)
 {
 	static thread_local bool t_logged = false;
@@ -3448,7 +3473,14 @@ static spu_function_t compile_spu_llvm_paused(spu_thread& spu, const spu_program
 	// while we are parked, so the compiler is still only used by one thread at a time.
 	const auto func = cpu_thread::suspend_all(&spu, {}, [&]
 	{
+#ifdef __APPLE__
+		const u64 compile_start = get_system_time();
+		auto compiled = compile_spu_llvm_with_retry(spu.jit, program);
+		amend_guest_time_for_pause(get_system_time() - compile_start);
+		return compiled;
+#else
 		return compile_spu_llvm_with_retry(spu.jit, program);
+#endif
 	});
 
 	const u64 took = get_system_time() - start;

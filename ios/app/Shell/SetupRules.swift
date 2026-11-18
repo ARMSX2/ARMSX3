@@ -4,7 +4,7 @@
 import Foundation
 
 enum SetupRules {
-    static let stepCount = 6
+    static let stepCount = 7
     static let steps = 1...stepCount
 
     /// A saved step resumes; a fresh install starts at 1; an existing player is marked finished and never interrupted.
@@ -15,12 +15,12 @@ enum SetupRules {
         return (nil, true)
     }
 
-    /// The step after `step`, or nil after the last one and outside 1...6.
+    /// The step after `step`, or nil after the last one and outside 1...7.
     static func next(_ step: Int) -> Int? {
         step >= 1 && step < stepCount ? step + 1 : nil
     }
 
-    /// The step before `step`, or nil on the first one and outside 1...6.
+    /// The step before `step`, or nil on the first one and outside 1...7.
     static func previous(_ step: Int) -> Int? {
         step > 1 && step <= stepCount ? step - 1 : nil
     }
