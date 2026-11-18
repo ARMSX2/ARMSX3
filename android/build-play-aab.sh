@@ -155,6 +155,20 @@ else
 	echo "  ok: the microphone is optional"
 fi
 
+# Wi-Fi, Bluetooth and a landscape screen: Play derives them from CHANGE_WIFI_MULTICAST_STATE, a
+# library's BLUETOOTH permission and the landscape-locked game screen, requires them, and since
+# November 2026 holds the release at review for it (1.7's first upload). The manifest declares
+# each one optional, and those declarations are its only mention of these features, so their
+# presence is the check, as for the microphone above.
+for feature in android.hardware.wifi android.hardware.bluetooth android.hardware.screen.landscape; do
+	if LC_ALL=C grep -aqF "$feature" "$MANIFEST"; then
+		echo "  ok: $feature is optional"
+	else
+		echo "FAIL: no optional $feature -- Play would require it and hold the release at review" >&2
+		fail=1
+	fi
+done
+
 # Native libraries are entries in the archive, so check the listing rather than the bytes.
 #
 # Captured ONCE into a variable rather than piped into each grep. Under `set -o pipefail`,

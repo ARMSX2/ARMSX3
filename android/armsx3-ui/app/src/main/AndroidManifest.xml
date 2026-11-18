@@ -3,6 +3,14 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- Play turns permissions and the landscape lock into hardware it then requires, and since
+         November 2026 it holds a release at review for it: CHANGE_WIFI_MULTICAST_STATE implies
+         Wi-Fi, a library's BLUETOOTH permission implies Bluetooth, and the landscape-locked game
+         screen implies a landscape screen. Remote play discovery, Bluetooth pads and rotation are
+         all things the app works without, so none of them is required. -->
+    <uses-feature android:name="android.hardware.wifi" android:required="false" />
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+    <uses-feature android:name="android.hardware.screen.landscape" android:required="false" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- Rumble for a PlayStation pad is written to it directly over USB, because a handheld
          that bridges the controller through its own HID node reports motors it never drives.
