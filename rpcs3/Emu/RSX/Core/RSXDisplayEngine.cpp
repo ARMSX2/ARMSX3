@@ -25,6 +25,9 @@ extern atomic_t<u32> g_lv2_preempts_taken;
 
 LOG_CHANNEL(perf_log, "PERF");
 
+// The Last of Us: restart a job list the game waits on when nothing else will (SPUThread.cpp)
+void spu_nd_job_manager_resume();
+
 namespace rsx
 {
 	void display_engine::init(thread* pump, display_output* output)
@@ -449,6 +452,9 @@ namespace rsx
 				// Sampled here because this thread wakes ~60Hz regardless of what the guest
 				// or the RSX are doing, so it lands mid-stall instead of at the flip.
 				rsx::prof::stall_watchdog();
+
+				// The Last of Us job-list restart, at most ten checks a second
+				::spu_nd_job_manager_resume();
 
 				// Calculate the time at which we need to send a new VBLANK signal
 				const u64 post_event_time = start_time + (local_vblank_count + 1) * vblank_period / vblank_rate;

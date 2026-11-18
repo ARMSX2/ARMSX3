@@ -9688,3 +9688,394 @@ DECLARE(spu_thread::g_raw_spu_ctr){};
 DECLARE(spu_thread::g_raw_spu_id){};
 DECLARE(spu_thread::g_spu_work_count){};
 DECLARE(spu_thread::g_spu_waiters_by_value){};
+
+// The Last of Us: restart a job list the game is waiting on when nothing else will.
+//
+// Naughty Dog's SPURS policy module (one workload per job manager) takes jobs from a queue in main
+// memory. The job manager object starts with the module's own address and size; word 2 is the
+// current queue, 0x30 + 4 * queue that queue's entry array, and 0x40 + 16 * queue its counters:
+// halfword 0 is the end of what the PPU has published, halfword 1 the next entry to claim,
+// halfwords 2..7 the job each SPU is running (0xffff none). An entry is 8 bytes; the halfword at +2
+// says what it is (0 empty, 1 job, 2 wait until the counter at the address in the second word
+// reaches 0, 3 skip, 4 switch queue). A wait's counter is {u16 count, u8 workload, u8 ready}.
+//
+// The module goes idle when it reaches an empty entry or an unfinished wait: it swaps its workload's
+// SPURS ready count to 0, claims once more, and puts the count back only if that finds work. What
+// restarts it is the job that takes a wait's counter to 0, which swaps the named workload's ready
+// count to the counter's ready value. Appending an entry wakes nobody, and while the main thread
+// waits on a list it only spins on the cursor (0xe51058 in 1.11).
+//
+// On phones the module can run into the part of a list the main thread has not written yet, go
+// idle there, and miss the restart: the list then holds work (a job, or a wait whose counter is
+// already 0) with its ready count at 0, no SPU in it and no signal pending, and the main thread
+// waits on it forever. Every such freeze a tester hit was job manager 3 (ARMSX3-88 to 102.log); one
+// came 3 h into a session on the build that restarts them, and the list moved on 0.6 s later.
+//
+// So the VBlank thread looks for exactly that state, gated on what makes it unambiguous: a PPU thread
+// spinning in the game's wait loop for this very job manager (its address and r7 as it last parked;
+// the loop is found by its code, so a version without it gets nothing). The game only waits on a
+// list it has built and started. Held for 500 ms, the workload gets its ready count back: the
+// counter's ready value for a finished wait that names it, 8 otherwise. A list the game is still
+// building is never touched; kicking one of those froze the game (ARMSX3-98.log).
+namespace
+{
+	struct alignas(16) nd_ready16
+	{
+		u8 count[16];
+	};
+
+	struct nd_resume_state
+	{
+		u32 spurs = 0;
+		u32 jobman = 0;
+		u32 cursor = 0;
+		u32 entry = 0;
+		u64 since = 0;
+		u64 last_resume = 0;
+		u32 resumes = 0;
+	};
+
+	nd_resume_state s_nd_resume[16]{};
+	u32 s_nd_resume_logs = 0;
+
+	bool nd_readable(u32 addr, u32 size)
+	{
+		return addr && vm::check_addr(addr, vm::page_readable, size);
+	}
+
+	// The main thread's wait for a job list: reload the job manager into r7, then spin while the
+	// smallest of the claim cursor and the SPU markers is below the target (1.11: 0xe51058..0xe510e4).
+	constexpr u32 c_nd_wait_loop[] =
+	{
+		0x7ffffb78, // mr r31,r31
+		0x80ff0000, // lwz r7,0(r31)
+		0x7d233a14, // add r9,r3,r7
+		0x39290040, // addi r9,r9,0x40
+		0x79290020, // clrldi r9,r9,32
+		0xa0090002, // lhz r0,2(r9)
+		0x7c2004ac, // lwsync
+		0x5400043e, // clrlwi r0,r0,16
+		0xa1690004, // lhz r11,4(r9)
+		0x7f8b0040, // cmplw cr7,r11,r0
+	};
+
+	constexpr u32 c_nd_wait_loop_size = 0x8c;
+
+	u32 s_nd_wait_loop = 0;
+	u64 s_nd_wait_loop_scanned = 0;
+
+	bool nd_is_wait_loop(u32 addr)
+	{
+		if (!nd_readable(addr, sizeof(c_nd_wait_loop)))
+		{
+			return false;
+		}
+
+		for (u32 i = 0; i < std::size(c_nd_wait_loop); i++)
+		{
+			if (vm::read32(addr + i * 4) != c_nd_wait_loop[i])
+			{
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	// Where the wait loop is, or 0. Searched in the executable once, again at most every 30 s while missing.
+	u32 nd_wait_loop(u64 now)
+	{
+		if (s_nd_wait_loop && nd_is_wait_loop(s_nd_wait_loop))
+		{
+			return s_nd_wait_loop;
+		}
+
+		s_nd_wait_loop = 0;
+
+		if (s_nd_wait_loop_scanned && now - s_nd_wait_loop_scanned < 30'000'000)
+		{
+			return 0;
+		}
+
+		s_nd_wait_loop_scanned = now;
+
+		for (u32 page = 0x10000; page < 0x2000000 && !s_nd_wait_loop; page += 0x1000)
+		{
+			if (!nd_readable(page, 0x1000))
+			{
+				continue;
+			}
+
+			const auto words = vm::_ptr<const be_t<u32>>(page);
+
+			for (u32 i = 0; i < 0x400; i++)
+			{
+				if (words[i] == c_nd_wait_loop[0] && nd_is_wait_loop(page + i * 4))
+				{
+					s_nd_wait_loop = page + i * 4;
+					break;
+				}
+			}
+		}
+
+		static bool s_reported = false;
+
+		if (s_nd_wait_loop)
+		{
+			spu_log.notice("TLOU job manager resume: the main thread's wait loop is at 0x%x", s_nd_wait_loop);
+		}
+		else if (!s_reported)
+		{
+			s_reported = true;
+			spu_log.warning("TLOU job manager resume: the main thread's wait loop was not found, so nothing will be resumed");
+		}
+
+		return s_nd_wait_loop;
+	}
+
+	// The id of the PPU thread waiting on this job manager, or 0. Its address and r7 are the ones it
+	// last parked with; it parks in the loop many times a second while SPUs are busy (writer_lock samples).
+	u32 nd_waiter_of(u32 loop, u32 jm)
+	{
+		u32 waiter = 0;
+
+		idm::select<named_thread<ppu_thread>>([&](u32 id, ppu_thread& ppu)
+		{
+			if (!waiter && ppu.cia - loop < c_nd_wait_loop_size && static_cast<u32>(ppu.gpr[7]) == jm)
+			{
+				waiter = id;
+			}
+		});
+
+		return waiter;
+	}
+
+	bool nd_title()
+	{
+		static constexpr std::string_view ids[] =
+		{
+			"BCUS98174", "BCES01584", "BCES01585", "BCJS37010", "BCAS20270", "NPUA80960", "NPEA00435", "NPHA80243", "NPJA00096",
+		};
+
+		const std::string& id = Emu.GetTitleID();
+		return std::find(std::begin(ids), std::end(ids), id) != std::end(ids);
+	}
+
+	// Every SPURS instance an SPU thread is running the kernel for
+	u32 nd_spurs_list(u32 (&out)[4])
+	{
+		u32 n = 0;
+
+		idm::select<named_thread<spu_thread>>([&](u32, spu_thread& spu)
+		{
+			const u32 s = spu.spurs_addr;
+
+			if (!s || s == 0u - 0x80 || n >= 4 || std::find(out, out + n, s) != out + n)
+			{
+				return;
+			}
+
+			out[n++] = s;
+		});
+
+		return n;
+	}
+
+	// The job manager a workload runs, or 0 when it is not one of these
+	u32 nd_jobman_of(u32 spurs, u32 wid)
+	{
+		const u32 info = spurs + 0xb00 + wid * 0x20;
+
+		if (!nd_readable(info, 0x20) || vm::read8(spurs + 0x80 + wid) != 2)
+		{
+			return 0;
+		}
+
+		const u32 pm = static_cast<u32>(vm::read64(info));
+		const u32 jm = static_cast<u32>(vm::read64(info + 8)) & -16;
+
+		if (!pm || !nd_readable(jm & -128, 128) || vm::read32(jm) != pm || vm::read32(jm + 4) != vm::read32(info + 0x10) || vm::read32(jm + 8) > 3)
+		{
+			return 0;
+		}
+
+		return jm;
+	}
+}
+
+// Called by the VBlank thread; see the note above the namespace.
+void spu_nd_job_manager_resume()
+{
+	static u64 s_next = 0;
+
+	const u64 now = get_system_time();
+
+	if (now < s_next)
+	{
+		return;
+	}
+
+	s_next = now + 100'000;
+
+	if (!nd_title())
+	{
+		return;
+	}
+
+	if (!Emu.IsRunning())
+	{
+		// Nothing moves while the game is paused: start counting again afterwards
+		for (auto& st : s_nd_resume)
+		{
+			st = {};
+		}
+
+		return;
+	}
+
+	const u32 loop = nd_wait_loop(now);
+
+	u32 spurs_list[4]{};
+	const u32 count = nd_spurs_list(spurs_list);
+
+	for (u32 si = 0; si < count; si++)
+	{
+		const u32 spurs = spurs_list[si];
+
+		if (!nd_readable(spurs, 0x80) || !nd_readable(spurs + 0xb00, 0x200))
+		{
+			continue;
+		}
+
+		for (u32 wid = 0; wid < 16; wid++)
+		{
+			auto& st = s_nd_resume[wid];
+			const u32 jm = nd_jobman_of(spurs, wid);
+
+			u32 cursor = 0;
+			u32 entry = 0;
+			u32 ready = 8;
+			u32 waiter = 0;
+			bool parked = false;
+
+			if (jm && loop)
+			{
+				const u32 queue = vm::read32(jm + 8);
+				const u32 arr = vm::read32(jm + 0x30 + queue * 4);
+				const u32 ctr = jm + 0x40 + queue * 16;
+				cursor = vm::read16(ctr + 2);
+
+				bool busy = false;
+
+				for (u32 i = 2; i < 8; i++)
+				{
+					busy |= vm::read16(ctr + i * 2) != 0xffff;
+				}
+
+				// No SPU in the workload, ready count 0, no signal pending
+				const bool idle = !busy && vm::read8(spurs + wid) == 0 && (vm::read8(spurs + 0x20 + wid) & 0xf) == 0 &&
+					!((+vm::read16(spurs + 0x70) >> (15 - wid)) & 1);
+
+				const u32 ea = arr + cursor * 8;
+
+				if (idle && nd_readable(ea, 8))
+				{
+					entry = vm::read32(ea + 4);
+
+					switch (vm::read32(ea) & 0xffff)
+					{
+					case 1: // job
+					case 3: // skip
+					case 4: // switch queue
+					{
+						parked = true;
+						break;
+					}
+					case 2: // wait, once its counter is done
+					{
+						if (nd_readable(entry, 4) && vm::read16(entry) == 0)
+						{
+							parked = true;
+
+							if (vm::read8(entry + 2) == wid && vm::read8(entry + 3))
+							{
+								// What the counter's own decrement would have set
+								ready = vm::read8(entry + 3);
+							}
+						}
+
+						break;
+					}
+					default:
+					{
+						break;
+					}
+					}
+
+					// Only a list the game is waiting on: it has been built and started
+					if (parked)
+					{
+						waiter = nd_waiter_of(loop, jm);
+						parked = waiter != 0;
+					}
+				}
+			}
+
+			if (!parked || st.spurs != spurs || st.jobman != jm || st.cursor != cursor || st.entry != entry)
+			{
+				if (st.resumes && s_nd_resume_logs < 64)
+				{
+					s_nd_resume_logs++;
+					spu_log.success("TLOU job manager 0x%x (wid %u) moved on from entry 0x%x, %u ms after it parked there (%u resume(s))",
+						st.jobman, wid, st.cursor, (now - st.since) / 1000, st.resumes);
+				}
+
+				st = {};
+
+				if (parked)
+				{
+					st.spurs = spurs;
+					st.jobman = jm;
+					st.cursor = cursor;
+					st.entry = entry;
+					st.since = now;
+				}
+
+				continue;
+			}
+
+			if (now - st.since < 500'000 || now - st.last_resume < 1'000'000 || st.resumes >= 5)
+			{
+				continue;
+			}
+
+			if (s_nd_resume_logs < 64)
+			{
+				s_nd_resume_logs++;
+				spu_log.warning("TLOU job manager 0x%x (wid %u) parked on entry 0x%x (0x%x) for %u ms with work there, while PPU 0x%x waits on it. Setting its ready count to %u.",
+					jm, wid, cursor, entry, (now - st.since) / 1000, waiter, ready);
+			}
+
+			// Under the line's reservation, and only if nothing has set the count meanwhile
+			const bool done = vm::reservation_op<true>(st, vm::_ptr_base<nd_ready16, u32>::make(spurs), [&](nd_ready16& r)
+			{
+				if (r.count[wid])
+				{
+					return false;
+				}
+
+				r.count[wid] = static_cast<u8>(ready);
+				return true;
+			});
+
+			st.last_resume = now;
+			st.resumes++;
+
+			if (!done && s_nd_resume_logs < 64)
+			{
+				s_nd_resume_logs++;
+				spu_log.warning("TLOU job manager 0x%x (wid %u): the ready count changed before the resume, left as it is", jm, wid);
+			}
+		}
+	}
+}
