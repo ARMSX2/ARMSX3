@@ -42,10 +42,6 @@ void ppu_remove_hle_instructions(u32 addr, u32 size);
 std::string spu_putllc_barrier_sites();
 extern bool is_memory_compatible_for_copy_from_executable_optimization(u32 addr, u32 size);
 
-// savestate_utils.cpp: the global version of the state being loaded (GET_SERIALIZATION_VERSION would
-// declare it inside namespace vm)
-s32 get_global_version_serialization_version();
-
 namespace vm
 {
 	static u8* memory_reserve_4GiB(void* _addr, u64 size = 0x100000000, bool is_memory_mapping = false)
@@ -2440,18 +2436,6 @@ namespace vm
 
 			u32 addr0{ar};
 			u32 size0{ar};
-
-			// ARMSX3: up to global version 24 (before the stack_guarded rewrite), a stack allocation
-			// was saved with its two guard pages: the entry started at the lower guard, its size
-			// counted both, and the binary image below left them out. The rewrite keeps the guards
-			// outside the entry, two free pages between neighbours, which is where those guards were.
-			// Load such an entry in today's layout, so save states from earlier releases keep loading.
-			if ((flags & stack_guarded) && ::get_global_version_serialization_version() < 25)
-			{
-				ensure(size0 > 0x2000);
-				addr0 += 0x1000;
-				size0 -= 0x2000;
-			}
 
 			u64 pflags = 0;
 
