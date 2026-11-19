@@ -1022,9 +1022,15 @@ std::string FragmentProgramDecompiler::BuildCode()
 		if (low_precision)
 		{
 			// Raw host casts. Rounds to nearest and overflows from 65520, P16R rounds as well.
+			// _builtin_f16_32_clamp quantizes a value bound for a 32-bit register, so it hands back a
+			// 32-bit value here too, as it does at every other precision. Left as a bare half cast, a
+			// write under a condition code became mix(vec3, f16vec3, bvec3), which no single overload
+			// matches: glslang refused the shader and the game stopped with "Failed to compile fragment
+			// shader" (Uncharted 2, BCES00757, at Low, the Android default). A plain write converted the
+			// half back to 32 bits already, so its result is the same as before.
 			clamp_func +=
 			"#define clamp16(x) $half4(x)\n"
-			"#define _builtin_f16_32_clamp clamp16\n";
+			"#define _builtin_f16_32_clamp(x) $float4(clamp16(x))\n";
 		}
 		else
 		{
