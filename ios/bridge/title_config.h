@@ -699,8 +699,16 @@ namespace armsx3::bridge::title_config
 		{"BLES00713", "Core:\n  Pause Game During SPU Compilation: true\n  SPU Poll Park Sites: 3f47c:40801083\n"},
 		{"BLES00714", "Core:\n  Pause Game During SPU Compilation: true\n"},
 
-		// Cold starts sometimes freeze while SPU code compiles on demand; pausing the game during compiles stops it.
+		// Cold starts sometimes freeze while SPU code compiles on demand; pausing the game during compiles stops it. This covers every version of The Last of Us.
 		{"BCUS98174", "Core:\n  Pause Game During SPU Compilation: true\n"},
+		{"BCES01584", "Core:\n  Pause Game During SPU Compilation: true\n"},
+		{"BCES01585", "Core:\n  Pause Game During SPU Compilation: true\n"},
+		{"BCJS37010", "Core:\n  Pause Game During SPU Compilation: true\n"},
+		{"BCAS20270", "Core:\n  Pause Game During SPU Compilation: true\n"},
+		{"NPUA80960", "Core:\n  Pause Game During SPU Compilation: true\n"},
+		{"NPEA00435", "Core:\n  Pause Game During SPU Compilation: true\n"},
+		{"NPHA80243", "Core:\n  Pause Game During SPU Compilation: true\n"},
+		{"NPJA00096", "Core:\n  Pause Game During SPU Compilation: true\n"},
 
 		// Exact ZCULL stats make the torches flicker on iPhone; approximate stats stop it.
 		{"BLES00158", "Video:\n  Accurate ZCULL stats: false\n  Relaxed ZCULL Sync: false\n"},
