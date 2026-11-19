@@ -9717,6 +9717,11 @@ DECLARE(spu_thread::g_spu_waiters_by_value){};
 // list it has built and started. Held for 500 ms, the workload gets its ready count back: the
 // counter's ready value for a finished wait that names it, 8 otherwise. A list the game is still
 // building is never touched; kicking one of those froze the game (ARMSX3-98.log).
+//
+// Uncharted 3 runs the same job manager. Its freeze (BCUS98233 1.19, ARMSX3-108.log, a minute into
+// the first level) had the main thread parked at 0xd51e10 with writer_lock samples at +0x20, +0x30,
+// +0x44 and +0x54 from there, the same offsets as The Last of Us' 0xe51088 -> 0xe510a8/b8/cc/dc,
+// while the SPURS kernels polled and the RSX sat idle with no work queued.
 namespace
 {
 	struct alignas(16) nd_ready16
@@ -9822,12 +9827,12 @@ namespace
 
 		if (s_nd_wait_loop)
 		{
-			spu_log.notice("TLOU job manager resume: the main thread's wait loop is at 0x%x", s_nd_wait_loop);
+			spu_log.notice("Naughty Dog job manager resume: the main thread's wait loop is at 0x%x", s_nd_wait_loop);
 		}
 		else if (!s_reported)
 		{
 			s_reported = true;
-			spu_log.warning("TLOU job manager resume: the main thread's wait loop was not found, so nothing will be resumed");
+			spu_log.warning("Naughty Dog job manager resume: the main thread's wait loop was not found, so nothing will be resumed");
 		}
 
 		return s_nd_wait_loop;
@@ -9854,7 +9859,10 @@ namespace
 	{
 		static constexpr std::string_view ids[] =
 		{
+			// The Last of Us
 			"BCUS98174", "BCES01584", "BCES01585", "BCJS37010", "BCAS20270", "NPUA80960", "NPEA00435", "NPHA80243", "NPJA00096",
+			// Uncharted 3: Drake's Deception, Game of the Year edition and demo
+			"BCUS98233", "BCES01175", "BCES01176", "BCJS37004", "BCAS25009", "BCUS99086", "BCES01670", "BCES01692", "BCAS25014", "NPUA70183",
 		};
 
 		const std::string& id = Emu.GetTitleID();
@@ -10026,7 +10034,7 @@ void spu_nd_job_manager_resume()
 				if (st.resumes && s_nd_resume_logs < 64)
 				{
 					s_nd_resume_logs++;
-					spu_log.success("TLOU job manager 0x%x (wid %u) moved on from entry 0x%x, %u ms after it parked there (%u resume(s))",
+					spu_log.success("Naughty Dog job manager 0x%x (wid %u) moved on from entry 0x%x, %u ms after it parked there (%u resume(s))",
 						st.jobman, wid, st.cursor, (now - st.since) / 1000, st.resumes);
 				}
 
@@ -10052,7 +10060,7 @@ void spu_nd_job_manager_resume()
 			if (s_nd_resume_logs < 64)
 			{
 				s_nd_resume_logs++;
-				spu_log.warning("TLOU job manager 0x%x (wid %u) parked on entry 0x%x (0x%x) for %u ms with work there, while PPU 0x%x waits on it. Setting its ready count to %u.",
+				spu_log.warning("Naughty Dog job manager 0x%x (wid %u) parked on entry 0x%x (0x%x) for %u ms with work there, while PPU 0x%x waits on it. Setting its ready count to %u.",
 					jm, wid, cursor, entry, (now - st.since) / 1000, waiter, ready);
 			}
 
@@ -10074,7 +10082,7 @@ void spu_nd_job_manager_resume()
 			if (!done && s_nd_resume_logs < 64)
 			{
 				s_nd_resume_logs++;
-				spu_log.warning("TLOU job manager 0x%x (wid %u): the ready count changed before the resume, left as it is", jm, wid);
+				spu_log.warning("Naughty Dog job manager 0x%x (wid %u): the ready count changed before the resume, left as it is", jm, wid);
 			}
 		}
 	}
