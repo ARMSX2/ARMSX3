@@ -1257,7 +1257,7 @@ void spu_cache::add(const spu_program& func)
 	m_file.write_gather(gather, 3);
 }
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__APPLE__)
 // "<cache>/cache/<title>/" for an executable's cache folder "<cache>/cache/<title>/ppu-<hash>-EBOOT.BIN/",
 // or empty for any other shape. A game update installs a new executable, which gets a folder of its
 // own beside the old version's.
@@ -1275,6 +1275,14 @@ static std::string spu_title_cache_dir(std::string_view exec_cache)
 		return {};
 	}
 
+#ifdef __APPLE__
+	// Standalone executables, PS1 classics and VSH keep their folders in the cache root, which is no game's
+	if (const std::string& title = Emu.GetTitleID(); title.empty() || !exec_cache.substr(0, slash).ends_with("/" + title))
+	{
+		return {};
+	}
+
+#endif
 	return std::string(exec_cache.substr(0, slash + 1));
 }
 #endif
@@ -1324,7 +1332,7 @@ void spu_cache::initialize(bool build_existing_cache)
 		is_debug = true;
 	}
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__APPLE__)
 	// A game update installs a new executable, which gets its own cache folder and so an empty SPU
 	// list, though most of its SPU programs are the ones the old version ran. Start the list from the
 	// largest one another executable of the same game left, so those programs are built at boot
@@ -2363,6 +2371,11 @@ spu_runtime::spu_runtime()
 #ifdef __ANDROID__
 		const std::string obj_parent = spu_obj_cache_parent(m_cache_path);
 		m_obj_cache_path = obj_parent + fmt::format("spuobj-v%u-%s/", SPU_OBJ_CACHE_VERSION, fmt::base57(key, 16));
+#elif defined(__APPLE__)
+		// Kept per game, as on Android: a game update's new executable reuses the old version's objects
+		const std::string title_cache = spu_title_cache_dir(m_cache_path);
+		const std::string obj_parent = title_cache.empty() ? m_cache_path : title_cache;
+		m_obj_cache_path = obj_parent + fmt::format("spuobj-v%u-%s/", SPU_OBJ_CACHE_VERSION, fmt::base57(key, 16));
 #else
 		m_obj_cache_path = m_cache_path + fmt::format("spuobj-v%u-%s/", SPU_OBJ_CACHE_VERSION, fmt::base57(key, 16));
 #endif
@@ -2376,11 +2389,51 @@ spu_runtime::spu_runtime()
 #ifdef __APPLE__
 		// The two most recently used other directories stay, so toggling a setting back rebuilds nothing
 		constexpr usz SPU_OBJ_CACHE_KEEP_DIRS = 2;
+
+		// Objects in the executables' own folders, the old layout, move up; this executable's go first
+		if (obj_parent != m_cache_path)
+		{
+			std::vector<std::string> exec_dirs{m_cache_path};
+
+			for (auto&& entry : fs::dir(obj_parent))
+			{
+				if (entry.is_directory && entry.name.starts_with("ppu-") && obj_parent + entry.name + "/" != m_cache_path)
+				{
+					exec_dirs.push_back(obj_parent + entry.name + "/");
+				}
+			}
+
+			for (const std::string& dir : exec_dirs)
+			{
+				std::vector<std::string> old_caches;
+
+				for (auto&& entry : fs::dir(dir))
+				{
+					if (entry.is_directory && entry.name.starts_with("spuobj-"))
+					{
+						old_caches.push_back(entry.name);
+					}
+				}
+
+				for (const std::string& name : old_caches)
+				{
+					if (fs::rename(dir + name, obj_parent + name, false))
+					{
+						spu_log.notice("Moved SPU object cache to the game's folder: %s%s", dir, name);
+						continue;
+					}
+
+					spu_log.notice("Removing SPU object cache from an executable's folder: %s%s", dir, name);
+					fs::remove_all(dir + name + "/");
+				}
+			}
+		}
+
 		std::vector<std::pair<s64, std::string>> other_caches;
 
-		for (auto&& entry : fs::dir(m_cache_path))
+		for (auto&& entry : fs::dir(obj_parent))
 		{
-			if (entry.is_directory && entry.name.starts_with("spuobj-") && m_cache_path + entry.name + "/" != m_obj_cache_path)
+			if (entry.is_directory && entry.name.starts_with("spuobj-") && obj_parent + entry.name + "/" != m_obj_cache_path)
 			{
 				other_caches.emplace_back(entry.mtime, entry.name);
 			}
@@ -2399,7 +2452,7 @@ spu_runtime::spu_runtime()
 			}
 
 			spu_log.notice("Removing SPU object cache from another build: %s", name);
-			fs::remove_all(m_cache_path + name + "/");
+			fs::remove_all(obj_parent + name + "/");
 		}
 
 		// Picking a directory is a use of it; a new directory gets its mtime from create_path below.
