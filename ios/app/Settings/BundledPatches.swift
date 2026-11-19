@@ -16,7 +16,7 @@ enum BundledPatches {
 
     static let file = "armsx3_patch.yml"
     // Ps3PatchRepo.BUNDLED_REVISION and its preference name.
-    static let revision = 33
+    static let revision = 34
     static let revisionKey = "ps3_bundled_patch_revision"
     static let enabledKey = "ps3_bundled_patch_enabled"
 
@@ -99,7 +99,26 @@ enum BundledPatches {
         Entry(hash: "PPU-2d8f06a45cb7e9d137e14ba04ccb1954b02c6af2", name: "ARMSX3 profile load freeze fix", serial: "BLUS31527", appVersion: "01.07", sinceRevision: 33),
         Entry(hash: "PPU-cacda0eb155baaa913e1ecccbd3f98beec03e0d2", name: "ARMSX3 profile load freeze fix", serial: "BLES02166", appVersion: "01.07", sinceRevision: 33),
         Entry(hash: "PPU-cacda0eb155baaa913e1ecccbd3f98beec03e0d2", name: "ARMSX3 profile load freeze fix", serial: "BLUS31527", appVersion: "01.07", sinceRevision: 33),
-    ]
+    ] + lastOfUs
+
+    // RPCS3's highly recommended The Last of Us patches, from its downloaded patch.yml. The disc's 01.00
+    // has five; the nail bomb fix exists only in the final update 01.11, which two more serials carry.
+    static let lastOfUs: [Entry] = {
+        let patches = ["Bug Fix: Infected Severed Head Crash", "Depth border fix", "Disable in-built MLAA",
+                       "Disable Mesh Trimming", "Enable GPU Lighting"]
+        let serials = ["BCAS20270", "BCES01584", "BCES01585", "BCJS37010", "BCUS98174", "NPEA00435", "NPUA80960"]
+        let disc = serials.flatMap { serial in
+            patches.map { Entry(hash: "PPU-9df60dc1aa5005a0c80e9066e4951dc0471553e6", name: $0, serial: serial,
+                                appVersion: "01.00", sinceRevision: 34) }
+        }
+        let update = (serials + ["NPHA80243", "NPJA00096"]).flatMap { serial in
+            (patches + ["Bug Fix: University Nailbomb Softlock Fix"]).map {
+                Entry(hash: "PPU-120fb71f7352d62521c639b0e99f960018c10a56", name: $0, serial: serial,
+                      appVersion: "01.11", sinceRevision: 34)
+            }
+        }
+        return disc + update
+    }()
 
     static var bundledYAML: String? {
         Bundle.main.url(forResource: "canary_patches", withExtension: "yml")
