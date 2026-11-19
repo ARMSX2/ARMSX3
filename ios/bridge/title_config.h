@@ -579,8 +579,8 @@ namespace armsx3::bridge::title_config
 		{"NPUB31590", "Core:\n  PPU Decoder: Recompiler (LLVM)\n"},
 
 		// Tied to the bundled "Disable MLAA" patch; SPU threads at Auto avoid a prologue freeze that a cap exposes.
-		{"BCUS98234", "Video:\n  Write Color Buffers: false\n  Vulkan:\n    Fence Poll Completion Markers: true\nCore:\n  Preferred SPU Threads: 0\n"},
-		{"BCES01007", "Video:\n  Write Color Buffers: false\n  Vulkan:\n    Fence Poll Completion Markers: true\nCore:\n  Preferred SPU Threads: 0\n"},
+		{"BCUS98234", "Video:\n  Write Color Buffers: false\n  Vulkan:\n    Fence Poll Completion Markers: true\nCore:\n  Preferred SPU Threads: 0\n  SPU Inline Interrupt Idioms: true\n"},
+		{"BCES01007", "Video:\n  Write Color Buffers: false\n  Vulkan:\n    Fence Poll Completion Markers: true\nCore:\n  Preferred SPU Threads: 0\n  SPU Inline Interrupt Idioms: true\n"},
 
 		// On, the SPURS control-block atomics take vm::writer_lock about 550,000 times a second; off-spec, so this title only.
 		{"BLUS30218", "Core:\n  Accurate SPU Reservations: false\n"},

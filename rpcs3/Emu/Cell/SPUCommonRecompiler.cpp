@@ -1301,7 +1301,7 @@ void spu_cache::initialize(bool build_existing_cache)
 	}
 
 	// SPU cache file (version + block size type)
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__APPLE__) && defined(ARCH_ARM64))
 	// ARMSX3: a list of its own with SPU Inline Interrupt Idioms on. With it the functions that run are
 	// not the ones a stock list holds (the code after a bid or bie no longer starts a function), and a
 	// list is rebuilt at every boot on a fake local store that holds one function at a time, so a shared
@@ -2098,7 +2098,7 @@ static u64 spu_obj_cache_settings()
 		static_cast<u64>(g_cfg.core.rsx_accurate_res_access.get()) << 34 |
 		static_cast<u64>(g_cfg.savestate.compatible_mode.get()) << 35 |
 		static_cast<u64>(g_cfg.core.spu_debug.get()) << 36
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__APPLE__) && defined(ARCH_ARM64))
 		| static_cast<u64>(g_cfg.core.spu_inline_interrupt_idioms.get()) << 37
 #endif
 		;
@@ -2125,7 +2125,7 @@ const std::string& spu_runtime::get_obj_cache_path() const
 #endif
 spu_runtime::spu_runtime()
 {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__APPLE__) && defined(ARCH_ARM64))
 	if (g_cfg.core.spu_inline_interrupt_idioms && g_cfg.core.spu_decoder == spu_decoder_type::llvm)
 	{
 		spu_log.notice("SPU Inline Interrupt Idioms: on, %s", g_cfg.core.spu_block_size == spu_block_size_type::mega ?
@@ -2286,6 +2286,13 @@ spu_runtime::spu_runtime()
 		// Park sites put calls into emitted code
 		const std::string park_sites = g_cfg.core.spu_poll_park_sites.to_string();
 		sha1_update(&ctx, reinterpret_cast<const u8*>(park_sites.data()), park_sites.size());
+
+		// Changes the code built for the same SPU program; folded only when on, so the key with it off stays as it was
+		if (g_cfg.core.spu_inline_interrupt_idioms)
+		{
+			const u32 inline_idioms = 1;
+			fold(inline_idioms);
+		}
 
 #endif
 		// Device-variable inputs. The HW bits reach the JIT through setMAttrs, and sha3 in
@@ -4774,7 +4781,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 				spu_log.error("[0x%x] Invalid interrupt flags (DE)", pos);
 			}
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__APPLE__) && defined(ARCH_ARM64))
 			if (type == spu_itype::BI && (op.d || (op.e && g_cfg.core.spu_block_size == spu_block_size_type::mega)) && g_cfg.core.spu_inline_interrupt_idioms)
 			{
 				// ARMSX3: SPU Inline Interrupt Idioms. A block that starts inside the one holding this
@@ -4863,7 +4870,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 					break;
 				}
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__APPLE__) && defined(ARCH_ARM64))
 				if (type == spu_itype::BI && target == pos + 4 && op.e && !sync && g_cfg.core.spu_inline_interrupt_idioms && g_cfg.core.spu_block_size == spu_block_size_type::mega)
 				{
 					// ARMSX3: enable interrupts idiom, with SPU Inline Interrupt Idioms on. The function is
