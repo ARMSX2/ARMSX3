@@ -437,6 +437,24 @@ static u64 rdata_tsc_to_ns(u64 ticks)
 }
 #endif
 
+#ifdef __APPLE__
+// God of War III's SPUs poll shared lines with PUTLLC stores that write back the data they read.
+// Under accurate reservations each such store still advanced the line's timestamp, which cancelled
+// every other poller's reservation, so on a Mac they failed about a million PUTLLC per 5 seconds.
+// For this game alone an unchanged write-back succeeds without touching the timestamp.
+static atomic_t<bool> g_spu_noop_putllc_keeps_reservation{false};
+
+static bool spu_noop_putllc_keeps_reservation_title(std::string_view title)
+{
+	static constexpr std::string_view s_titles[] =
+	{
+		"BCUS98111"sv, "BCES00510"sv, "BCES00799"sv, "BCJS37001"sv, "BCAS25003"sv, "BCKS15003"sv,
+	};
+
+	return std::find(std::begin(s_titles), std::end(s_titles), title) != std::end(s_titles);
+}
+#endif
+
 #if defined(ARCH_X64)
 static FORCE_INLINE void mov_rdata_avx(__m256i* dst, const __m256i* src)
 {
@@ -2294,6 +2312,10 @@ spu_thread::spu_thread(lv2_spu_group* group, u32 index, std::string_view name, u
 	g_spu_getllar_settle = spu_getllar_settle_title(Emu.GetTitleID());
 #endif
 
+#ifdef __APPLE__
+	g_spu_noop_putllc_keeps_reservation = spu_noop_putllc_keeps_reservation_title(Emu.GetTitleID());
+#endif
+
 	if (g_cfg.core.mfc_debug)
 	{
 		utils::memory_commit(vm::g_stat_addr + vm_offset(), SPU_LS_SIZE);
@@ -2360,6 +2382,10 @@ spu_thread::spu_thread(utils::serial& ar, lv2_spu_group* group)
 
 #if defined(ARCH_ARM64)
 	g_spu_getllar_settle = spu_getllar_settle_title(Emu.GetTitleID());
+#endif
+
+#ifdef __APPLE__
+	g_spu_noop_putllc_keeps_reservation = spu_noop_putllc_keeps_reservation_title(Emu.GetTitleID());
 #endif
 
 	if (g_cfg.core.mfc_debug)
@@ -4781,6 +4807,20 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 			{
 				// Keep the first comparison's loads ahead of the timestamp check below
 				atomic_fence_acquire();
+
+#ifdef __APPLE__
+				if (g_spu_noop_putllc_keeps_reservation.observe())
+				{
+					// Nothing is stored, so an unchanged timestamp after the second comparison is enough
+					if (res == rtime && cmp_rdata(rdata, vm::_ref<spu_rdata_t>(addr)) && rdata_fence() && res == rtime)
+					{
+						raddr = 0; // Disable notification
+						return true;
+					}
+
+					return false;
+				}
+#endif
 
 				if (res == rtime && cmp_rdata(rdata, vm::_ref<spu_rdata_t>(addr)) && res.compare_and_swap_test(rtime, rtime + 128))
 				{

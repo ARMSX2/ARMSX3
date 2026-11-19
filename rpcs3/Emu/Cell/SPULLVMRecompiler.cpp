@@ -10962,7 +10962,7 @@ public:
 	// block as their predecessor (add_block connects them to m_block->block_end).
 	void cond_branch_indirect(llvm::Value* cond, spu_opcode_t op, value_t<u32> addr)
 	{
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__APPLE__) && defined(ARCH_ARM64))
 		const auto tfound = m_targets.find(m_pos);
 
 		if (!m_interp_magn && !op.d && !op.e && !(m_finfo && m_finfo->fn) && g_cfg.core.spu_block_size == spu_block_size_type::safe &&
