@@ -5107,7 +5107,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 				spu_log.warning("[0x%x] At 0x%x: Undetected interrupt branch target (ra=%d)", entry_point, pos, op.ra);
 			}
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__APPLE__) && defined(ARCH_ARM64))
 			if (type == spu_itype::BIZ || type == spu_itype::BINZ || type == spu_itype::BIHZ || type == spu_itype::BIHNZ)
 			{
 				// ARMSX3: a conditional branch through a register that may be a loop going back to this
