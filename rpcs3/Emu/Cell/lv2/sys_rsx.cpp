@@ -148,7 +148,7 @@ static u64 _sys_rsx_get_timestamp()
 	return get_timebased_time();
 }
 
-static void set_rsx_dmactl(rsx::thread* render, rsx::context* ctx, u64 get_put)
+static void _sys_rsx_dmactl(rsx::thread* render, rsx::context* ctx, u64 get_put)
 {
 	{
 		rsx::eng_lock rlock(render);
@@ -222,7 +222,10 @@ atomic_t<u32> g_rsx_q_id{0};       // queue this port is connected to, 0 = none,
 atomic_t<u32> g_rsx_q_pending{0};  // events sitting undelivered in it
 atomic_t<u32> g_rsx_q_waiter{0};   // 1 if a PPU is registered as waiting on it
 
-bool rsx::thread::send_event(rsx::context* ctx, u64 data1, u64 event_flags, u64 data3)
+// [lock] is the caller's hold on sys_rsx_mtx, or null. While the event queue is full it is let go,
+// so the guest's interrupt thread can make the sys_rsx calls that empty the queue, and taken again
+// before the next try (upstream 7ef112187: vblank-intr starvation deadlock).
+static bool _sys_rsx_send_event(rsx::context* ctx, u64 data1, u64 event_flags, u64 data3, std::unique_lock<shared_mutex>* lock)
 {
 	if (!ctx->fw.driver_info)
 	{
@@ -248,7 +251,7 @@ bool rsx::thread::send_event(rsx::context* ctx, u64 data1, u64 event_flags, u64 
 	{
 		if (const auto q = port->queue.get())
 		{
-			std::lock_guard lock(q->mutex);
+			std::lock_guard q_lock(q->mutex);
 			g_rsx_q_id = q->id;
 			g_rsx_q_pending = static_cast<u32>(q->events.size());
 			g_rsx_q_waiter = q->pq ? 1u : 0u;
@@ -297,10 +300,14 @@ bool rsx::thread::send_event(rsx::context* ctx, u64 data1, u64 event_flags, u64 
 		return false;
 	}
 
+	// Must be externally locked before we reach here.
+	const bool owns_lock = lock && lock->owns_lock();
+	const auto context_id = ctx->id();
+	const auto rsxthr = ctx->rsxthr;
+	const auto cpu = get_current_cpu_thread();
+
 	while (error + 0u == CELL_EBUSY)
 	{
-		auto cpu = get_current_cpu_thread();
-
 		if (cpu && cpu->get_class() == thread_class::ppu)
 		{
 			// Deschedule
@@ -309,11 +316,35 @@ bool rsx::thread::send_event(rsx::context* ctx, u64 data1, u64 event_flags, u64 
 
 		g_rsx_ev_busy_spin++;
 
+		// Release the lock, dump the context
+		if (owns_lock)
+		{
+			lock->unlock();
+			ctx = nullptr;
+		}
+
 		// Wait a bit before resending event
 		thread_ctrl::wait_for(100);
 
+		if (owns_lock)
+		{
+			// Re-acquire the lock and grab the context
+			if (!_sys_rsx_lock_context_calls(rsxthr, *lock))
+			{
+				return false;
+			}
+
+			if (!(ctx = rsxthr->find_context(context_id)))
+			{
+				// Context lost
+				return false;
+			}
+		}
+
 		if (cpu && cpu->get_class() == thread_class::rsx)
+		{
 			cpu->cpu_wait({});
+		}
 
 		if (Emu.IsStopped() || (cpu && cpu->check_state()))
 		{
@@ -354,6 +385,14 @@ bool rsx::thread::send_event(rsx::context* ctx, u64 data1, u64 event_flags, u64 
 	}
 
 	return true;
+}
+
+// The RSX thread's own sends (unsent events, IO unmaps), which hold no sys_rsx_mtx. Upstream removed
+// this member and calls the function above directly; it stays here so RSXThread.h, which the SPU
+// code identity hashes, is unchanged.
+bool rsx::thread::send_event(rsx::context* ctx, u64 data1, u64 event_flags, u64 data3)
+{
+	return _sys_rsx_send_event(ctx, data1, event_flags, data3, nullptr);
 }
 
 // ---- Event Queue ----
@@ -928,7 +967,7 @@ error_code sys_rsx_context_attribute(u32 context_id, u32 package_id, u64 a3, u64
 		const u64 put = static_cast<u32>(a4);
 		const u64 get_put = put << 32 | get;
 
-		set_rsx_dmactl(render, ctx, get_put);
+		_sys_rsx_dmactl(render, ctx, get_put);
 		break;
 	}
 	case SYS_RSX_CONTEXT_ATTR_CMD_DISPLAY_MODE: // Display mode set
@@ -1001,7 +1040,7 @@ error_code sys_rsx_context_attribute(u32 context_id, u32 package_id, u64 a3, u64
 		driverInfo.head[a3].flipFlags |= 0x40000000 | (1 << a4);
 
 		render->on_frame_end(ctx, static_cast<u32>(a4));
-		if (!render->send_event(ctx, 0, SYS_RSX_EVENT_QUEUE_BASE << a3, 0))
+		if (!_sys_rsx_send_event(ctx, 0, SYS_RSX_EVENT_QUEUE_BASE << a3, 0, &lock))
 		{
 			break;
 		}
@@ -1272,7 +1311,7 @@ error_code sys_rsx_context_attribute(u32 context_id, u32 package_id, u64 a3, u64
 		// NOTE: Realhw resets 16 bytes of this semaphore for some reason
 		vm::_ptr<atomic_t<u128>>(ctx->fw.label_addr + 0x10)->store(u128{});
 
-		render->send_event(ctx, 0, SYS_RSX_EVENT_FLIP_BASE << 1, 0);
+		_sys_rsx_send_event(ctx, 0, SYS_RSX_EVENT_FLIP_BASE << 1, 0, &lock);
 		break;
 	}
 	case 0xFED: // hack: vblank command
@@ -1308,7 +1347,7 @@ error_code sys_rsx_context_attribute(u32 context_id, u32 package_id, u64 a3, u64
 		if (render->enable_second_vhandler)
 			event_flags |= SYS_RSX_EVENT_SECOND_VBLANK_BASE << a3; // second vhandler
 
-		render->send_event(ctx, 0, event_flags, 0);
+		_sys_rsx_send_event(ctx, 0, event_flags, 0, &lock);
 		break;
 	}
 
@@ -1331,7 +1370,7 @@ error_code sys_rsx_context_attribute(u32 context_id, u32 package_id, u64 a3, u64
 			driverInfo.userCmdParam = intr_cause;
 		}
 
-		render->send_event(ctx, 0, SYS_RSX_EVENT_USER_CMD, 0);
+		_sys_rsx_send_event(ctx, 0, SYS_RSX_EVENT_USER_CMD, 0, &lock);
 		break;
 	}
 
