@@ -645,9 +645,11 @@ do {
     let r = try build(s)
     let source = s.sessionsDir.appendingPathComponent("@@REPORTED@@/RPCS3.log")
     let staged = text(capture.appendingPathComponent("RPCS3.log")).split(separator: "\n", omittingEmptySubsequences: false)
-    let boundary = staged.count > 1 && staged[1].hasPrefix("\u{00B7}")
+    let cut = staged.firstIndex(where: isMarker)
+    let boundary = cut.map { $0 + 1 < staged.count && staged[$0 + 1].hasPrefix("\u{00B7}") } ?? false
+    let head = cut != 0 && staged.first == text(source).split(separator: "\n").first
     line("R4 trimmed=\(r.trimmed ? 1 : 0) tail=\(lastLine(capture.appendingPathComponent("RPCS3.log")) == lastLine(source) ? 1 : 0)"
-        + " marker=\(staged.first.map(isMarker) == true ? 1 : 0) boundary=\(boundary ? 1 : 0) fits=\(r.bytes <= 200_000 ? 1 : 0)")
+        + " head=\(head ? 1 : 0) marker=\(cut != nil ? 1 : 0) boundary=\(boundary ? 1 : 0) fits=\(r.bytes <= 200_000 ? 1 : 0)")
 } catch {
     line("R4 error")
 }
@@ -667,10 +669,12 @@ do {
     let r = try build(s)
     let log = capture.appendingPathComponent("RPCS3.log")
     let size = (try? Data(contentsOf: log).count) ?? Int.max
-    let first = text(log).split(separator: "\n").first ?? ""
+    let source = s.sessionsDir.appendingPathComponent("@@REPORTED@@/RPCS3.log")
+    let lines = text(log).split(separator: "\n")
     line("R10 capped=\(r.trimmed && size <= 4096 + 64 ? 1 : 0)"
-        + " tail=\(lastLine(log) == lastLine(s.sessionsDir.appendingPathComponent("@@REPORTED@@/RPCS3.log")) ? 1 : 0)"
-        + " marker=\(isMarker(first) ? 1 : 0)")
+        + " tail=\(lastLine(log) == lastLine(source) ? 1 : 0)"
+        + " head=\(lines.first == text(source).split(separator: "\n").first ? 1 : 0)"
+        + " marker=\(lines.filter(isMarker).count == 1 ? 1 : 0)")
 } catch {
     line("R10 error")
 }
@@ -842,9 +846,9 @@ EXPECTED_REPORT = {
     "R8": "R8 built=1 log=none",
     "R9": "R9 tty=skipped",
     "R3": "R3 older=0 trimmed=0 fits=1",
-    "R4": "R4 trimmed=1 tail=1 marker=1 boundary=1 fits=1",
+    "R4": "R4 trimmed=1 tail=1 head=1 marker=1 boundary=1 fits=1",
     "R5": "R5 trimmed=0 older=1",
-    "R10": "R10 capped=1 tail=1 marker=1",
+    "R10": "R10 capped=1 tail=1 head=1 marker=1",
     "R11": "R11 leaks=0",
     "R6": "R6 serial=1 device=1 jithelper=finished fps=29.8 error=1 settings=1 empty=1 cap=2000 redacted=1",
     "R6zip": "R6zip same=1",
