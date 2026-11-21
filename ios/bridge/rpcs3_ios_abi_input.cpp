@@ -2,6 +2,8 @@
 
 #include "rpcs3_ios_abi_internal.h"
 
+#include <sys/stat.h>
+
 using namespace armsx3::bridge::abi_internal;
 
 namespace
@@ -75,6 +77,8 @@ namespace
 		u8 handle; // what the core's remove takes: its own slot (Skylanders, Kamen Rider) or the dialog's (the others)
 		u32 id;
 		u16 var;
+		dev_t device; // the file's identity, so a load can find it on another slot whatever path names it
+		ino_t inode;
 	};
 
 	std::mutex g_portal_mutex;
@@ -785,6 +789,24 @@ Rpcs3IOS_Status Rpcs3IOS_PortalLoad(int32_t portal, int32_t slot, const char* pa
 		return RPCS3_IOS_STATUS_PATH_REJECTED;
 	}
 
+	struct stat info{};
+	if (::stat(name.c_str(), &info) != 0)
+	{
+		return RPCS3_IOS_STATUS_PATH_REJECTED;
+	}
+
+	std::lock_guard lock(g_portal_mutex);
+
+	// A figure already on the portal is lifted from its slot first, as a real figure moves, since its file stays locked there.
+	for (int32_t other = 0; other < k_portals[portal].slots; other++)
+	{
+		const std::optional<portal_figure>& held = g_portal_slots[portal][other];
+		if (held && held->device == info.st_dev && held->inode == info.st_ino)
+		{
+			clear_portal_slot(portal, other);
+		}
+	}
+
 	// Read-write because the core writes the game's changes back, and locked so one file cannot sit on two slots.
 	const u64 bytes = k_portals[portal].bytes;
 	std::array<u8, 0x40 * 0x10> raw{};
@@ -794,10 +816,11 @@ Rpcs3IOS_Status Rpcs3IOS_PortalLoad(int32_t portal, int32_t slot, const char* pa
 		return RPCS3_IOS_STATUS_PATH_REJECTED;
 	}
 
-	std::lock_guard lock(g_portal_mutex);
 	clear_portal_slot(portal, slot);
 
 	portal_figure figure{};
+	figure.device = info.st_dev;
+	figure.inode = info.st_ino;
 	switch (portal)
 	{
 	case 0:
