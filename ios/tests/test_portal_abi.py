@@ -69,5 +69,21 @@ class ThePortalStoreHolds(unittest.TestCase):
         self.assertEqual(HOST_LINES, self.lines, self.out)
 
 
+BRIDGE = IOS_DIR / "bridge" / "rpcs3_ios_abi_input.cpp"
+
+
+class ALoadMovesAFigure(unittest.TestCase):
+    """The bridge's PortalLoad, read as source: it needs the core, so it is not compiled here."""
+
+    def test_a_figure_on_another_slot_is_lifted_before_its_file_is_opened(self):
+        text = BRIDGE.read_text(encoding="utf-8")
+        load = text[text.index("Rpcs3IOS_Status Rpcs3IOS_PortalLoad("):text.index("Rpcs3IOS_Status Rpcs3IOS_PortalRemove(")]
+        lift = load.index("held->device == info.st_dev && held->inode == info.st_ino")
+        self.assertLess(load.index("std::lock_guard lock(g_portal_mutex);"), lift)
+        self.assertIn("clear_portal_slot(portal, other);", load[lift:lift + 200])
+        self.assertLess(lift, load.index("fs::file file(name, fs::read + fs::write + fs::lock);"))
+        self.assertIn("figure.inode = info.st_ino;", load)
+
+
 if __name__ == "__main__":
     unittest.main()
