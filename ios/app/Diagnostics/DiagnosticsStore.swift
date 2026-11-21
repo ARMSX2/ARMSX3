@@ -132,7 +132,7 @@ struct DiagnosticsStore {
     let redaction: Redaction
     // 8 MB read as 8,000,000 bytes, under the chat apps' common free limits.
     let budget: Int
-    // Memory bounds on a phone already running a game: a log is staged from its tail, `chunk` bytes at a time.
+    // Memory bounds on a phone already running a game: a log is staged from its tail, plus a little of its start, `chunk` bytes at a time.
     let stageTail: Int
     let chunk: Int
     let ramBytes: UInt64
@@ -737,17 +737,33 @@ struct DiagnosticsStore {
               let output = try? FileHandle(forWritingTo: target) else { return nil }
         defer { try? output.close() }
         let total = size(of: source)
-        let start = max(0, total - min(keep, stageTail))
-        var remaining = total - start
+        let bound = min(keep, stageTail)
+        // A game that floods the log would push the boot lines out of the tail, so an eighth of the bound keeps the start.
+        var head = total > bound ? min(bound / 8, chunk) : 0
+        var start = 0
+        var remaining = 0
         var pending = Data()
-        var cutting = start > 0
-        var omitted = start
+        var cutting = false
+        var omitted = 0
         func emit(_ data: Data) throws {
             try autoreleasepool {
                 try output.write(contentsOf: Data(Self.redact(String(decoding: data, as: UTF8.self), with: redaction).utf8))
             }
         }
         do {
+            if head > 0 {
+                let piece = try input.read(upToCount: head) ?? Data()
+                if let newline = piece.lastIndex(of: 0x0A) {
+                    try emit(piece[...newline])
+                    head = newline - piece.startIndex + 1
+                } else {
+                    head = 0
+                }
+            }
+            start = max(head, total - (bound - head))
+            remaining = total - start
+            cutting = start > head
+            omitted = start - head
             try input.seek(toOffset: UInt64(start))
             while remaining > 0, let piece = try input.read(upToCount: min(chunk, remaining)), !piece.isEmpty {
                 remaining -= piece.count
@@ -775,7 +791,7 @@ struct DiagnosticsStore {
         } catch {
             return nil
         }
-        return start > 0
+        return start > head
     }
 
     @discardableResult
