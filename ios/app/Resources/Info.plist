@@ -36,6 +36,11 @@
 	<key>NSMotionUsageDescription</key>
 	<string>ARMSX3 uses motion so tilt controls work in games that support them.</string>
 
+	<key>UISupportedExternalAccessoryProtocols</key>
+	<array>
+		<string>com.xiaoji.M2boot</string>
+	</array>
+
 	<!-- iOS asks the first time a game captures from the microphone, never at launch. -->
 	<key>NSMicrophoneUsageDescription</key>
 	<string>ARMSX3 lets games that use a microphone hear you, only while such a game is running.</string>
