@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
+// Rumble for the GameSir G8+ MFi controller over its External Accessory session.
 
 import ExternalAccessory
 import Foundation
@@ -7,6 +8,7 @@ import UIKit
 
 final class GameSirG8MFiRumble: NSObject, StreamDelegate {
     private static let accessoryProtocol = "com.xiaoji.M2boot"
+    // Resend period of the active rumble packet while a motor is on.
     private static let repeatInterval: TimeInterval = 0.167253
     private static let closeDrainTimeout: TimeInterval = 0.5
     private static let registerAccessoryNotifications: Void = {
