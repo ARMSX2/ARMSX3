@@ -525,7 +525,7 @@ let files = FileManager.default
 let now = Date(timeIntervalSince1970: @@NOW@@)
 // The RPCN username is read from r1's rpcn.yml the way Redaction.live reads the app's.
 let rules = Redaction(home: @@HOME@@, bundle: @@BUNDLE@@, bundleID: @@BUNDLEID@@,
-                      rpcnName: Redaction.rpcnName(inSupport: tmp.appendingPathComponent("r1/Library/Application Support")))
+                      rpcnName: Redaction.rpcnName(inDocuments: tmp.appendingPathComponent("r1/Documents")))
 let form = ReportForm(whatHappened: "It froze on the title screen", whereInGame: "")
 let settings = ReportSettings(allGames: "Video:\n  Renderer: Vulkan\n", thisGame: "Core:\n  PPU Decoder: Interpreter\n")
 
@@ -916,7 +916,7 @@ let yml = @@YML@@
 let quoted = yml.replacingOccurrences(of: "NPID: " + name, with: "NPID: \"" + name + "\"")
 let fromYml = Redaction.rpcnName(fromRpcnYml: yml) == name && Redaction.rpcnName(fromRpcnYml: quoted) == name
     && Redaction.rpcnName(fromRpcnYml: "Version: 2\n").isEmpty
-    && Redaction.rpcnName(inSupport: URL(fileURLWithPath: @@SUPPORT@@)) == name
+    && Redaction.rpcnName(inDocuments: URL(fileURLWithPath: @@DOCUMENTS@@)) == name
 let home = @@HOME@@
 let log = "Path: " + home + "/Library/Application Support/rpcs3/\n" + @@LOG@@
 func marks(_ text: String, _ mark: String) -> Int { text.components(separatedBy: mark).count - 1 }
@@ -954,14 +954,14 @@ def fabricated(tmp, name):
     base = Path(tmp) / name
     support = base / "Library" / "Application Support"
     dirs = {"base": base, "sessions": support / "armsx3-logs" / "sessions", "rpcs3": support / "rpcs3",
-            "record": base / "Documents" / "armsx3"}
-    for key in ("sessions", "rpcs3", "record"):
+            "config": base / "Documents" / "rpcs3", "record": base / "Documents" / "armsx3"}
+    for key in ("sessions", "rpcs3", "config", "record"):
         dirs[key].mkdir(parents=True)
     # The pairing file at both of its real relative locations (PairingImport.swift), synthetic content.
     for folder in (support / "StikJIT", base / "Documents" / "StikJIT"):
         folder.mkdir(parents=True)
         (folder / "pairingFile.plist").write_text("<plist><string>" + DECOY + "</string></plist>\n", encoding="utf-8")
-    save = dirs["rpcs3"] / "dev_hdd0" / "home" / "00000001" / "savedata" / "ABCD12345-SAVE"
+    save = dirs["config"] / "dev_hdd0" / "home" / "00000001" / "savedata" / "ABCD12345-SAVE"
     save.mkdir(parents=True)
     (save / "SAVE.DAT").write_bytes(DECOY.encode("utf-8") * 4)
     (base / "Documents" / "stray.txt").write_text(DECOY + "\n", encoding="utf-8")
@@ -981,7 +981,7 @@ def write_report_fixtures(tmp):
     write_state(reported, "in-game", True, "ABCD12345")
     # The RPCN lines after the header, and the core's rpcn.yml where the driver's Redaction reads the username.
     (reported / "RPCS3.log").write_bytes(log.replace(b"\n", ("\n" + "\n".join(RPCN_LINES) + "\n").encode("utf-8"), 1))
-    (r1["rpcs3"] / "rpcn.yml").write_text(RPCN_YML, encoding="utf-8")
+    (r1["config"] / "rpcn.yml").write_text(RPCN_YML, encoding="utf-8")
     (reported / "launch.json").write_bytes(REPORT_LAUNCH)
     (reported / "notes.txt").write_text(DECOY + "\n", encoding="utf-8")
     (reported / "RPCS3.log.gz").write_bytes(b"\x1f\x8b unfinished")
@@ -1697,13 +1697,13 @@ class TheUsernameIsRedacted(unittest.TestCase):
         for path in (SFO, ZIP, SAVES, STORE):
             read(path)
         with tempfile.TemporaryDirectory() as tmp:
-            support = Path(tmp) / "Library" / "Application Support"
-            (support / "rpcs3").mkdir(parents=True)
-            (support / "rpcs3" / "rpcn.yml").write_text(RPCN_YML, encoding="utf-8")
+            documents = Path(tmp) / "Documents"
+            (documents / "rpcs3").mkdir(parents=True)
+            (documents / "rpcs3" / "rpcn.yml").write_text(RPCN_YML, encoding="utf-8")
             tails = (before + "<rpcn-friend>" + after + (": NotFound" if "error" in after else "")
                      for before, after in FRIEND_SHAPES)
             driver = (RPCN_DRIVER.replace("@@NAME@@", json.dumps(RPCN_NAME)).replace("@@YML@@", json.dumps(RPCN_YML))
-                      .replace("@@SUPPORT@@", json.dumps(str(support))).replace("@@HOME@@", json.dumps(HOME))
+                      .replace("@@DOCUMENTS@@", json.dumps(str(documents))).replace("@@HOME@@", json.dumps(HOME))
                       .replace("@@LOG@@", json.dumps("\n".join(RPCN_LINES) + "\n", ensure_ascii=False))
                       .replace("@@DECOYS@@", ", ".join(json.dumps(d) for d in RPCN_DECOYS))
                       .replace("@@FRIEND@@", json.dumps(FRIEND_NAME))

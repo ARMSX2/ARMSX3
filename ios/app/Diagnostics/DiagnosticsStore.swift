@@ -13,14 +13,13 @@ struct Redaction {
 
     // Read from rpcn.yml each time the store is made, so a report opened after a sign-in carries the current one.
     static var live: Redaction {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return Redaction(home: NSHomeDirectory(), bundle: Bundle.main.bundlePath,
-                         bundleID: Bundle.main.bundleIdentifier ?? "", rpcnName: rpcnName(inSupport: support))
+        Redaction(home: NSHomeDirectory(), bundle: Bundle.main.bundlePath,
+                  bundleID: Bundle.main.bundleIdentifier ?? "", rpcnName: rpcnName(inDocuments: DiagnosticsStore.documents))
     }
 
     // On Apple the core's config folder has no `config/` subfolder; that one is Windows-only (Utilities/File.cpp).
-    static func rpcnName(inSupport support: URL) -> String {
-        let yml = support.appendingPathComponent("rpcs3/rpcn.yml")
+    static func rpcnName(inDocuments documents: URL) -> String {
+        let yml = documents.appendingPathComponent("rpcs3/rpcn.yml")
         return rpcnName(fromRpcnYml: (try? String(contentsOf: yml, encoding: .utf8)) ?? "")
     }
 

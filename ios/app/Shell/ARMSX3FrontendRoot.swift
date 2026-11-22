@@ -284,11 +284,11 @@ struct ARMSX3FrontendRoot: View {
     // File metadata only; the firmware file is never opened and no path is logged.
     private func presentSetupIfDue() {
         let store = SettingsStore.shared
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let decision = SetupRules.launchStep(
             finished: store.setupFinished, savedStep: store.setupStep,
             hasFolders: !BookmarkStore(directory: LibraryModel.defaultDirectory).folders.isEmpty,
-            hasFirmware: PairingImport.isNonEmptyRegularFile(SetupRules.firmwareMarker(applicationSupport: support)))
+            hasFirmware: PairingImport.isNonEmptyRegularFile(SetupRules.firmwareMarker(documents: documents)))
         if decision.markFinished { store.setupFinished = true }
         if let step = decision.present { setup = SetupRequest(step: step) }
     }
