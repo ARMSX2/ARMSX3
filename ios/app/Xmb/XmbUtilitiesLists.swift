@@ -503,11 +503,21 @@ extension XmbHost {
         let started = url.startAccessingSecurityScopedResource()
         let text = try? String(contentsOf: url, encoding: .utf8)
         if started { url.stopAccessingSecurityScopedResource() }
+        importPatchText(text ?? "", replace: false)
+    }
+
+    private func importPatchText(_ text: String, replace: Bool) {
         Task {
-            let status = await Rpcs3Bridge.importPatches(text ?? "")
-            notice(status == 0 ? String(localized: "Patches imported.")
-                : String(localized: "That file isn't a patch file this version can read; nothing changed."), error: status != 0)
+            let (status, imported, total) = await Rpcs3Bridge.importPatches(text, replace: replace)
+            let report = PatchImportReport.result(status: status, imported: imported, total: total)
             await XmbToolsStore.shared.reloadPatches()
+            if report.canReplace {
+                toolsConfirm(report.message + "\n" + PatchImportReport.replaceQuestion, String(localized: "Replace them")) { [weak self] in
+                    self?.importPatchText(text, replace: true)
+                }
+            } else {
+                notice(report.message, error: report.failed)
+            }
         }
     }
 }

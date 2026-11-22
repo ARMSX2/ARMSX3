@@ -424,6 +424,9 @@ struct DiagnosticsStore {
         stage(hasTTY ? tty : rpcs3Dir.appendingPathComponent("TTY.log"), as: "TTY.log", in: staging)
         stage(session.appendingPathComponent("launch.json"), as: "launch.json", in: staging)
         stage(recordDir.appendingPathComponent("session.json"), as: "session-record.json", in: staging)
+        // The core reads these at boot, so a report shows what a title was patched with.
+        stage(rpcs3Dir.appendingPathComponent("patches/imported_patch.yml"), as: "patches/imported_patch.yml", in: staging)
+        stage(rpcs3Dir.appendingPathComponent("patch_config.yml"), as: "patch_config.yml", in: staging)
         if !settings.allGames.isEmpty { write(settings.allGames, as: "settings-all-games.yml", in: staging) }
         if !settings.thisGame.isEmpty { write(settings.thisGame, as: "settings-this-game.yml", in: staging) }
         // Only older sessions, so a report on the previous session never carries the newer launch's log.

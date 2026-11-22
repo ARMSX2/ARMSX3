@@ -222,8 +222,13 @@ typedef NS_ENUM(NSInteger, Rpcs3LiveSetting) {
 // Only the app's own patch files. -7 another name, -24 the core refuses the body, -25 the write failed.
 + (void)writePatchFile:(NSString*)fileName yaml:(NSString*)yaml completion:(void (^)(NSInteger status))completion;
 
-// Into imported_patch.yml. -24 the core refuses the body, -25 the merge could not be written.
-+ (void)importPatches:(NSString*)yaml completion:(void (^)(NSInteger status))completion;
+// Into imported_patch.yml: `imported` of the file's `total` patches went in, both 0 on any status but 0.
+// `replace` overwrites stored patches of the same hash and name. -24 the core refuses the body, -25 the stored
+// file could not be read or the merge could not be written.
++ (void)importPatches:(NSString*)yaml replace:(BOOL)replace completion:(void (^)(NSInteger status, NSInteger imported, NSInteger total))completion;
+
+// Deletes imported_patch.yml and no other patch file. -25 the file could not be deleted.
++ (void)removeImportedPatchesWithCompletion:(void (^)(NSInteger status))completion;
 
 // The JSON array Rpcs3IOS_PatchesList documents; -7 a serial that is not one path component.
 + (void)patchesForSerial:(NSString*)serial completion:(void (^)(NSData* json, NSInteger status))completion;

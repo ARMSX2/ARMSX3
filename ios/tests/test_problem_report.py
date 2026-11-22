@@ -576,6 +576,15 @@ do {
     line("R9 error")
 }
 
+// P1: the core's imported patches and patch switches are staged when they exist.
+do {
+    let (_, r) = try report("p1")
+    line("P1 imported=\(r.files.contains("patches/imported_patch.yml") ? "staged" : "skipped")"
+        + " config=\(r.files.contains("patch_config.yml") ? "staged" : "skipped")")
+} catch {
+    line("P1 error")
+}
+
 // ---- The cap, the summary, the pruning.
 
 let oracle = [@@ORACLE@@].map { try! NSRegularExpression(pattern: $0) }
@@ -845,6 +854,7 @@ EXPECTED_REPORT = {
     "R1": "R1 built=1 staging=0 reports=1",
     "R8": "R8 built=1 log=none",
     "R9": "R9 tty=skipped",
+    "P1": "P1 imported=staged config=staged",
     "R3": "R3 older=0 trimmed=0 fits=1",
     "R4": "R4 trimmed=1 tail=1 head=1 marker=1 boundary=1 fits=1",
     "R5": "R5 trimmed=0 older=1",
@@ -949,6 +959,15 @@ RPF_LINE = "RPF friends=18 left=0 tails=3 elsewhere=0"
 RPS_LINE = "RPS shapes=14 named=1 unshaped=1 own=1 ownpair=3 online=0"
 
 
+# Invented patches; the Notes line carries the container path so redaction has something to remove.
+PATCH_FILE = ("Version: 1.2\n\nPPU-0000000000000000000000000000000000000001:\n  \"Synthetic Patch\":\n"
+              "    Games:\n      \"Synthetic Game\":\n        BLUS00000: [ All ]\n    Author: Nobody\n"
+              "    Notes: " + HOME + "/Documents\n    Patch Version: 1.0\n    Patch:\n      - [ be32, 0x00010000, 0x60000000 ]\n")
+
+PATCH_CONFIG = ("Version: 1.2\n\nPPU-0000000000000000000000000000000000000001:\n  \"Synthetic Patch\":\n"
+                "    Games:\n      \"Synthetic Game\":\n        BLUS00000:\n          All:\n            Enabled: true\n")
+
+
 def fabricated(tmp, name):
     """A container laid out like the app's, with the decoys every report must leave behind."""
     base = Path(tmp) / name
@@ -1006,6 +1025,15 @@ def write_report_fixtures(tmp):
     (session / "RPCS3.log").write_bytes(log)
     os.symlink(r9["base"] / "Library" / "Application Support" / "StikJIT" / "pairingFile.plist", session / "TTY.log")
     (r9["rpcs3"] / "TTY.log").write_text("core console\n", encoding="utf-8")
+
+    p1 = fabricated(tmp, "p1")
+    session = p1["sessions"] / REPORTED
+    session.mkdir()
+    write_state(session, "in-game", True, "ABCD12345")
+    (session / "RPCS3.log").write_bytes(log)
+    (p1["rpcs3"] / "patches").mkdir()
+    for name, body in (("patches/imported_patch.yml", PATCH_FILE), ("patch_config.yml", PATCH_CONFIG)):
+        (p1["rpcs3"] / name).write_text(body, encoding="utf-8")
 
 
 def log_lines(count, text):
@@ -1630,6 +1658,7 @@ class TheReportBuilds(unittest.TestCase):
             out = compile_and_run([SFO, ZIP, SAVES, FACTS, STORE], driver, tmp)
             cls.r1 = zip_entries(Path(tmp) / "r1" / "Documents" / "Reports")
             cls.r9 = zip_entries(Path(tmp) / "r9" / "Documents" / "Reports")
+            cls.p1 = zip_entries(Path(tmp) / "p1" / "Documents" / "Reports")
         cls.lines = {line.split(" ", 1)[0]: line for line in out.splitlines() if line.strip()}
 
     def test_the_image_sample_is_the_shared_shape(self):
@@ -1687,6 +1716,15 @@ class TheReportBuilds(unittest.TestCase):
             with self.subTest(name):
                 self.assertFalse(name.endswith("/TTY.log"))
                 self.assertNotIn(DECOY.encode("utf-8"), data)
+
+    def test_p1_the_patch_files_are_staged_and_redacted(self):
+        folder = "ARMSX3-report-" + STAMP + "/"
+        for name in ("patches/imported_patch.yml", "patch_config.yml"):
+            with self.subTest(name):
+                data = self.p1.get(folder + name)
+                self.assertIsNotNone(data, name + " is not in the report")
+                self.assertIn(b"Synthetic Patch", data)
+                self.assertNotIn(HOME.encode("utf-8"), data)
 
 
 class TheUsernameIsRedacted(unittest.TestCase):
