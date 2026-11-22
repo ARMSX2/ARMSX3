@@ -302,6 +302,12 @@ class RumbleStatic(unittest.TestCase):
         self.assertGreaterEqual(stop, 0)
         self.assertLess(stop, empty_players)
 
+    def test_pause_leaves_the_test_rumble_playing(self):
+        # pauseAll() runs every frame under the menu; it must not stop the rumbler Test Rumble borrowed.
+        silence = body(without_comments(read(FEED)), r"\bfunc\s+silence\s*\([^{]*\{")
+        self.assertRegex(silence, r"if\s+testing\?\.externalRumbler\s*!==\s*target\.externalRumbler\s*\{\s*"
+                                  r"target\.externalRumbler\?\.stop\(\)\s*\}")
+
     def test_edge_missing_and_empty_inputs_raise(self):
         with tempfile.TemporaryDirectory() as tmp:
             empty = Path(tmp) / "empty.swift"
