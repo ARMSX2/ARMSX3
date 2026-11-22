@@ -78,7 +78,8 @@ import GameController
 
     private func silence(_ slot: Int) {
         if let target = targets[slot] {
-            target.externalRumbler?.stop()
+            // pauseAll() runs every frame under the menu, so a Test Rumble borrowing this rumbler would last one frame.
+            if testing?.externalRumbler !== target.externalRumbler { target.externalRumbler?.stop() }
             for (index, player) in target.players.enumerated() where target.playing[index] {
                 try? player.stop(atTime: CHHapticTimeImmediate)
                 target.playing[index] = false
