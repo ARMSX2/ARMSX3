@@ -26,17 +26,9 @@ internal fun FrameGenCard(settings: Settings, viewModel: EmulationMenuViewModel)
             options = listOf(
                 str("perf.framegen.off"), str("perf.framegen.x2"),
                 str("perf.framegen.x3"), str("perf.framegen.x4"),
-                str("perf.framegen.zero"), str("perf.framegen.reallyzero"),
             ).mapIndexed { index, label -> index to label },
             selected = settings.ps3.frameGeneration,
             onSelect = { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(frameGeneration = v)) } },
-        )
-        // ZeroFG creates its device when the game starts; the app cannot tell from here whether it did.
-        Text(
-            str("perf.framegen.zero.note"),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
         )
 
         // The rest of frame generation, which until now only existed in the main settings

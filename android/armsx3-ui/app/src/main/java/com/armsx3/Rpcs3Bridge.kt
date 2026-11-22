@@ -823,6 +823,7 @@ object Rpcs3Bridge {
                 "MSAA" -> Rpcs3Settings.setMsaa(asInt(value))
                 "Shader Mode" -> Rpcs3Settings.setShaderMode(asInt(value))
                 "Frame Generation" -> Rpcs3Settings.setFrameGeneration(asInt(value))
+                "ZeroFG Frame Generation" -> Rpcs3Settings.setZeroFg(asInt(value))
                 "Frame Generation Performance Mode" -> Rpcs3Settings.setFrameGenPerformance(asBool(value))
                 "Frame Generation Flow Scale" -> Rpcs3Settings.setFrameGenFlowScale(asInt(value))
                 "Frame Generation Target Rate" -> Rpcs3Settings.setFrameGenTargetRate(asInt(value))

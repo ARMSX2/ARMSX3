@@ -73,9 +73,8 @@ namespace
 void VKGSRender::zerofg_update_authority()
 {
 #if defined(ANDROID)
-	const frame_generation_mode mode = g_cfg.video.frame_generation;
-	const bool wanted = is_zerofg_mode(mode);
-	VKZeroFG::SetUserSettings(wanted, mode == frame_generation_mode::reallyzero ? 1 : 0);
+	const bool wanted = zerofg_wanted();
+	VKZeroFG::SetUserSettings(wanted, zerofg_multiplier());
 
 	auto* wsi = dynamic_cast<vk::swapchain_WSI*>(m_swapchain.get());
 	if (!wsi || swapchain_unavailable || m_zerofg_handoff_reinit)
@@ -331,8 +330,8 @@ bool VKGSRender::reinitialize_swapchain()
 	m_held_generated_count = 0;
 
 	// Read with the same setting init() reads to pick the present mode. See m_swapchain_framegen.
-	m_swapchain_framegen = is_lsfg_mode(g_cfg.video.frame_generation);
-	m_swapchain_zerofg = is_zerofg_mode(g_cfg.video.frame_generation);
+	m_swapchain_framegen = lsfg_wanted();
+	m_swapchain_zerofg = zerofg_wanted();
 	m_swapchain_prerotation = !g_cfg.video.disable_swapchain_prerotation;
 
 	// Rebuild swapchain. Old swapchain destruction is handled by the init_swapchain call
@@ -1814,7 +1813,7 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 	// first swapchain exists, and can be switched in-game, so it ran in MAILBOX: the real frame
 	// presented right after each generated one replaced it, and measured on the Odin 3 only 51 of
 	// 60 refreshes showed a new frame. Rebuild on a change, as for VSync.
-	if (m_swapchain_framegen != (is_lsfg_mode(g_cfg.video.frame_generation)))
+	if (m_swapchain_framegen != lsfg_wanted())
 	{
 		swapchain_unavailable = true;
 	}

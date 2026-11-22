@@ -153,10 +153,10 @@ namespace VKZeroFG
 	/// ZeroFG's buffers are all taken, which is ZeroFG's Source backpressure.
 	void PublishCapturedFrame();
 
-	/// The user's settings: ZeroFG switched on, and the engine mode (0 Zero, 1 ReallyZero; the
-	/// ARMSX2 numbering, whose GS-informed modes have no RSX counterpart). Set before the device is
+	/// The user's settings: ZeroFG switched on, and the multiplier (2, 3 or 4 frames on screen per
+	/// game frame; the presenter caps it by what the display refresh holds). Set before the device is
 	/// created and on every present; read by the adapter where ARMSX2 read GSConfig.
-	void SetUserSettings(bool enabled, int mode);
+	void SetUserSettings(bool enabled, unsigned multiplier);
 
 	/// ZeroFG's line in the performance overlay, beside LSFG's: what reaches the screen while it
 	/// presents (Real and generated frames per second, over half-second windows), "starting" until

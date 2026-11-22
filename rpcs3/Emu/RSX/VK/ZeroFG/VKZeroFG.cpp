@@ -16,13 +16,13 @@ namespace VKZeroFG
 	namespace
 	{
 		std::atomic<bool> s_user_enabled{false};
-		std::atomic<int> s_user_mode{0};
+		std::atomic<unsigned> s_user_multiplier{2};
 	} // namespace
 
-	void SetUserSettings(bool enabled, int mode)
+	void SetUserSettings(bool enabled, unsigned multiplier)
 	{
 		s_user_enabled.store(enabled, std::memory_order_relaxed);
-		s_user_mode.store(mode, std::memory_order_relaxed);
+		s_user_multiplier.store(multiplier < 2 ? 2 : (multiplier > 4 ? 4 : multiplier), std::memory_order_relaxed);
 	}
 } // namespace VKZeroFG
 
@@ -60,7 +60,7 @@ namespace
 	} // namespace Common
 } // namespace
 #define ZEROFG_USER_ENABLED (VKZeroFG::s_user_enabled.load(std::memory_order_relaxed))
-#define ZEROFG_USER_MODE (VKZeroFG::s_user_mode.load(std::memory_order_relaxed))
+#define ZEROFG_USER_MULTIPLIER (VKZeroFG::s_user_multiplier.load(std::memory_order_relaxed))
 
 namespace Vulkan
 {
@@ -123,7 +123,6 @@ namespace VKZeroFG
 		constexpr u32 PROBE_WIDTH = 640;
 		constexpr u32 PROBE_HEIGHT = 448;
 		constexpr VkFormat PROBE_FORMAT = VK_FORMAT_A2B10G10R10_UNORM_PACK32;
-		constexpr u32 FRAME_CONTEXTS = 3;
 		// The queues device B asks for on its graphics/compute family: one for generation, one
 		// for the egress to present from, as the presenter prefers. Fewer when the family has fewer.
 		constexpr u32 WANTED_QUEUES = 2;
@@ -435,9 +434,9 @@ namespace VKZeroFG
 			VkPhysicalDeviceLimits limits = {};
 			std::unique_ptr<zerofg::Interpolator> engine;
 			// What the engine was built with: the capabilities enabled on device B, and the mode
-			// (ZEROFG_USER_MODE), so a mode switched in game rebuilds it on the same device.
+			// (RZ+ since 1.2: one engine, so no rebuild for a mode).
 			zerofg::Capabilities caps;
-			zerofg::Mode engine_mode = zerofg::Mode::kZero;
+			zerofg::Mode engine_mode = zerofg::Mode::kReallyZero;
 #if ZEROFG_WITH_HOST_KIT
 			// Devices A and B as the presenter and the handoff see them. They wrap, never own.
 			std::unique_ptr<xe::ui::vulkan::VulkanInstance> kit_instance_a;
@@ -849,34 +848,21 @@ namespace VKZeroFG
 		/// The engine on device B, built for a PS2-sized frame. Auto takes the fast paths device B
 		/// has enabled; when it is refused, the portable Compat form gets one try, as the
 		/// integration guide says.
-		/// The engine the user picked (ZEROFG_USER_MODE).
+		/// The engine: ZeroFG 1.2 has one, RZ+ (the core's ReallyZero).
 		zerofg::Mode ConfiguredMode()
 		{
-			// The four modes the settings offer: Zero (0) and ReallyZero (1), the engines every host gets, and the GS modes, the same
-			// engines plus what only the GS can give (6 ZeroGS: the content break and the HUD layer; 7 ReallyZeroGS: the content break;
-			// GSRendererHW). Any other saved value is Zero.
-			switch (ZEROFG_USER_MODE)
-			{
-				case 1:
-				case 7:
-					return zerofg::Mode::kReallyZero;
-				default:
-					return zerofg::Mode::kZero;
-			}
+			return zerofg::Mode::kReallyZero;
 		}
 
-		const char* ModeName(zerofg::Mode mode)
+		const char* ModeName(zerofg::Mode)
 		{
-			return mode == zerofg::Mode::kReallyZero ? "ReallyZero" : "Zero";
+			return "RZ+";
 		}
 
-		/// The name on the overlay's line: the modes by their short names (the GS modes add GS).
-		const char* OverlayModeName(zerofg::Mode mode)
+		/// The name on the overlay's line: the multiplier asked for (the presenter caps it by the refresh).
+		std::string OverlayModeName(zerofg::Mode)
 		{
-			const bool gs = ZEROFG_USER_MODE >= 6;
-			if (mode == zerofg::Mode::kReallyZero)
-				return gs ? "RZGS" : "RZ";
-			return gs ? "ZGS" : "Z";
+			return fmt::format("x{}", ZEROFG_USER_MULTIPLIER);
 		}
 
 		bool CreateEngineLocked(const zerofg::Capabilities& caps, std::string* backend, std::string* why)
@@ -891,7 +877,9 @@ namespace VKZeroFG
 			info.capabilities = caps;
 			s.caps = caps;
 			s.engine_mode = info.mode;
-			info.frame_context_count = FRAME_CONTEXTS;
+			// One engine frame context per generation context (MFG: the presenter keeps up to 2 (N - 1) + 1 generated frames in
+			// flight, 7 at x4), as the integration guide asks: at least N + 1 for xN.
+			info.frame_context_count = GenerationContext::COUNT;
 
 			zerofg::Status status = zerofg::Status::kUnsupported;
 			for (const zerofg::Backend attempt : {zerofg::Backend::kAuto, zerofg::Backend::kCompat})
@@ -1498,8 +1486,8 @@ namespace VKZeroFG
 			const zerofg::Image real_current = wrap_real(request.current_image, request.current_view, request.current_layout,
 				request.current_source_id);
 			const zerofg::Status status = hud ?
-				s.engine->Interpolate(command.buffer, selected, real_previous, real_current, 0.5f, output, hud_previous, hud_current) :
-				s.engine->Interpolate(command.buffer, selected, real_previous, real_current, 0.5f, output);
+				s.engine->Interpolate(command.buffer, selected, real_previous, real_current, request.phase, output, hud_previous, hud_current) :
+				s.engine->Interpolate(command.buffer, selected, real_previous, real_current, request.phase, output);
 			if (status != zerofg::Status::kSuccess)
 			{
 				f.vkResetCommandPool(device->device(), command.pool, 0);
@@ -2966,6 +2954,9 @@ namespace VKZeroFG
 		State& s = s_state;
 		SourceStage& source = s.source;
 		source.captured = false;
+		// MFG: the multiplier asked for, read by the presenter as frames come in (it caps N by what the refresh holds, and a new
+		// selector applies at once).
+		cvars::zerofg_multiplier = ZEROFG_USER_MULTIPLIER;
 		if (!WantsFrames() || frame.image == VK_NULL_HANDLE || !frame.output_width || !frame.output_height)
 			return;
 		const s32 content_w = frame.src[2] - frame.src[0];

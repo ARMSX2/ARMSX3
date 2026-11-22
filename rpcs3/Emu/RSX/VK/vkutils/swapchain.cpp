@@ -399,7 +399,7 @@ namespace vk
 		// the camera moves.
 		//
 		// ARMSX2 forces FIFO for the same reason at the same point (VKSwapChain::SelectPresentMode).
-		if (is_lsfg_mode(g_cfg.video.frame_generation) &&
+		if (lsfg_wanted() &&
 			g_cfg.video.vsync != vsync_mode::full)
 		{
 			rsx_log.warning("Frame generation is enabled; using FIFO presentation so interpolated "
@@ -456,7 +456,7 @@ namespace vk
 		// ARMSX2 gates its own pipelined path on the chain having at least four images for the
 		// same reason.
 		const u32 extra_for_framegen =
-			is_lsfg_mode(g_cfg.video.frame_generation) ? 2u : 0u;
+			lsfg_wanted() ? 2u : 0u;
 
 		if (surface_descriptors.maxImageCount > 0)
 		{
@@ -509,7 +509,7 @@ namespace vk
 		// flickered. The same session at a 270 degree turn, which is left to the compositor, held 30
 		// with the overlay steady (11-05). With frame generation on, the compositor turns the frame, as
 		// it did before pre-rotation; the swapchain is rebuilt when frame generation is switched.
-		const bool framegen_on = is_lsfg_mode(g_cfg.video.frame_generation);
+		const bool framegen_on = lsfg_wanted();
 
 		if (surface_turns && !g_cfg.video.disable_swapchain_prerotation && !framegen_on &&
 			(surface_descriptors.supportedTransforms & surface_descriptors.currentTransform))
@@ -572,7 +572,7 @@ namespace vk
 		// ZeroFG too: it takes the composited frame from this swapchain's image while the renderer still
 		// presents (it counts the game's frames and qualifies its cadence before it takes the window),
 		// and from the offscreen images after.
-		const bool wants_transfer_src = is_lsfg_mode(g_cfg.video.frame_generation) || is_zerofg_mode(g_cfg.video.frame_generation);
+		const bool wants_transfer_src = lsfg_wanted() || zerofg_wanted();
 
 		if (wants_transfer_src &&
 			(surface_descriptors.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT))

@@ -444,8 +444,7 @@ VKGSRender::VKGSRender(rsx::context* ctx, rsx::display_output* output) noexcept 
 
 	// ZeroFG is chosen in the same selector as LSFG: read before the instance, which is created at 1.3
 	// when it is on (device B shares it). A no-op unless built in (Android arm64).
-	VKZeroFG::SetUserSettings(is_zerofg_mode(g_cfg.video.frame_generation),
-		g_cfg.video.frame_generation == frame_generation_mode::reallyzero ? 1 : 0);
+	VKZeroFG::SetUserSettings(zerofg_wanted(), zerofg_multiplier());
 
 	if (!m_instance.create("RPCS3"))
 	{
@@ -515,8 +514,8 @@ VKGSRender::VKGSRender(rsx::context* ctx, rsx::display_output* output) noexcept 
 	m_swapchain_dims.height = m_frame->client_height();
 
 	// Read with the same setting init() reads to pick the present mode. See m_swapchain_framegen.
-	m_swapchain_framegen = is_lsfg_mode(g_cfg.video.frame_generation);
-	m_swapchain_zerofg = is_zerofg_mode(g_cfg.video.frame_generation);
+	m_swapchain_framegen = lsfg_wanted();
+	m_swapchain_zerofg = zerofg_wanted();
 	m_swapchain_prerotation = !g_cfg.video.disable_swapchain_prerotation;
 
 	if (!m_swapchain->init(m_swapchain_dims.width, m_swapchain_dims.height))

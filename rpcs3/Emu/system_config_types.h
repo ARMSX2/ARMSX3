@@ -370,22 +370,23 @@ enum class frame_generation_mode
 	x2,
 	x3,
 	x4,
-
-	// ZeroFG (separate frame generator, runs on its own device). Exclusive with the LSFG modes
-	// above: one selector, so only one frame generator is ever active.
-	zero,
-	reallyzero,
 };
 
-// True for the in-process LSFG passes (x2/x3/x4). ZeroFG is not one of them.
+// ZeroFG, the other frame generator (rpcs3/Emu/RSX/VK/ZeroFG): its own device, its own setting. The
+// frames on screen per game frame, capped by what the display refresh holds. While it is on, LSFG
+// stays off (lsfg_wanted, system_config.h).
+enum class zerofg_mode
+{
+	off = 0,
+	x2,
+	x3,
+	x4,
+};
+
+// True for the in-process LSFG passes (x2/x3/x4).
 constexpr bool is_lsfg_mode(frame_generation_mode m)
 {
 	return m == frame_generation_mode::x2 || m == frame_generation_mode::x3 || m == frame_generation_mode::x4;
-}
-
-constexpr bool is_zerofg_mode(frame_generation_mode m)
-{
-	return m == frame_generation_mode::zero || m == frame_generation_mode::reallyzero;
 }
 
 enum class output_scaling_mode
