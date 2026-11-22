@@ -1184,6 +1184,9 @@ VKGSRender::~VKGSRender()
 	// Descriptors
 	vk::descriptors::flush();
 
+	// ZeroFG's offscreen images, before the memory check below counts them as leaked.
+	m_swapchain->release_offscreen();
+
 	// Global resources
 	vk::destroy_global_resources();
 

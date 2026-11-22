@@ -9,6 +9,7 @@ import android.view.Display
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.View
 import android.view.Window
 import android.view.WindowManager
 import com.armsx2.config.ConfigStore
@@ -24,6 +25,7 @@ class EmulationSurface(context: Context) :
     private var viewHeight = 0
     private var gameActive = false
     private var lastRequestedFrameRate = Float.NaN
+    private var zeroFgRefreshActive = false
     private val displayManager =
         context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
     private val frameRateMonitor = object : Runnable {
@@ -186,6 +188,7 @@ class EmulationSurface(context: Context) :
             applyFrameRatePreference()
             postDelayed(frameRateMonitor, FRAME_RATE_RETRY_MS)
         } else {
+            releaseZeroFgRefresh()
             clearFrameRatePreference()
         }
     }
@@ -197,6 +200,11 @@ class EmulationSurface(context: Context) :
      * to its ~60 Hz mode instead of introducing 3:2 cadence.
      */
     fun applyFrameRatePreference() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && gameActive && holder.surface.isValid && zeroFgEnabled()) {
+            applyZeroFgRefresh()
+            return
+        }
+        releaseZeroFgRefresh()
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
             !gameActive ||
             !holder.surface.isValid ||
@@ -252,6 +260,70 @@ class EmulationSurface(context: Context) :
         }
         lastRequestedFrameRate = Float.NaN
     }
+
+    /**
+     * ZeroFG presents up to four times the game's rate from its own device, and its presenter caps
+     * the multiplier by the refresh it sees: on a 60 Hz panel x3 and x4 from a 30 fps game fall back
+     * to x2. This app declares itself a game, and Android 15+ holds games at 60 unless asked
+     * otherwise. So while ZeroFG is on, the panel is asked for its highest refresh at the current
+     * resolution, the three ways ZeroFG's other hosts found it takes: the window's display mode, a
+     * surface vote that may change the mode even when the change is not seamless, and (Android 15+)
+     * the HIGH frame-rate category.
+     */
+    private fun applyZeroFgRefresh() {
+        val current = currentDisplay() ?: return
+        val max = current.supportedModes
+            .filter {
+                it.physicalWidth == current.mode.physicalWidth &&
+                    it.physicalHeight == current.mode.physicalHeight && it.refreshRate > 0f
+            }
+            .maxByOrNull { it.refreshRate } ?: return
+        hostWindow()?.let { window ->
+            if (window.attributes.preferredDisplayModeId != max.modeId) {
+                runCatching { window.attributes = window.attributes.apply { preferredDisplayModeId = max.modeId } }
+                android.util.Log.i(
+                    "ZeroFGDisplay",
+                    "ZeroFGRefreshRequest mode=${max.modeId} max_hz=${max.refreshRate} active_hz=${current.refreshRate}",
+                )
+            }
+        }
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                holder.surface.setFrameRate(
+                    max.refreshRate,
+                    Surface.FRAME_RATE_COMPATIBILITY_DEFAULT,
+                    Surface.CHANGE_FRAME_RATE_ALWAYS,
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                holder.surface.setFrameRate(max.refreshRate, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
+            }
+            lastRequestedFrameRate = max.refreshRate
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            runCatching { setRequestedFrameRate(View.REQUESTED_FRAME_RATE_CATEGORY_HIGH) }
+        }
+        zeroFgRefreshActive = true
+    }
+
+    /** Withdraws [applyZeroFgRefresh]: no display mode, no vote, the default category. */
+    private fun releaseZeroFgRefresh() {
+        if (!zeroFgRefreshActive) return
+        zeroFgRefreshActive = false
+        hostWindow()?.let { window ->
+            runCatching { window.attributes = window.attributes.apply { preferredDisplayModeId = 0 } }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            runCatching { setRequestedFrameRate(View.REQUESTED_FRAME_RATE_CATEGORY_DEFAULT) }
+        }
+        clearFrameRatePreference()
+    }
+
+    private fun zeroFgEnabled(): Boolean = runCatching {
+        val settingsKey = MainActivityRuntime.currentGame.value?.settingsKey
+            ?: NativeApp.getGameSerial().takeIf { it.isNotBlank() }
+        ConfigStore.resolveForGame(settingsKey).ps3.zeroFg != 0
+    }.getOrDefault(false)
 
     private fun lowLatencyEnabled(): Boolean = runCatching {
         val settingsKey = MainActivityRuntime.currentGame.value?.settingsKey

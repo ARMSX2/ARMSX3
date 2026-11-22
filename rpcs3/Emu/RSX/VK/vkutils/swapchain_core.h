@@ -142,6 +142,12 @@ namespace vk
 		{
 			return false;
 		}
+
+		// Frees those plain images now. The renderer's teardown calls it before the memory check in
+		// destroy_global_resources, which would otherwise report them as leaked.
+		virtual void release_offscreen()
+		{
+		}
 	};
 
 	template<typename T>
@@ -257,6 +263,7 @@ namespace vk
 		// (VKGSRender::reinitialize_swapchain). The surface is kept either way.
 		bool is_offscreen() const override { return m_offscreen; }
 		void set_offscreen(bool on) { m_offscreen = on; }
+		void release_offscreen() override { release_offscreen_images(); }
 
 	private:
 		bool m_offscreen = false;

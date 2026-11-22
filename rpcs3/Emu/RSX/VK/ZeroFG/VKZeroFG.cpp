@@ -469,6 +469,7 @@ namespace VKZeroFG
 			SourceStage source;
 #endif
 			bool handoff_qualified = false;
+			bool multiplier_logged = false;
 			std::string status;
 		};
 
@@ -2710,6 +2711,7 @@ namespace VKZeroFG
 		}
 		INFO_LOG("ZeroFG: device B ready in {:.1f} ms: {}; engine {} ({}) built for {}x{}.", timer.GetTimeMilliseconds(),
 			summary, ModeName(s_state.engine_mode), backend, PROBE_WIDTH, PROBE_HEIGHT);
+		s_state.multiplier_logged = false; // each boot logs the multiplier it starts with
 
 #if ZEROFG_WITH_HOST_KIT
 		Common::Timer handoff_timer;
@@ -2912,8 +2914,10 @@ namespace VKZeroFG
 		static u64 last_ns = 0;
 		static u64 last_real = 0;
 		static u64 last_synthetic = 0;
+		static u64 last_presents = 0;
 		static float real_fps = 0.0f;
 		static float synthetic_fps = 0.0f;
+		static float present_rate = 0.0f;
 		const State& s = s_state;
 		if (!ZEROFG_USER_ENABLED || !s.presenter)
 			return {};
@@ -2927,24 +2931,34 @@ namespace VKZeroFG
 		const u64 now = NowNs();
 		const u64 real = s_outputs_real.load(std::memory_order_relaxed);
 		const u64 synthetic = s_outputs_synthetic.load(std::memory_order_relaxed);
+		// vkQueuePresentKHR calls that device B's presenter made (accepted ones), the same counter as
+		// Xendroid+'s "Vulkan" line: what was really handed to the display, apart from what ZeroFG made.
+#if ZEROFG_WITH_HOST_KIT
+		const u64 presents = xe::GetHostPresentSubmissionCount();
+#else
+		const u64 presents = 0;
+#endif
 		if (!last_ns)
 		{
 			last_ns = now;
 			last_real = real;
 			last_synthetic = synthetic;
-			real_fps = synthetic_fps = 0.0f;
+			last_presents = presents;
+			real_fps = synthetic_fps = present_rate = 0.0f;
 		}
 		else if (now - last_ns >= 500000000ull)
 		{
 			const float seconds = static_cast<float>(now - last_ns) / 1e9f;
 			real_fps = static_cast<float>(real - last_real) / seconds;
 			synthetic_fps = static_cast<float>(synthetic - last_synthetic) / seconds;
+			present_rate = static_cast<float>(presents - last_presents) / seconds;
 			last_ns = now;
 			last_real = real;
 			last_synthetic = synthetic;
+			last_presents = presents;
 		}
-		return fmt::format("ZeroFG {}: {:.1f} FPS ({:.0f} r + {:.0f} s)", OverlayModeName(s.engine_mode), real_fps + synthetic_fps,
-			real_fps, synthetic_fps);
+		return fmt::format("ZeroFG {}: {:.1f} FPS ({:.0f} r + {:.0f} s) | Vulkan {:.0f}/s", OverlayModeName(s.engine_mode),
+			real_fps + synthetic_fps, real_fps, synthetic_fps, present_rate);
 	}
 
 	static std::atomic<bool> s_content_break_pending{false};
@@ -2956,7 +2970,14 @@ namespace VKZeroFG
 		source.captured = false;
 		// MFG: the multiplier asked for, read by the presenter as frames come in (it caps N by what the refresh holds, and a new
 		// selector applies at once).
-		cvars::zerofg_multiplier = ZEROFG_USER_MULTIPLIER;
+		const unsigned multiplier = ZEROFG_USER_MULTIPLIER;
+		if (multiplier != cvars::zerofg_multiplier || !s.multiplier_logged)
+		{
+			// One line per change, so the log shows the selector in game too (the presenter caps it by the refresh).
+			INFO_LOG("ZeroFG: multiplier x{} asked.", multiplier);
+			s.multiplier_logged = true;
+		}
+		cvars::zerofg_multiplier = multiplier;
 		if (!WantsFrames() || frame.image == VK_NULL_HANDLE || !frame.output_width || !frame.output_height)
 			return;
 		const s32 content_w = frame.src[2] - frame.src[0];
