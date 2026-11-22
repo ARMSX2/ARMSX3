@@ -11,18 +11,18 @@ GPL version 2 text, under which the "or later" grant is exercised as version 2),
 
 ## SPDX: MPL-2.0 — StikJIT
 
-Upstream `StikDebug/StikJIT`, pin `3623e725876f76aecb0520582ad6194bacb15d39`. Licence text:
+Upstream `StikDebug/StikJIT`, at the pin each row below gives. Licence text:
 `MPL-2.0.txt` (the upstream `LICENSE`, byte-identical, blob `a612ad9813b006ce81d1ee438dd784da99a54007`).
 
 | File | Upstream | Pin | SPDX |
 |---|---|---|---|
 | `LICENSE` | `StikDebug/StikJIT` | `3623e725876f76aecb0520582ad6194bacb15d39` | MPL-2.0 |
 | `Sources/BundledScript.swift` | `StikDebug/StikJIT` | `32287268fa5824f9edce4cb359f5833ce0cf7b00` | MPL-2.0 |
-| `Sources/DDISession.swift` | `StikDebug/StikJIT` | `32287268fa5824f9edce4cb359f5833ce0cf7b00` | MPL-2.0 |
+| `Sources/DDISession.swift` | `StikDebug/StikJIT` | `a9ccad90c7a8cb547f77ff338890e6633a65ac43` | MPL-2.0 |
 | `Sources/DeveloperDiskImageService.swift` | `StikDebug/StikJIT` | `32287268fa5824f9edce4cb359f5833ce0cf7b00` | MPL-2.0 |
 | `Sources/EndpointProbe.swift` | `StikDebug/StikJIT` | `3623e725876f76aecb0520582ad6194bacb15d39` | MPL-2.0 |
-| `Sources/IdeviceFFI.swift` | `StikDebug/StikJIT` | `3623e725876f76aecb0520582ad6194bacb15d39` | MPL-2.0 |
-| `Sources/JITSession.swift` | `StikDebug/StikJIT` | `3623e725876f76aecb0520582ad6194bacb15d39` | MPL-2.0 |
+| `Sources/IdeviceFFI.swift` | `StikDebug/StikJIT` | `a9ccad90c7a8cb547f77ff338890e6633a65ac43` | MPL-2.0 |
+| `Sources/JITSession.swift` | `StikDebug/StikJIT` | `a9ccad90c7a8cb547f77ff338890e6633a65ac43` | MPL-2.0 |
 | `Sources/ProcessInfo+TXM.swift` | `StikDebug/StikJIT` | `3623e725876f76aecb0520582ad6194bacb15d39` | MPL-2.0 |
 | `Sources/ScriptRunner.swift` | `StikDebug/StikJIT` | `3623e725876f76aecb0520582ad6194bacb15d39` | MPL-2.0 |
 | `Sources/StikJIT.swift` | `StikDebug/StikJIT` | `32287268fa5824f9edce4cb359f5833ce0cf7b00` | MPL-2.0 |

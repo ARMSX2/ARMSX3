@@ -82,45 +82,67 @@ final class JITSession {
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)
         address.sin_port = configuration.rsdPort.bigEndian
-        _ = configuration.deviceAddress.withCString { inet_pton(AF_INET, $0, &address.sin_addr) }
+        guard configuration.deviceAddress.withCString({ inet_pton(AF_INET, $0, &address.sin_addr) }) == 1 else {
+            throw StikJITError.device(code: -1, subCode: 0, message: "Failed to parse device IP address")
+        }
 
         var tunnel = Tunnel()
-        try IdeviceFFI.check("failed to create RSD tunnel") {
-            "StikJIT".withCString { hostname in
-                withUnsafePointer(to: &address) { pointer in
-                    pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                        tunnel_create_rppairing(
-                            sa, socklen_t(MemoryLayout<sockaddr_in>.stride),
-                            hostname, pairing, nil, nil,
-                            &tunnel.adapter, &tunnel.handshake)
+        do {
+            try IdeviceFFI.check("failed to create RSD tunnel") {
+                "StikJIT".withCString { hostname in
+                    withUnsafePointer(to: &address) { pointer in
+                        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                            tunnel_create_rppairing(
+                                sa, socklen_t(MemoryLayout<sockaddr_in>.stride),
+                                hostname, pairing, nil, nil,
+                                &tunnel.adapter, &tunnel.handshake)
+                        }
                     }
                 }
             }
+        } catch {
+            tunnel.free()
+            throw error
+        }
+        guard tunnel.adapter != nil, tunnel.handshake != nil else {
+            tunnel.free()
+            throw StikJITError.device(code: -1, subCode: 0, message: "RSD tunnel was created without valid handles")
         }
         return tunnel
     }
 
     private func connectDebugSession(over tunnel: Tunnel) throws -> DebugSession {
         var session = DebugSession()
-        try IdeviceFFI.check("failed to connect remote server") {
-            remote_server_connect_rsd(tunnel.adapter, tunnel.handshake, &session.remoteServer)
+        do {
+            try IdeviceFFI.check("failed to connect remote server") {
+                remote_server_connect_rsd(tunnel.adapter, tunnel.handshake, &session.remoteServer)
+            }
+            try IdeviceFFI.check("failed to connect debug proxy") {
+                debug_proxy_connect_rsd(tunnel.adapter, tunnel.handshake, &session.debugProxy)
+            }
+        } catch {
+            session.free()
+            throw error
         }
-        try IdeviceFFI.check("failed to connect debug proxy") {
-            debug_proxy_connect_rsd(tunnel.adapter, tunnel.handshake, &session.debugProxy)
+        guard session.remoteServer != nil, session.debugProxy != nil else {
+            session.free()
+            throw StikJITError.debugProxyUnavailable
         }
         return session
     }
 
     @discardableResult
     private func sendCommand(_ command: String, over debugProxy: OpaquePointer) throws -> String? {
-        guard let handle = command.withCString({ debugserver_command_new($0, nil, 0) }) else { return nil }
+        guard let handle = command.withCString({ debugserver_command_new($0, nil, 0) }) else {
+            throw StikJITError.device(code: -1, subCode: 0, message: "Failed to create debugserver command: \(command)")
+        }
         defer { debugserver_command_free(handle) }
         var response: UnsafeMutablePointer<CChar>?
+        defer { if let response { idevice_string_free(response) } }
         try IdeviceFFI.check("debugserver command failed") {
             debug_proxy_send_command(debugProxy, handle, &response)
         }
         guard let response else { return nil }
-        defer { idevice_string_free(response) }
         return String(cString: response)
     }
 }
