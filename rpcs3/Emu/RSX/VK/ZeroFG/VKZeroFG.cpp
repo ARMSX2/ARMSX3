@@ -3,8 +3,9 @@
 
 // ZeroFG's ARMSX2 adapter (pcsx2/GS/Renderers/Vulkan/GSZeroFG.cpp), carried to RPCS3's renderer.
 // The device, handoff, presenter and Post code is the same; what was PCSX2's is answered here
-// (settings through SetUserSettings, logging into RPCS3's log, the timer), and ImGui's overlay is
-// gone: RPCS3 draws its own overlays into the frame ZeroFG captures.
+// (settings through SetUserSettings, logging into RPCS3's log, the timer). ImGui's overlay is gone,
+// and ZeroGS's HUD handoff carries RPCS3's overlays instead: drawn on A over black and over white
+// (GameFrame::overlay), apart from the game's image, and laid over every output by the Post.
 
 #include "Emu/RSX/VK/ZeroFG/VKZeroFG.h"
 
@@ -303,6 +304,8 @@ namespace VKZeroFG
 				VkExtent2D framebuffer_extent = {};
 				bool submitted = false;
 				uint64_t signal_value = 0;
+				// Samples the overlay layer (RPCS3's overlays, P above W) for the second draw.
+				VkDescriptorSet layer_set = VK_NULL_HANDLE;
 				// The overlay's vertices, indices and texture uploads for this job, mapped. Rewritten
 				// only when the job is recorded again, after its last submission completed.
 				VkBuffer overlay_buffer = VK_NULL_HANDLE;
@@ -336,6 +339,10 @@ namespace VKZeroFG
 			VkSampler linear = VK_NULL_HANDLE;
 			VkSampler nearest = VK_NULL_HANDLE;
 			VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
+			// RPCS3's overlay layer over the frame (post_layer.frag, premultiplied blend). Without it
+			// (it failed to build) the Post draws the frame alone.
+			VkShaderModule layer_fragment = VK_NULL_HANDLE;
+			VkPipeline layer_pipeline = VK_NULL_HANDLE;
 			// The overlay: ImGui's pipeline over the frame, and its textures. Without them (they
 			// failed to build) the Post draws the frame alone.
 			VkShaderModule overlay_vertex = VK_NULL_HANDLE;
@@ -387,19 +394,21 @@ namespace VKZeroFG
 			u32 mailbox = 0;
 			u32 aspect_x = 0;
 			u32 aspect_y = 0;
-			// ZeroGS: the frame's HUD planes at the generation size, P above W (twice the frame's height), for the HUD handoff.
+			// RPCS3's overlay layer at the output's size, P above W (twice the output's height), for the HUD handoff.
 			OwnedImage hud_staging;
 			VkImageLayout hud_layout = VK_IMAGE_LAYOUT_UNDEFINED;
 			bool hud_captured = false;
-			// Frames captured, those the GS gave planes, those whose planes went out, and those the HUD handoff had no slot for.
+			// Frames captured, those with overlays, those whose layer went out, and those the HUD handoff had no slot for.
 			u64 hud_frames = 0, hud_given = 0, hud_published = 0, hud_no_slot = 0;
 		};
 
-		/// ZeroGS on device B: the HUD planes of the latest Reals, copied out of the HUD handoff as each frame comes in (keyed by
-		/// the Real's source id), for the engine's HudPlanes. Presenter threads, under its mutex.
+		/// On device B: the overlay layers of the latest frames, copied out of the HUD handoff as each frame comes in (keyed by
+		/// the frame's source id); the Post lays the newest over every output. Presenter threads, under its mutex.
 		struct HudRing
 		{
-			static constexpr u32 COUNT = 8;
+			// Three window-sized layers (P above W, 10-bit): the newest, the one a Post may still be recording
+			// with, and the next copy's. The queue orders the rest (NewestLayer).
+			static constexpr u32 COUNT = 3;
 			struct Entry
 			{
 				OwnedImage image;  // P above W, the handoff's format
@@ -414,6 +423,8 @@ namespace VKZeroFG
 			std::mutex mutex;
 			std::array<Entry, COUNT> entries;
 			u32 next = 0;
+			// The entry the newest layer was copied into (its copy submitted), -1 before the first.
+			s32 newest = -1;
 			// copied: planes copied to B; pending: polls whose newest planes were still being copied on A; missed: planes dropped;
 			// wanted / used: pairs generated, and those that had both Reals' planes.
 			std::atomic<u64> copied{0}, missed{0}, used{0}, pending{0}, wanted{0};
@@ -445,7 +456,7 @@ namespace VKZeroFG
 			std::unique_ptr<xe::ui::vulkan::VulkanDevice> kit_device_b;
 			PostFunctions pfn;
 			std::unique_ptr<ZeroFGDeviceHandoff> handoff;
-			// ZeroGS: the HUD planes' own handoff, published right after each frame with its source id, and B's copies of them.
+			// The overlay layer's own handoff (ZeroGS's HUD handoff), published right after each frame with its source id, and B's copies.
 			std::unique_ptr<ZeroFGDeviceHandoff> hud_handoff;
 			std::unique_ptr<HudRing> hud_ring;
 			std::unique_ptr<ZeroFGIndependentPresenter> presenter;
@@ -494,6 +505,9 @@ namespace VKZeroFG
 		// overlay's ZeroFG line (GetOverlayText, GS thread).
 		std::atomic<u64> s_outputs_real{0};
 		std::atomic<u64> s_outputs_synthetic{0};
+		// The newest frame published came with RPCS3's overlays apart (its layer on the HUD handoff): the
+		// Post lays the newest layer over its outputs. False after a frame with none, or with them in it.
+		std::atomic<bool> s_layer_visible{false};
 #endif
 
 		template <typename T>
@@ -990,7 +1004,7 @@ namespace VKZeroFG
 			// depth of one waiting publication, every Publish held it to the GPU's completion of the
 			// previous frame's copy; two give it back the frame of lead it has without ZeroFG.
 			s.handoff->SetPublishDepth(2);
-			// ZeroGS: the HUD planes travel on a handoff of their own, which never holds the Source back (published without a
+			// RPCS3's overlay layer travels on a handoff of their own, which never holds the Source back (published without a
 			// consumer). Its failure only leaves ZeroGS without the HUD layer.
 			s.hud_handoff = std::make_unique<ZeroFGDeviceHandoff>(s.kit_device_a.get(), s.kit_device_b.get());
 			if (!s.hud_handoff->SelfTest())
@@ -1029,9 +1043,9 @@ namespace VKZeroFG
 			s.generation.reset();
 		}
 
-		// ---- ZeroGS: the HUD planes on device B ----------------------------------------------------------
+		// ---- RPCS3's overlay layer on device B ----------------------------------------------------------
 
-		/// Device B's copies of the HUD planes go, after device B drained (the presenter's disconnect order).
+		/// Device B's copies of the overlay layer go, after device B drained (the presenter's disconnect order).
 		void DestroyHudRing()
 		{
 			State& s = s_state;
@@ -1055,9 +1069,10 @@ namespace VKZeroFG
 				entry = {};
 			}
 			if (ring.copied.load() || ring.missed.load())
-				DEV_LOG("ZeroFGHud planes copied={} pending={} missed={} pairs={} with_planes={}", ring.copied.load(), ring.pending.load(),
-					ring.missed.load(), ring.wanted.load(), ring.used.load());
+				DEV_LOG("ZeroFGLayer copied={} pending={} missed={}", ring.copied.load(), ring.pending.load(),
+					ring.missed.load());
 			ring.next = 0;
+			ring.newest = -1;
 			for (std::atomic<u64>* counter : {&ring.copied, &ring.missed, &ring.used, &ring.pending, &ring.wanted})
 				counter->store(0);
 		}
@@ -1072,12 +1087,11 @@ namespace VKZeroFG
 			entry.source_lifetime.reset();
 		}
 
-		/// Every time the presenter looks for a frame (its ingress callback, device B's presenter thread): the newest HUD planes the
-		/// HUD handoff holds, finished on A (they are published before their frame, on the same queue, so they are ready by the time
-		/// the frame is), are copied into the next entry of the ring under their own source id, with the handoff's cross-device
-		/// protocol (wait on its semaphore, take the image from the external queue family, give it back, signal its release, tell
-		/// the lease). The handoff only ever gives the newest: planes it replaced before this ran are gone, and the pairs with their
-		/// Real go without the layer.
+		/// Every time the presenter looks for a frame (its ingress callback, device B's presenter thread): the newest overlay layer
+		/// the HUD handoff holds, finished on A (published before its frame, on the same queue, so ready by the time the frame is),
+		/// is copied into the next entry of the ring under its own source id, with the handoff's cross-device protocol (wait on its
+		/// semaphore, take the image from the external queue family, give it back, signal its release, tell the lease). The handoff
+		/// only ever gives the newest: a layer it replaced before this ran is gone, and the Post goes on with the one before.
 		void HudPoll()
 		{
 			State& s = s_state;
@@ -1199,7 +1213,7 @@ namespace VKZeroFG
 			}
 			if (result != VK_SUCCESS)
 			{
-				ERROR_LOG("ZeroFGHud planes copy submit failed ({})", static_cast<int>(result));
+				ERROR_LOG("ZeroFGLayer copy submit failed ({})", static_cast<int>(result));
 				return;
 			}
 			// Submitted: the lease is the handoff's to release once the copy is done; the slot stays alive until then.
@@ -1209,50 +1223,32 @@ namespace VKZeroFG
 			entry.source_id = source_id;
 			entry.inflight = true;
 			entry.written = true;  // the image holds these planes for every later submission on this queue (the copy's last barrier)
+			ring.newest = static_cast<s32>(ring.next);
 			ring.next = (ring.next + 1) % HudRing::COUNT;
 			if ((ring.copied.fetch_add(1) + 1) % 600 == 0)
-				DEV_LOG("ZeroFGHud planes copied={} pending={} missed={} pairs={} with_planes={}", ring.copied.load(), ring.pending.load(),
-					ring.missed.load(), ring.wanted.load(), ring.used.load());
+				DEV_LOG("ZeroFGLayer copied={} pending={} missed={}", ring.copied.load(), ring.pending.load(),
+					ring.missed.load());
 			if (!released)
-				WARNING_LOG("ZeroFGHud: the HUD handoff did not take the copy's release; it stops");
+				WARNING_LOG("ZeroFGLayer: the layer handoff did not take the copy's release; it stops");
 		}
 
-		/// The planes of the Real [source_id], when the ring holds a copy of them at [extent] (P above W). The copy need not be
-		/// done: it went to the generation's own queue before the generation that reads them (whose first barrier waits for all
-		/// earlier work there), and its last barrier made what it wrote visible to everything after it. Presenter threads, while
-		/// recording that generation.
-		bool FindHudPlanes(u64 source_id, VkExtent2D extent, zerofg::Interpolator::HudPlanes& planes)
+		/// The newest overlay layer the ring holds (P above W), for the Post to lay over an output; null while the newest frame
+		/// came without one. The copy need not be done: it went to the Post's own queue before the Post that reads it, and its
+		/// last barrier made what it wrote visible to everything after it; an entry is copied into again only HudRing::COUNT layers
+		/// later, on the same queue, behind every Post submitted before (its first barrier waits for their reads). Presenter threads.
+		VkImageView NewestLayer()
 		{
 			State& s = s_state;
-			if (!s.hud_ring || !source_id)
-				return false;
+			if (!s.hud_ring || !s_layer_visible.load(std::memory_order_acquire))
+				return VK_NULL_HANDLE;
 			HudRing& ring = *s.hud_ring;
-			const VulkanDevice* const device = s.kit_device_b.get();
 			std::unique_lock lock(ring.mutex);
-			for (HudRing::Entry& entry : ring.entries)
-			{
-				if (entry.source_id != source_id)
-					continue;
-				RetireHudEntryLocked(device, entry);
-				if (!entry.written || entry.image.extent.width != extent.width ||
-					entry.image.extent.height != 2 * extent.height)
-					return false;
-				zerofg::Image plane = {};
-				plane.image = entry.image.image;
-				plane.view = entry.image.view;
-				plane.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-				plane.format = FRAME_FORMAT;
-				plane.width = entry.image.extent.width;
-				plane.height = entry.image.extent.height;
-				plane.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-				plane.creation_facts_known = true;
-				planes.p = plane;
-				planes.p.active_rect = {0, 0, extent.width, extent.height};
-				planes.w = plane;
-				planes.w.active_rect = {0, extent.height, extent.width, extent.height};
-				return true;
-			}
-			return false;
+			if (ring.newest < 0)
+				return VK_NULL_HANDLE;
+			const HudRing::Entry& entry = ring.entries[static_cast<u32>(ring.newest)];
+			if (!entry.written || entry.image.view == VK_NULL_HANDLE || entry.image.extent.height < 2)
+				return VK_NULL_HANDLE;
+			return entry.image.view;
 		}
 
 		/// The command contexts, each with its own completion timeline and sync file. The Synthetic
@@ -1469,25 +1465,12 @@ namespace VKZeroFG
 			output.usage = context.output_usage;
 			output.creation_facts_known = true;
 			output.active_rect = {0, 0, request.extent.width, request.extent.height};
-			// ZeroGS: with both Reals' HUD planes on device B, the engine runs with its HUD layer (copies done: their fences).
-			zerofg::Interpolator::HudPlanes hud_previous, hud_current;
-			const bool hud = FindHudPlanes(request.previous_source_id, request.extent, hud_previous) &&
-							 FindHudPlanes(request.current_source_id, request.extent, hud_current);
-			if (s.hud_ring)
-			{
-				HudRing& ring = *s.hud_ring;
-				if (hud)
-					++ring.used;
-				if ((ring.wanted.fetch_add(1) + 1) % 600 == 0)
-					DEV_LOG("ZeroFGHud pairs={} with_planes={} planes copied={} pending={} missed={}", ring.wanted.load(), ring.used.load(),
-						ring.copied.load(), ring.pending.load(), ring.missed.load());
-			}
+			// RPCS3's overlays never enter the pair: the HUD handoff carries them as a layer for the Post, not as ZeroGS's planes.
 			const zerofg::Image real_previous = wrap_real(request.previous_image, request.previous_view, request.previous_layout,
 				request.previous_source_id);
 			const zerofg::Image real_current = wrap_real(request.current_image, request.current_view, request.current_layout,
 				request.current_source_id);
-			const zerofg::Status status = hud ?
-				s.engine->Interpolate(command.buffer, selected, real_previous, real_current, request.phase, output, hud_previous, hud_current) :
+			const zerofg::Status status =
 				s.engine->Interpolate(command.buffer, selected, real_previous, real_current, request.phase, output);
 			if (status != zerofg::Status::kSuccess)
 			{
@@ -1748,6 +1731,10 @@ namespace VKZeroFG
 				if (job.pool != VK_NULL_HANDLE)
 					f.vkDestroyCommandPool(d, job.pool, nullptr);
 			}
+			if (context.layer_pipeline != VK_NULL_HANDLE)
+				p.DestroyPipeline(d, context.layer_pipeline, nullptr);
+			if (context.layer_fragment != VK_NULL_HANDLE)
+				p.DestroyShaderModule(d, context.layer_fragment, nullptr);
 			if (context.pipeline != VK_NULL_HANDLE)
 				p.DestroyPipeline(d, context.pipeline, nullptr);
 			if (context.pipeline_layout != VK_NULL_HANDLE)
@@ -1841,9 +1828,10 @@ namespace VKZeroFG
 			sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 			sampler_info.maxLod = 0.0f;
 
-			const VkDescriptorPoolSize pool_size = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, PostContext::COUNT};
+			// Two sets per job: the frame, and the overlay layer.
+			const VkDescriptorPoolSize pool_size = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * PostContext::COUNT};
 			VkDescriptorPoolCreateInfo pool_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-			pool_info.maxSets = PostContext::COUNT;
+			pool_info.maxSets = 2 * PostContext::COUNT;
 			pool_info.poolSizeCount = 1;
 			pool_info.pPoolSizes = &pool_size;
 
@@ -1917,6 +1905,28 @@ namespace VKZeroFG
 				pipeline_info.renderPass = context.render_pass;
 				ok = p.CreateGraphicsPipelines(d, VK_NULL_HANDLE, 1, &pipeline_info, nullptr, &context.pipeline) ==
 					 VK_SUCCESS;
+				if (ok)
+				{
+					// RPCS3's overlay layer: the same triangle, over the whole output, blended premultiplied
+					// (post_layer.frag gives P and its coverage). Optional: without it the frame goes alone.
+					VkShaderModuleCreateInfo layer_info = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+					layer_info.codeSize = sizeof(zerofg_post_layer_frag_spv);
+					layer_info.pCode = zerofg_post_layer_frag_spv;
+					if (p.CreateShaderModule(d, &layer_info, nullptr, &context.layer_fragment) == VK_SUCCESS)
+					{
+						stages[1].module = context.layer_fragment;
+						blend_attachment.blendEnable = VK_TRUE;
+						blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+						blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+						blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
+						blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+						blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+						blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
+						if (p.CreateGraphicsPipelines(d, VK_NULL_HANDLE, 1, &pipeline_info, nullptr, &context.layer_pipeline) !=
+							VK_SUCCESS)
+							context.layer_pipeline = VK_NULL_HANDLE;
+					}
+				}
 			}
 			for (PostContext::Job& job : context.jobs)
 			{
@@ -1941,7 +1951,8 @@ namespace VKZeroFG
 						 f.vkAllocateCommandBuffers(d, &allocate, &job.buffer) == VK_SUCCESS) &&
 					 f.vkCreateSemaphore(d, &semaphore_info, nullptr, &job.acquire_semaphore) == VK_SUCCESS &&
 					 job.completion.CreateTimeline(device, "ZeroFG Post completion") == VK_SUCCESS &&
-					 p.AllocateDescriptorSets(d, &set_info, &job.set) == VK_SUCCESS;
+					 p.AllocateDescriptorSets(d, &set_info, &job.set) == VK_SUCCESS &&
+					 p.AllocateDescriptorSets(d, &set_info, &job.layer_set) == VK_SUCCESS;
 			}
 			if (!ok)
 			{
@@ -1949,14 +1960,15 @@ namespace VKZeroFG
 				DestroyPost();
 				return false;
 			}
-			const bool overlay = PrepareOverlay(context);
+			PrepareOverlay(context);
 			INFO_LOG("ZeroFG: Post built for format {}{}", static_cast<int>(final_format),
-				overlay ? ", with the overlay" : ", the frame alone (RPCS3 overlays come in the frame)");
+				context.layer_pipeline != VK_NULL_HANDLE ? ", with RPCS3's overlay layer" :
+														   ", the frame alone (no overlay layer: RPCS3's overlays only come in finished screens)");
 			return true;
 		}
 
-		/// ARMSX2 drew ImGui's overlay in the Post here. RPCS3 draws its overlays into the frame
-		/// ZeroFG captures, so the Post has no overlay pipeline and draws the frame alone.
+		/// ARMSX2 drew ImGui's overlay in the Post here. RPCS3 has no ImGui: its overlays come as a
+		/// layer (PreparePost's layer pipeline), or in the finished screen ZeroFG takes on the other paths.
 		bool PrepareOverlay(PostContext&) { return false; }
 
 		/// Destroys the retired overlay images whose last users have completed. [current] is the job
@@ -2275,6 +2287,21 @@ namespace VKZeroFG
 			write.pImageInfo = &image_info;
 			p.UpdateDescriptorSets(d, 1, &write, 0, nullptr);
 
+			// RPCS3's overlays, the newest layer, the same over Real and Synthetic outputs. Its pixels are the
+			// output's (the layer is the connection's size), so nearest samples them as they are.
+			const VkImageView layer = context.layer_pipeline != VK_NULL_HANDLE ? NewestLayer() : VK_NULL_HANDLE;
+			if (layer != VK_NULL_HANDLE)
+			{
+				VkDescriptorImageInfo layer_image = {};
+				layer_image.sampler = context.nearest;
+				layer_image.imageView = layer;
+				layer_image.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+				VkWriteDescriptorSet layer_write = write;
+				layer_write.dstSet = job.layer_set;
+				layer_write.pImageInfo = &layer_image;
+				p.UpdateDescriptorSets(d, 1, &layer_write, 0, nullptr);
+			}
+
 			VkResult vk_result = f.vkResetCommandPool(d, job.pool, 0);
 			if (vk_result != VK_SUCCESS)
 				return fail_vk(Stage::kCommandReset, vk_result);
@@ -2368,6 +2395,17 @@ namespace VKZeroFG
 			p.CmdBindDescriptorSets(
 				job.buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, context.pipeline_layout, 0, 1, &job.set, 0, nullptr);
 			p.CmdDraw(job.buffer, 3, 1, 0, 0);
+			if (layer != VK_NULL_HANDLE)
+			{
+				const VkViewport whole = {0.0f, 0.0f, out_w, out_h, 0.0f, 1.0f};
+				const VkRect2D whole_scissor = {{0, 0}, request.final_output_extent};
+				p.CmdSetViewport(job.buffer, 0, 1, &whole);
+				p.CmdSetScissor(job.buffer, 0, 1, &whole_scissor);
+				p.CmdBindPipeline(job.buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, context.layer_pipeline);
+				p.CmdBindDescriptorSets(
+					job.buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, context.pipeline_layout, 0, 1, &job.layer_set, 0, nullptr);
+				p.CmdDraw(job.buffer, 3, 1, 0, 0);
+			}
 			if (overlay)
 				DrawOverlay(context, job, job.buffer, *overlay, overlay_index_offset, request.final_output_extent);
 			p.CmdEndRenderPass(job.buffer);
@@ -2529,7 +2567,7 @@ namespace VKZeroFG
 						publication.external_failure = true;
 						return true;
 					}
-					// ZeroGS: the HUD planes come first (published before their frame), whatever this call finds of frames.
+					// The overlay layer comes first (published before its frame), whatever this call finds of frames.
 					HudPoll();
 					const bool acquired = state.handoff->Acquire(publication);
 					// Acquire marks a reporting window under the pool lock; log it outside.
@@ -2990,9 +3028,11 @@ namespace VKZeroFG
 		const VulkanDevice* const device = s.kit_device_a.get();
 		const VulkanDevice::Functions& f = device->functions();
 		// The first frame of the connection sets the generation size; later frames are scaled into it
-		// wherever the game draws them (GoW2 widens its picture when progressive scan goes on).
+		// wherever the game draws them (GoW2 widens its picture when progressive scan goes on). Never
+		// past the picture's own pixels: generating above the game's size costs and adds nothing.
 		if (!s.generation_extent.width)
-			s.generation_extent = GenerationExtent(draw_w, draw_h);
+			s.generation_extent = GenerationExtent(std::min(draw_w, static_cast<float>(content_w)),
+				std::min(draw_h, static_cast<float>(content_h)));
 		const VkExtent2D extent = s.generation_extent;
 		if (draw_w != s.draw_w || draw_h != s.draw_h)
 		{
@@ -3055,16 +3095,20 @@ namespace VKZeroFG
 			nullptr, 0, nullptr, 1, &to_read);
 		source.layout = FRAME_LAYOUT;
 
-		// ZeroGS: the frame's HUD planes the same way, P above W, for the HUD handoff.
+		// RPCS3's overlays, P above W, into the layer image the HUD handoff takes. Only at the connection's
+		// size: the ring on device B keeps its images for the whole connection (Posts in flight sample them).
 		source.hud_captured = false;
-		if (frame.hud_p != VK_NULL_HANDLE && frame.hud_w != VK_NULL_HANDLE)
+		if (frame.overlay != VK_NULL_HANDLE)
 			++source.hud_given;
-		const s32 hud_w = frame.hud_src[2] - frame.hud_src[0];
-		const s32 hud_h = frame.hud_src[3] - frame.hud_src[1];
-		if (s.hud_handoff && !s.hud_handoff->failed() && frame.hud_p != VK_NULL_HANDLE && frame.hud_w != VK_NULL_HANDLE && hud_w > 0 &&
-			hud_h > 0)
+		VkExtent2D output_extent;
 		{
-			const VkExtent2D hud_extent = {extent.width, extent.height * 2};
+			std::unique_lock paint_lock(s_paint_mutex);
+			output_extent = s_output_extent;
+		}
+		if (s.hud_handoff && !s.hud_handoff->failed() && frame.overlay != VK_NULL_HANDLE &&
+			frame.overlay_width == output_extent.width && frame.overlay_height == output_extent.height)
+		{
+			const VkExtent2D hud_extent = {frame.overlay_width, frame.overlay_height * 2};
 			bool ready = source.hud_staging.extent.width == hud_extent.width && source.hud_staging.extent.height == hud_extent.height;
 			if (!ready)
 			{
@@ -3085,20 +3129,14 @@ namespace VKZeroFG
 				hud_write.image = source.hud_staging.image;
 				f.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
 					VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &hud_write);
-				const bool hud_same_size = extent.width == static_cast<u32>(hud_w) && extent.height == static_cast<u32>(hud_h);
+				// The same size, so a format conversion only (the handoff's 10-bit format).
 				VkImageBlit hud_blit = {};
 				hud_blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
 				hud_blit.dstSubresource = hud_blit.srcSubresource;
-				hud_blit.srcOffsets[0] = {frame.hud_src[0], frame.hud_src[1], 0};
-				hud_blit.srcOffsets[1] = {frame.hud_src[2], frame.hud_src[3], 1};
-				for (u32 plane = 0; plane < 2; plane++)
-				{
-					const s32 top = static_cast<s32>(plane * extent.height);
-					hud_blit.dstOffsets[0] = {0, top, 0};
-					hud_blit.dstOffsets[1] = {static_cast<s32>(extent.width), top + static_cast<s32>(extent.height), 1};
-					f.vkCmdBlitImage(cmd, plane ? frame.hud_w : frame.hud_p, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, source.hud_staging.image,
-						VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &hud_blit, hud_same_size ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);
-				}
+				hud_blit.srcOffsets[1] = {static_cast<s32>(hud_extent.width), static_cast<s32>(hud_extent.height), 1};
+				hud_blit.dstOffsets[1] = hud_blit.srcOffsets[1];
+				f.vkCmdBlitImage(cmd, frame.overlay, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, source.hud_staging.image,
+					VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &hud_blit, VK_FILTER_NEAREST);
 				VkImageMemoryBarrier hud_read = to_read;
 				hud_read.image = source.hud_staging.image;
 				f.vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0,
@@ -3155,10 +3193,11 @@ namespace VKZeroFG
 		const u32 mailbox = source.mailbox;
 		source.mailbox = (source.mailbox + 1) % ZeroFGIndependentPresenter::kMailboxCount;
 
-		// ZeroGS: the frame's HUD planes go first, on their own handoff and the same queue, so that their copy is done by the time
-		// the frame's is and device B finds them as it takes the frame (HudPoll). Without a consumer they never hold the Source back
-		// (no free slot: this frame goes without them).
+		// The frame's overlay layer goes first, on its own handoff and the same queue, so that its copy is done by the time the
+		// frame's is and device B finds it as it takes the frame (HudPoll). Without a consumer it never holds the Source back (no
+		// free slot: the Post keeps the layer before, which is still on while this frame has overlays).
 		const bool hud = source.hud_captured && s.hud_handoff && !s.hud_handoff->failed();
+		s_layer_visible.store(hud, std::memory_order_release);
 		bool hud_prepared = false;
 		if (hud)
 		{
@@ -3224,7 +3263,7 @@ namespace VKZeroFG
 				++source.hud_published;
 		}
 		if (++source.hud_frames % 600 == 0 && s.hud_handoff)
-			DEV_LOG("ZeroFGHud A frames={} with_planes={} published={} no_slot={}", source.hud_frames, source.hud_given,
+			DEV_LOG("ZeroFGLayer A frames={} with_overlays={} published={} no_slot={}", source.hud_frames, source.hud_given,
 				source.hud_published, source.hud_no_slot);
 		s.handoff->Publish(mailbox, metadata, s.presenter.get());
 		s.presenter->ClaimPublicationAuthority();

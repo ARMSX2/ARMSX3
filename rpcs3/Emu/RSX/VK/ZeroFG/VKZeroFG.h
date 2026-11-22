@@ -22,10 +22,12 @@
 /// Independent Presenter (built through the ZeroFG repository's host/portable kit) generates one
 /// frame between every two, runs the Post (the frame into the present's draw rectangle) and
 /// presents both, Real and generated, on the window: once it takes the window, the renderer drops
-/// its swap chain and presents nothing (Main Surface Authority). The frame ZeroFG takes is the
-/// composited one, the game with RPCS3's overlays already drawn on it, so the overlays reach every
-/// output. A failure gives the window back to the renderer. Switched off or to another engine in
-/// game, ZeroFG gives it back and takes it again.
+/// its swap chain and presents nothing (Main Surface Authority). On the plain output path the frame
+/// ZeroFG takes is the game's own image, at the game's size (never the upscaled screen), and RPCS3's
+/// overlays go apart on a layer the Post lays over every output, so they are never interpolated;
+/// the other output paths (calibration, FSR and the other upscalers, stereo) hand it the finished
+/// screen with the overlays on it. A failure gives the window back to the renderer. Switched off
+/// or to another engine in game, ZeroFG gives it back and takes it again.
 ///
 /// Every entry point is a no-op when ARMSX3_HAS_ZEROFG is undefined (the play flavour, and every
 /// desktop build), so call sites need no #ifdef of their own.
@@ -139,11 +141,14 @@ namespace VKZeroFG
 		bool linear = true;             ///< the present's filter: bilinear, else nearest
 		u32 output_width = 0;           ///< the size of the output the draw rectangle is in
 		u32 output_height = 0;
-		/// ZeroGS: the frame's HUD planes (P drawn over black, W over white; GSDevice::GetZeroFGPlane), in
-		/// TRANSFER_SRC_OPTIMAL, and the frame's visible area in them; null when the frame has none.
-		VkImage hud_p = VK_NULL_HANDLE;
-		VkImage hud_w = VK_NULL_HANDLE;
-		s32 hud_src[4] = {};
+		/// RPCS3's overlays of this present, when [image] is the game's own image: drawn over black (P,
+		/// the top half) and over white (W, the bottom half) of one image [overlay_width] wide and twice
+		/// [overlay_height] high (the output's size, one plane each), in TRANSFER_SRC_OPTIMAL. The Post
+		/// lays them over every output, Real and Synthetic: P + frame * (W - P). Null when the present
+		/// has none, or when [image] is the finished screen with them already on it.
+		VkImage overlay = VK_NULL_HANDLE;
+		u32 overlay_width = 0;
+		u32 overlay_height = 0;
 	};
 
 	/// Records the copy of [frame] into the image ZeroFG takes it from, at the size frames are generated

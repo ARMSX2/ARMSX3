@@ -124,8 +124,15 @@ void VKGSRender::zerofg_update_authority()
 			swapchain_unavailable = true;
 		}
 	}
-	else if (!wsi->is_offscreen() && wanted && VKZeroFG::CanConnect())
+	else if (!wsi->is_offscreen() && wanted && VKZeroFG::CanConnect() &&
+		(m_swapchain->supports_automatic_wm_reports() ||
+			(m_swapchain_dims.width == m_frame->client_width() + 0u &&
+				m_swapchain_dims.height == m_frame->client_height() + 0u)))
 	{
+		// Only on a swapchain that matches the window. Right after a rotation the window has its new
+		// size but the swapchain still has the old one (the size check in flip, below this call,
+		// rebuilds it): connected then, the presenter took the old size, the game's next frames did
+		// not fit it (invalid_geometry), and it gave the window back, one of its three fail-opens.
 		VKZeroFG::OutputSurface output;
 		output.window = std::get<ANativeWindow*>(m_frame->handle());
 		output.surface = wsi->get_surface();
@@ -2395,6 +2402,22 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 		}
 	}
 
+	// ZeroFG takes the game's own image, at the game's size, on the plain output path: no calibration
+	// pass, no stereo or Cardboard, and a blit upscaler (bilinear or nearest), which its Post repeats
+	// when it scales the frame into the same area. Generating from the upscaled screen instead cost
+	// the ratio of the two sizes (a 1280x720 game on a 2560x1200 window: 3.3x the pixels) for no
+	// detail the game drew. RPCS3's overlays go apart then (zerofg_overlay_layer below). The other
+	// output paths keep handing it the finished screen. Pre-rotation does not matter here: the game's
+	// image and the layer are upright, and ZeroFG's presenter turns its own output.
+	const output_scaling_mode zerofg_scaling = g_cfg.video.output_scaling.get();
+	const bool zerofg_game_frame = image_to_flip && !cardboard_on && !avconfig.stereo_enabled &&
+		g_cfg.video.full_rgb_range_output.get() && rsx::fcmp(avconfig.gamma, 1.f) &&
+		(zerofg_scaling == output_scaling_mode::bilinear || zerofg_scaling == output_scaling_mode::nearest);
+	// ... and while its presenter owns the window, this renderer's offscreen image reaches no screen:
+	// nothing is cleared, scaled or drawn into it then (a frame dump still gets it whole).
+	const bool zerofg_screen_unused = zerofg_game_frame && m_swapchain->is_offscreen() && VKZeroFG::OwnsOutput() &&
+		VKZeroFG::WantsFrames() && !m_frame_dump.take_screen;
+
 	// Coverage, not just inset.
 	//
 	// target_layout is now UNDEFINED on the WSI path, so any pixel the blit does not write is
@@ -2412,9 +2435,9 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 	// window where m_swapchain_dims lags the actual image size (Android rotation, a WSI
 	// currentExtent override). Exact-fit and stretch_to_display_area cases are unaffected, so the
 	// extra clear costs nothing in the normal path.
-	if (!image_to_flip || cardboard_on || aspect_ratio.x1 || aspect_ratio.y1 ||
+	if (!zerofg_screen_unused && (!image_to_flip || cardboard_on || aspect_ratio.x1 || aspect_ratio.y1 ||
 		u32(aspect_ratio.x2) < m_swapchain->get_width() ||
-		u32(aspect_ratio.y2) < m_swapchain->get_height())
+		u32(aspect_ratio.y2) < m_swapchain->get_height()))
 	{
 		// Clear the window background to black
 		VkClearColorValue clear_black {};
@@ -2552,7 +2575,7 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 
 		direct_fbo->release();
 	}
-	else if (image_to_flip)
+	else if (image_to_flip && !zerofg_screen_unused)
 	{
 		const bool use_full_rgb_range_output = g_cfg.video.full_rgb_range_output.get();
 
@@ -2638,42 +2661,48 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 
 	if (g_cfg.video.debug_overlay || has_overlay)
 	{
-		if (target_layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+		// The unused screen gets no overlays: they go on ZeroFG's layer, which steps them then.
+		if (!zerofg_screen_unused)
 		{
-			// Change the image layout whilst setting up a dependency on waiting for the blit op to finish before we start writing
-			VkImageMemoryBarrier barrier = {};
-			barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-			barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-			barrier.oldLayout = target_layout;
-			barrier.image = target_image;
-			barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-			barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
-			barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-			barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-			barrier.subresourceRange = subresource_range;
-			vkCmdPipelineBarrier(*m_current_command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_DEPENDENCY_BY_REGION_BIT, 0, nullptr, 0, nullptr, 1, &barrier);
+			if (target_layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+			{
+				// Change the image layout whilst setting up a dependency on waiting for the blit op to finish before we start writing
+				VkImageMemoryBarrier barrier = {};
+				barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+				barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+				barrier.oldLayout = target_layout;
+				barrier.image = target_image;
+				barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+				barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+				barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+				barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+				barrier.subresourceRange = subresource_range;
+				vkCmdPipelineBarrier(*m_current_command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_DEPENDENCY_BY_REGION_BIT, 0, nullptr, 0, nullptr, 1, &barrier);
 
-			target_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-		}
+				target_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+			}
 
-		if (!direct_fbo)
-		{
-			const auto key = vk::get_renderpass_key(m_swapchain->get_surface_format());
-			single_target_pass = vk::get_renderpass(*m_device, key);
-			ensure(single_target_pass != VK_NULL_HANDLE);
+			if (!direct_fbo)
+			{
+				const auto key = vk::get_renderpass_key(m_swapchain->get_surface_format());
+				single_target_pass = vk::get_renderpass(*m_device, key);
+				ensure(single_target_pass != VK_NULL_HANDLE);
 
-			direct_fbo = vk::get_framebuffer(*m_device, m_swapchain_dims.width, m_swapchain_dims.height, VK_FALSE, single_target_pass, m_swapchain->get_surface_format(), target_image);
-		}
+				direct_fbo = vk::get_framebuffer(*m_device, m_swapchain_dims.width, m_swapchain_dims.height, VK_FALSE, single_target_pass, m_swapchain->get_surface_format(), target_image);
+			}
 
-		direct_fbo->add_ref();
+			direct_fbo->add_ref();
 
-		if (cardboard_on)
-		{
-			render_overlays_cardboard(direct_fbo);
-		}
-		else
-		{
-			render_overlays(direct_fbo, areau(aspect_ratio));
+			if (cardboard_on)
+			{
+				render_overlays_cardboard(direct_fbo);
+			}
+			else
+			{
+				render_overlays(direct_fbo, areau(aspect_ratio));
+			}
+
+			direct_fbo->release();
 		}
 
 		if (g_cfg.video.debug_overlay && res())
@@ -2728,8 +2757,6 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 				program_cache_ellided, program_cache_lookups, program_cache_ellision_rate)
 			);
 		}
-
-		direct_fbo->release();
 	}
 
 	// Hand the finished frame to frame generation.
@@ -2760,10 +2787,11 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 	// less by the ratio of the two (720p on a 1080p screen: 2.25x fewer pixels to generate). Every
 	// other output mode renders through passes a generated frame would need a run of its own of,
 	// so those keep capturing the finished screen.
-	// ZeroFG takes this image: the composited screen -- the game with RPCS3's overlays (performance
-	// overlay, dialogs, trophies) drawn on it -- so the overlays reach every output frame, generated ones
-	// included, a little soft. Whole image in, whole image out: the Post puts it back where this present
-	// drew it.
+	// ZeroFG takes the game's own image on the same plain path (zerofg_game_frame), with RPCS3's
+	// overlays (performance overlay, dialogs, trophies) on a layer of their own its Post lays over
+	// every output, Real and generated, sharp and never interpolated. On the other paths it takes this
+	// image, the finished screen with the overlays on it. Either way the Post puts the frame back where
+	// this present drew it.
 	//
 	// NOT only once it owns the window. ZeroFG counts the game's frames (NoteSourceFrame) and qualifies
 	// their cadence while this renderer still presents on a real swapchain; only then does it accept
@@ -2772,8 +2800,95 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 	{
 		VKZeroFG::NoteSourceFrame();
 
+		if (VKZeroFG::WantsFrames() && zerofg_game_frame)
+		{
+			VKZeroFG::GameFrame zerofg_frame;
+
+			if (has_overlay)
+			{
+				// The overlays over black (P, top half) and over white (W, bottom half): P is their colour
+				// weighted by their coverage and W - P what they leave of the picture under them, all the
+				// Post needs (P + frame * (W - P)) through ZeroFG's 10-bit handoff, whose alpha has two
+				// bits. Stepped here only when the screen above did not draw them.
+				const u32 layer_w = m_swapchain_dims.width;
+				const u32 layer_h = m_swapchain_dims.height;
+				constexpr VkFormat layer_format = VK_FORMAT_R8G8B8A8_UNORM;
+
+				if (m_zerofg_overlay_layer && (m_zerofg_overlay_layer->width() != layer_w || m_zerofg_overlay_layer->height() != layer_h * 2))
+				{
+					vk::remove_framebuffers_with_image(m_zerofg_overlay_layer.get());
+					vk::get_resource_manager()->dispose(m_zerofg_overlay_layer);
+				}
+
+				if (!m_zerofg_overlay_layer)
+				{
+					m_zerofg_overlay_layer = std::make_unique<vk::image>(*m_device, m_device->get_memory_mapping().device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+						VK_IMAGE_TYPE_2D, layer_format, layer_w, layer_h * 2, 1, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+						VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+						0, VMM_ALLOCATION_POOL_SYSTEM);
+				}
+
+				vk::image* const layer = m_zerofg_overlay_layer.get();
+
+				// All of it black, then the bottom half white inside the render pass the overlays draw in.
+				layer->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+				const VkClearColorValue black {};
+				const VkImageSubresourceRange whole = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+				vkCmdClearColorImage(*m_current_command_buffer, layer->value, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &whole);
+				layer->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+				const VkRenderPass layer_pass = vk::get_renderpass(*m_device, vk::get_renderpass_key(layer_format));
+				ensure(layer_pass != VK_NULL_HANDLE);
+				vk::framebuffer_holder* layer_fbo = vk::get_framebuffer(*m_device, layer_w, layer_h * 2, VK_FALSE, layer_pass, { layer });
+				layer_fbo->add_ref();
+
+				vk::get_overlay_pass<vk::attachment_clear_pass>()->run(*m_current_command_buffer, layer_fbo,
+					VkRect2D{ { 0, s32(layer_h) }, { layer_w, layer_h } }, 0xF0, color4f(1.f, 1.f, 1.f, 1.f), layer_pass);
+
+				{
+					auto ui_renderer = vk::get_overlay_pass<vk::ui_overlay_renderer>();
+					std::lock_guard lock(*overlay_manager);
+
+					const areau game_area = areau(aspect_ratio);
+					for (const auto& view : overlay_manager->get_views())
+					{
+						for (u32 plane = 0; plane < 2; ++plane)
+						{
+							const u32 top = plane * layer_h;
+							const areau area = view->use_window_space ? areau{ 0, top, layer_w, top + layer_h }
+								: areau{ game_area.x1, game_area.y1 + top, game_area.x2, game_area.y2 + top };
+							ui_renderer->run(*m_current_command_buffer, area, layer_fbo, layer_pass, m_texture_upload_buffer_ring_info,
+								*view.get(), plane == 1 && zerofg_screen_unused);
+						}
+					}
+				}
+
+				layer_fbo->release();
+				layer->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+				zerofg_frame.overlay = layer->value;
+				zerofg_frame.overlay_width = layer_w;
+				zerofg_frame.overlay_height = layer_h;
+			}
+
+			// The game's picture, the part the blit above takes, and where it draws it.
+			image_to_flip->push_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+			zerofg_frame.image = image_to_flip->value;
+			zerofg_frame.src[2] = static_cast<s32>(buffer_width);
+			zerofg_frame.src[3] = static_cast<s32>(buffer_height);
+			zerofg_frame.draw[0] = static_cast<float>(aspect_ratio.x1);
+			zerofg_frame.draw[1] = static_cast<float>(aspect_ratio.y1);
+			zerofg_frame.draw[2] = static_cast<float>(aspect_ratio.x2);
+			zerofg_frame.draw[3] = static_cast<float>(aspect_ratio.y2);
+			zerofg_frame.linear = zerofg_scaling != output_scaling_mode::nearest;
+			zerofg_frame.output_width = m_swapchain_dims.width;
+			zerofg_frame.output_height = m_swapchain_dims.height;
+			VKZeroFG::CaptureGameFrame(*m_current_command_buffer, zerofg_frame);
+			image_to_flip->pop_layout(*m_current_command_buffer);
+			m_zerofg_captured = true;
+		}
 		// A real swapchain's image can be read only if it was made with TRANSFER_SRC (swapchain.cpp).
-		if (VKZeroFG::WantsFrames() && (m_swapchain->is_offscreen() || vk::g_swapchain_transfer_src))
+		else if (VKZeroFG::WantsFrames() && (m_swapchain->is_offscreen() || vk::g_swapchain_transfer_src))
 		{
 			vk::change_image_layout(*m_current_command_buffer, target_image, target_layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, subresource_range);
 			target_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;

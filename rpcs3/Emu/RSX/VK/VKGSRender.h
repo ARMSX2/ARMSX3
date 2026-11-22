@@ -373,6 +373,11 @@ private:
 
 	std::unique_ptr<vk::image> m_overlay_recording_img;
 
+	// ZeroFG's overlay layer: while it takes the game's own image, RPCS3's overlays are drawn here
+	// instead, over black (top half) and over white (bottom half), window-sized planes, for device B
+	// to lay over every output (VKZeroFG::GameFrame::overlay).
+	std::unique_ptr<vk::image> m_zerofg_overlay_layer;
+
 	// Pre-rotation (swapchain_WSI::init): with a turned swapchain, flip() assembles the frame in
 	// this upright image, exactly as it would in an unturned swapchain image, and turns it into the
 	// swapchain image as its last pass. Window-sized; null while the swapchain is not turned.

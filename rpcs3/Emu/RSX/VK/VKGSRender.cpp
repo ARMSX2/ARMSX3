@@ -1136,6 +1136,11 @@ VKGSRender::~VKGSRender()
 	m_frame_context_storage.clear();
 
 	m_overlay_recording_img.reset();
+	if (m_zerofg_overlay_layer)
+	{
+		vk::remove_framebuffers_with_image(m_zerofg_overlay_layer.get());
+		m_zerofg_overlay_layer.reset();
+	}
 	if (m_prerotation_frame)
 	{
 		vk::remove_framebuffers_with_image(m_prerotation_frame->value);
