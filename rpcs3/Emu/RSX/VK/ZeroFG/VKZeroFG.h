@@ -155,6 +155,11 @@ namespace VKZeroFG
 		/// sharpness (Qualcomm's edge_sharpness, 1.0 their default).
 		u32 upscaler = 0;
 		float upscaler_sharpness = 1.0f;
+		/// The game's own picture size on an output path that hands ZeroFG the game's image, also on the
+		/// presents that have none (a boot or compile screen comes as the finished screen): the size a
+		/// connection generates at is never past it, whichever frame comes first. 0 elsewhere.
+		u32 game_width = 0;
+		u32 game_height = 0;
 	};
 
 	/// Records the copy of [frame] into the image ZeroFG takes it from, at the size frames are generated

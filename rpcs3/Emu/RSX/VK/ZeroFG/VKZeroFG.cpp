@@ -84,7 +84,6 @@ namespace Vulkan
 #include "xenia/ui/vulkan/zerofg_independent_presenter.h"
 
 #include "Emu/RSX/VK/ZeroFG/VKZeroFGPostShaders.h"
-#include "Emu/RSX/VK/ZeroFG/VKZeroFGSgsrShaders.h"
 
 // The Post's overlay pipeline is ImGui's vertex layout; RPCS3 has no ImGui and never hands it
 // draw data, so the Post draws the frame alone. The layout is kept for the pipeline it builds.
@@ -113,7 +112,12 @@ using ImDrawIdx = u16;
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <string>
 #include <vector>
+
+// The renderer's own SGSR shaders, compiled for device B by its own compiler (PrepareScale).
+#include "Emu/RSX/Program/GLSLTypes.h"
+#include "Emu/RSX/Program/SPIRVCommon.h"
 
 namespace VKZeroFG
 {
@@ -352,7 +356,7 @@ namespace VKZeroFG
 			// (it failed to build) the Post draws the frame alone.
 			VkShaderModule layer_fragment = VK_NULL_HANDLE;
 			VkPipeline layer_pipeline = VK_NULL_HANDLE;
-			// The renderer's upscalers, the same shaders (VKZeroFGSgsrShaders.h): index 0 SGSR, 1 SGSR
+			// The renderer's upscalers, compiled from its own sources (PrepareScale): index 0 SGSR, 1 SGSR
 			// edge. Optional: a null pipeline scales with the sampler instead.
 			VkDescriptorSetLayout scale_set_layout = VK_NULL_HANDLE;
 			VkPipelineLayout scale_layout = VK_NULL_HANDLE;
@@ -1796,14 +1800,24 @@ namespace VKZeroFG
 				layout_info.pPushConstantRanges = &push;
 				ok = p.CreatePipelineLayout(d, &layout_info, nullptr, &context.scale_layout) == VK_SUCCESS;
 			}
-			const std::array<std::pair<const uint32_t*, size_t>, 2> code = {{
-				{zerofg_sgsr_shader_spv, sizeof(zerofg_sgsr_shader_spv)},
-				{zerofg_sgsr_shader_edge_spv, sizeof(zerofg_sgsr_shader_edge_spv)}}};
-			for (size_t i = 0; ok && i < code.size(); ++i)
+			// The very sources the renderer's SGSR passes compile (upscalers/sgsr/sgsr_pass.cpp), by the renderer's own
+			// compiler: a change to them reaches device B with no step of ours. Only their interface (the bindings, and
+			// the push constants ScaleConstants mirrors) is ours to follow.
+			std::array<std::string, 2> sources = {
+#include "Emu/RSX/Program/Upscalers/SGSR/sgsr_shader.glsl"
+				,
+#include "Emu/RSX/Program/Upscalers/SGSR/sgsr_shader_edge.glsl"
+			};
+			for (size_t i = 0; ok && i < sources.size(); ++i)
 			{
+				std::vector<u32> spirv;
+				ok = spirv::compile_glsl_to_spv(spirv, sources[i], ::glsl::program_domain::glsl_compute_program,
+					::glsl::glsl_rules::glsl_rules_vulkan);
+				if (!ok)
+					break;
 				VkShaderModuleCreateInfo module_info = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-				module_info.codeSize = code[i].second;
-				module_info.pCode = code[i].first;
+				module_info.codeSize = spirv.size() * sizeof(u32);
+				module_info.pCode = spirv.data();
 				ok = p.CreateShaderModule(d, &module_info, nullptr, &context.scale_modules[i]) == VK_SUCCESS;
 				if (!ok)
 					break;
@@ -3261,10 +3275,15 @@ namespace VKZeroFG
 		const VulkanDevice::Functions& f = device->functions();
 		// The first frame of the connection sets the generation size; later frames are scaled into it
 		// wherever the game draws them (GoW2 widens its picture when progressive scan goes on). Never
-		// past the picture's own pixels: generating above the game's size costs and adds nothing.
+		// past the picture's own pixels: generating above the game's size costs and adds nothing. The
+		// game's size when the renderer says it (GameFrame::game_width), so a connection whose first
+		// frame is a boot screen, which comes as the finished screen, does not generate at the window's.
 		if (!s.generation_extent.width)
-			s.generation_extent = GenerationExtent(std::min(draw_w, static_cast<float>(content_w)),
-				std::min(draw_h, static_cast<float>(content_h)));
+		{
+			const float picture_w = static_cast<float>(frame.game_width ? frame.game_width : static_cast<u32>(content_w));
+			const float picture_h = static_cast<float>(frame.game_height ? frame.game_height : static_cast<u32>(content_h));
+			s.generation_extent = GenerationExtent(std::min(draw_w, picture_w), std::min(draw_h, picture_h));
+		}
 		const VkExtent2D extent = s.generation_extent;
 		if (draw_w != s.draw_w || draw_h != s.draw_h)
 		{

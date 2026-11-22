@@ -2410,7 +2410,7 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 	// output paths keep handing it the finished screen. Pre-rotation does not matter here: the game's
 	// image and the layer are upright, and ZeroFG's presenter turns its own output.
 	const output_scaling_mode zerofg_scaling = g_cfg.video.output_scaling.get();
-	// SGSR too: the Post runs the same shaders (VKZeroFGSgsrShaders.h) on every output, Real and generated.
+	// SGSR too: the Post runs the same shaders, compiled from the same sources, on every output, Real and generated.
 	u32 zerofg_upscaler = 0;
 #ifdef __ANDROID__
 	if (zerofg_scaling == output_scaling_mode::sgsr)
@@ -2418,9 +2418,23 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 	else if (zerofg_scaling == output_scaling_mode::sgsr_edge)
 		zerofg_upscaler = 2;
 #endif
-	const bool zerofg_game_frame = image_to_flip && !cardboard_on && !avconfig.stereo_enabled &&
+	const bool zerofg_game_path = !cardboard_on && !avconfig.stereo_enabled &&
 		g_cfg.video.full_rgb_range_output.get() && rsx::fcmp(avconfig.gamma, 1.f) &&
 		(zerofg_scaling == output_scaling_mode::bilinear || zerofg_scaling == output_scaling_mode::nearest || zerofg_upscaler);
+	const bool zerofg_game_frame = image_to_flip && zerofg_game_path;
+	// The game's picture size on that path, also for a present without a game image (a boot screen,
+	// handed over finished): the output resolution at the resolution scale, which the game's image
+	// will have. ZeroFG never generates past it (GameFrame::game_width).
+	u32 zerofg_game_w = 0;
+	u32 zerofg_game_h = 0;
+	if (zerofg_game_path)
+	{
+		if (image_to_flip)
+			std::tie(zerofg_game_w, zerofg_game_h) = std::make_tuple(buffer_width, buffer_height);
+		else
+			std::tie(zerofg_game_w, zerofg_game_h) = rsx::apply_resolution_scale<true>(
+				RSX(m_ctx)->resolution_scaling_config, static_cast<u16>(buffer_width), static_cast<u16>(buffer_height));
+	}
 	// ... and while its presenter owns the window, this renderer's offscreen image reaches no screen:
 	// nothing is cleared, scaled or drawn into it then (a frame dump still gets it whole).
 	const bool zerofg_screen_unused = zerofg_game_frame && m_swapchain->is_offscreen() && VKZeroFG::OwnsOutput() &&
@@ -2892,6 +2906,8 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 			zerofg_frame.upscaler = zerofg_upscaler;
 			// As sgsr_pass.cpp: Qualcomm's edge_sharpness is 0..2, one percent of the slider worth 0.01.
 			zerofg_frame.upscaler_sharpness = g_cfg.video.sgsr_sharpening_intensity * 0.01f;
+			zerofg_frame.game_width = zerofg_game_w;
+			zerofg_frame.game_height = zerofg_game_h;
 			zerofg_frame.output_width = m_swapchain_dims.width;
 			zerofg_frame.output_height = m_swapchain_dims.height;
 			VKZeroFG::CaptureGameFrame(*m_current_command_buffer, zerofg_frame);
@@ -2914,6 +2930,8 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 			zerofg_frame.draw[2] = static_cast<float>(screen_w);
 			zerofg_frame.draw[3] = static_cast<float>(screen_h);
 			zerofg_frame.linear = true;
+			zerofg_frame.game_width = zerofg_game_w;
+			zerofg_frame.game_height = zerofg_game_h;
 			zerofg_frame.output_width = m_swapchain_dims.width;
 			zerofg_frame.output_height = m_swapchain_dims.height;
 			VKZeroFG::CaptureGameFrame(*m_current_command_buffer, zerofg_frame);
