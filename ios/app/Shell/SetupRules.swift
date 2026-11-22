@@ -25,9 +25,9 @@ enum SetupRules {
         step > 1 && step <= stepCount ? step - 1 : nil
     }
 
-    /// RPCS3's default dev_flash plus the version.txt that sysinfo.cpp reads, under the core's config folder.
-    static func firmwareMarker(applicationSupport: URL) -> URL {
-        applicationSupport.appendingPathComponent("rpcs3", isDirectory: true)
+    /// RPCS3's default dev_flash plus the version.txt that sysinfo.cpp reads, under the core's config folder in Documents.
+    static func firmwareMarker(documents: URL) -> URL {
+        documents.appendingPathComponent("rpcs3", isDirectory: true)
             .appendingPathComponent("dev_flash/vsh/etc/version.txt", isDirectory: false)
     }
 
