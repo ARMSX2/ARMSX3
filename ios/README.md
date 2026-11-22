@@ -34,7 +34,7 @@ Then install the new IPA, open the same screen and use Restore from Backup to br
 
 ## Adding games
 
-In the library, tap Add Game Folder and pick the folder that holds your games. If the picker gives ARMSX3 a temporary copy of the folder, which can happen inside LiveContainer, ARMSX3 moves that copy to Files › ARMSX3 › games, because iOS deletes temporary files without warning. When the original was already in ARMSX3's folder you then have the game twice, and you can delete the original to free the space.
+Copy a game folder into Files › ARMSX3 › games and it shows in the library the next time you open ARMSX3, or straight away when you pull down on the library to refresh it. You can also tap Add Game Folder in the library and pick a folder that holds your games elsewhere. If the picker gives ARMSX3 a temporary copy of the folder, which can happen inside LiveContainer, ARMSX3 moves that copy to Files › ARMSX3 › games, because iOS deletes temporary files without warning. When the original was already in ARMSX3's folder you then have the game twice, and you can delete the original to free the space.
 
 ## Reporting problems
 

@@ -79,6 +79,10 @@ import Observation
             // A folder that no longer registers is left out of this scan; the others still count.
             _ = await Rpcs3Bridge.registerGameFolder(atPath: url.path)
         }
+        // Files › ARMSX3 › games is always scanned, so a game copied there shows without picking a folder.
+        let gamesFolder = LibraryRelocation.Roots.current.games
+        try? FileManager.default.createDirectory(at: gamesFolder, withIntermediateDirectories: true)
+        _ = await Rpcs3Bridge.registerGameFolder(atPath: gamesFolder.path)
         let (games, status) = await Rpcs3Bridge.scanLibrary()
         guard generation == refreshGeneration else { return }
         guard status == 0 else {
