@@ -41,8 +41,6 @@ struct SetupFlow: View {
                 .navigationDestination(for: Int.self) { page($0) }
         }
         .preferredColorScheme(.dark)
-        // The cover hides the library's own alert, so the one-time move ask is shown here too.
-        .libraryMoveAsk(library)
         .onAppear {
             // The cover can come up before RootView starts the router, and RootView never appears with JIT off.
             controllerInput.start()

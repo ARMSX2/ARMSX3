@@ -151,7 +151,6 @@ struct GameListView: View {
             Button("OK", role: .cancel) {}
         }
         .modifier(TouchLayoutChoice(entry: $touchLayoutEntry))
-        .libraryMoveAsk(model)
         .photosPicker(isPresented: $pickingCoverPhoto, selection: $coverPhoto, matching: .images)
         .onChange(of: coverPhoto) { _, item in
             guard let item, let entry = coverEntry else { return }
@@ -825,20 +824,7 @@ struct FolderListSheet: View {
                 if case .success(let url) = result { Task { await model.addFolder(url) } }
             }
         }
-        .libraryMoveAsk(model)
         .presentationDetents([.medium, .large])
-    }
-}
-
-// The alert reads the flag and never writes it, so a system dismissal runs the cancel button, which keeps.
-extension View {
-    func libraryMoveAsk(_ model: LibraryModel) -> some View {
-        alert("This folder is in a temporary place", isPresented: .constant(model.askingMove)) {
-            Button("Move to ARMSX3") { model.answerMove(true) }
-            Button("Keep Where It Is", role: .cancel) { model.answerMove(false) }
-        } message: {
-            Text("iOS or LiveContainer may clear it at any time, even during a game. Moving it puts it in the ARMSX3 folder in Files, and your answer is used for later folders too.")
-        }
     }
 }
 

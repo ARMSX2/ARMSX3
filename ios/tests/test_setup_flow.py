@@ -493,7 +493,7 @@ class Mutations(unittest.TestCase):
         self.caught("games:", games_problems(run(text)))
 
     def test_mutation_games_wiring_remember_refreshes(self):
-        anchor = 'let url = await relocated(url)\n        _ = try store.add(url)'
+        anchor = 'let url = relocated(url)\n        _ = try store.add(url)'
         text = self.edited(self.library, anchor, anchor + "\n        Task { await refresh() }")
         self.caught("games-wiring:", games_wiring_problems(text, self.flow))
 
