@@ -10301,16 +10301,6 @@
         }
       }
     },
-    "Patches imported." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Patches imported."
-          }
-        }
-      }
-    },
     "Patches updated." : {
       "localizations" : {
         "en" : {
@@ -17420,6 +17410,128 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Goes back to the player."
+          }
+        }
+      }
+    },
+    "That file has no patches in it; nothing changed." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "That file has no patches in it; nothing changed."
+          }
+        }
+      }
+    },
+    "The imported patches couldn't be updated; nothing changed." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The imported patches couldn't be updated; nothing changed."
+          }
+        }
+      }
+    },
+    "Patches with the same names are already stored. Replace them with the versions in this file?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Patches with the same names are already stored. Replace them with the versions in this file?"
+          }
+        }
+      }
+    },
+    "Replace them" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Replace them"
+          }
+        }
+      }
+    },
+    "Remove imported patches" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove imported patches"
+          }
+        }
+      }
+    },
+    "Remove the imported patches?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove the imported patches?"
+          }
+        }
+      }
+    },
+    "This deletes the patches you imported from files, for every game. Downloaded patches and which patches are switched on stay." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This deletes the patches you imported from files, for every game. Downloaded patches and which patches are switched on stay."
+          }
+        }
+      }
+    },
+    "Imported patches removed." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Imported patches removed."
+          }
+        }
+      }
+    },
+    "The imported patches couldn't be removed." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The imported patches couldn't be removed."
+          }
+        }
+      }
+    },
+    "Patches imported: %lld of %lld." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Patches imported: %1$lld of %2$lld."
+          }
+        }
+      }
+    },
+    "None of the %lld patches in this file were imported." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The patch in this file was not imported."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "None of the %lld patches in this file were imported."
+                }
+              }
+            }
           }
         }
       }

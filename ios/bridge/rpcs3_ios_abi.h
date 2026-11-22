@@ -377,8 +377,14 @@ Rpcs3IOS_Status Rpcs3IOS_PatchEngineVersion(char* out, uint32_t cap);
 // Replaces patch.yml, artemis_patch.yml or armsx3_patch.yml once the core has parsed the new text.
 Rpcs3IOS_Status Rpcs3IOS_PatchesWrite(const char* file_name, const char* yaml);
 
-// Merges a picked patch file into imported_patch.yml through the core's own import.
-Rpcs3IOS_Status Rpcs3IOS_PatchesImport(const char* yaml);
+// Merges a picked patch file into imported_patch.yml through the core's own import. `imported` is how many of
+// the file's `total` patches went in. The core keeps a stored patch with the same hash and name when its version
+// is not older, so `imported` can fall short. A non-zero `replace` overwrites those stored patches with the
+// file's and leaves other stored patches alone. Both counts are 0 on any status but OK.
+Rpcs3IOS_Status Rpcs3IOS_PatchesImport(const char* yaml, int32_t replace, uint32_t* imported, uint32_t* total);
+
+// Deletes imported_patch.yml and nothing else; a file that is already gone is fine.
+Rpcs3IOS_Status Rpcs3IOS_PatchesRemoveImported(void);
 
 // The patches for `serial` as a JSON array; patches for all games are left out.
 Rpcs3IOS_Status Rpcs3IOS_PatchesList(const char* serial, Rpcs3IOS_TextSink sink, void* context);

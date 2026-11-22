@@ -173,13 +173,27 @@
 	});
 }
 
-+ (void)importPatches:(NSString*)yaml completion:(void (^)(NSInteger status))completion
++ (void)importPatches:(NSString*)yaml replace:(BOOL)replace completion:(void (^)(NSInteger status, NSInteger imported, NSInteger total))completion
 {
 	NSString* body = [yaml copy];
+	void (^done)(NSInteger, NSInteger, NSInteger) = [completion copy];
 	dispatch_async(rpcs3_bridge_queue(), ^{
-		const Rpcs3IOS_Status status = Rpcs3IOS_PatchesImport(body.UTF8String ?: "");
+		uint32_t imported = 0;
+		uint32_t total = 0;
+		const Rpcs3IOS_Status status = Rpcs3IOS_PatchesImport(body.UTF8String ?: "", replace ? 1 : 0, &imported, &total);
 		dispatch_async(dispatch_get_main_queue(), ^{
-			completion(status);
+			done(status, imported, total);
+		});
+	});
+}
+
++ (void)removeImportedPatchesWithCompletion:(void (^)(NSInteger status))completion
+{
+	void (^done)(NSInteger) = [completion copy];
+	dispatch_async(rpcs3_bridge_queue(), ^{
+		const Rpcs3IOS_Status status = Rpcs3IOS_PatchesRemoveImported();
+		dispatch_async(dispatch_get_main_queue(), ^{
+			done(status);
 		});
 	});
 }
