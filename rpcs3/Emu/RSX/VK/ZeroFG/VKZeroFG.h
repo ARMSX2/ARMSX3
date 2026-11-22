@@ -108,6 +108,10 @@ namespace VKZeroFG
 	/// The engine mode was switched in game (GSConfig.ZeroFGMode): the GS device takes the presenter
 	/// off the window, and the next ConnectSurface rebuilds the engine in the new mode.
 	bool ModeChanged();
+	/// The frames changed kind in game (the output path went from one that hands ZeroFG the game's image
+	/// to one that hands it the finished screen, or back): the GS device takes the presenter off the
+	/// window, and the next connection generates at the size the new kind needs.
+	bool CaptureChanged();
 
 	/// The presenter owns what reaches the screen: the GS device must not present.
 	bool OwnsOutput();
@@ -160,6 +164,9 @@ namespace VKZeroFG
 		/// connection generates at is never past it, whichever frame comes first. 0 elsewhere.
 		u32 game_width = 0;
 		u32 game_height = 0;
+		/// The renderer's resolution scale (percent) on those paths: changed in game, the game's image
+		/// changes size, and the presenter reconnects to generate at the new one (CaptureChanged).
+		u32 resolution_scale = 0;
 	};
 
 	/// Records the copy of [frame] into the image ZeroFG takes it from, at the size frames are generated

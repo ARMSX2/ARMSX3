@@ -105,10 +105,12 @@ void VKGSRender::zerofg_update_authority()
 
 	const bool failed = VKZeroFG::ReconnectRequested();
 
-	if (failed || (VKZeroFG::Connected() && (!wanted || VKZeroFG::ModeChanged())))
+	if (failed || (VKZeroFG::Connected() && (!wanted || VKZeroFG::ModeChanged() || VKZeroFG::CaptureChanged())))
 	{
 		// The presenter gave the window back, or ZeroFG was switched off (or to another engine) in
-		// game: take it off the window, and give this renderer a real swapchain on the surface again.
+		// game, or the output path changed what kind of frame it gets (CaptureChanged: a new connection
+		// generates at the new kind's size): take it off the window, and give this renderer a real
+		// swapchain on the surface again. CanConnect offers the window again on a later flip.
 		if (failed)
 		{
 			VKZeroFG::FailOpen();
@@ -2427,6 +2429,7 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 	// will have. ZeroFG never generates past it (GameFrame::game_width).
 	u32 zerofg_game_w = 0;
 	u32 zerofg_game_h = 0;
+	const u32 zerofg_game_scale = zerofg_game_path ? static_cast<u32>(g_cfg.video.resolution_scale_percent) : 0;
 	if (zerofg_game_path)
 	{
 		if (image_to_flip)
@@ -2908,6 +2911,7 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 			zerofg_frame.upscaler_sharpness = g_cfg.video.sgsr_sharpening_intensity * 0.01f;
 			zerofg_frame.game_width = zerofg_game_w;
 			zerofg_frame.game_height = zerofg_game_h;
+			zerofg_frame.resolution_scale = zerofg_game_scale;
 			zerofg_frame.output_width = m_swapchain_dims.width;
 			zerofg_frame.output_height = m_swapchain_dims.height;
 			VKZeroFG::CaptureGameFrame(*m_current_command_buffer, zerofg_frame);
@@ -2932,6 +2936,7 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 			zerofg_frame.linear = true;
 			zerofg_frame.game_width = zerofg_game_w;
 			zerofg_frame.game_height = zerofg_game_h;
+			zerofg_frame.resolution_scale = zerofg_game_scale;
 			zerofg_frame.output_width = m_swapchain_dims.width;
 			zerofg_frame.output_height = m_swapchain_dims.height;
 			VKZeroFG::CaptureGameFrame(*m_current_command_buffer, zerofg_frame);

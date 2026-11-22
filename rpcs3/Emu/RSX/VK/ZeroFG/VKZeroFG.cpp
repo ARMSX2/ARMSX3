@@ -495,6 +495,12 @@ namespace VKZeroFG
 			// The size frames are generated at, fixed for a connection: the presenter treats any change
 			// of it as a structural break and fails open. Zero until the first frame of the connection.
 			VkExtent2D generation_extent = {};
+			// What the connection's frames are: 1 the game's image (and the output path that hands it over),
+			// 2 the finished screen. The generation size is chosen for one of them, so a change of output
+			// path in game (SGSR to FSR, say) takes the presenter off the window for a new connection
+			// (CaptureChanged), rather than generating the new kind of frame at the old kind's size.
+			u32 capture_path = 0;
+			bool capture_path_changed = false;
 			float draw_w = 0.0f;
 			float draw_h = 0.0f;
 			SourceStage source;
@@ -3069,8 +3075,10 @@ namespace VKZeroFG
 		// Device B borrows the GS device's surface (same instance).
 		ANativeWindow* const window = static_cast<ANativeWindow*>(output.window);
 		s.surface = output.surface;
-		// A new connection may generate at a new size (the window may have changed).
+		// A new connection may generate at a new size (the window may have changed), for frames of either kind.
 		s.generation_extent = {};
+		s.capture_path = 0;
+		s.capture_path_changed = false;
 		s.draw_w = s.draw_h = 0.0f;
 		{
 			std::unique_lock paint_lock(s_paint_mutex);
@@ -3124,6 +3132,12 @@ namespace VKZeroFG
 	{
 		const State& s = s_state;
 		return s.presenter && s.engine_mode != ConfiguredMode();
+	}
+
+	bool CaptureChanged()
+	{
+		const State& s = s_state;
+		return s.presenter && s.surface != VK_NULL_HANDLE && s.capture_path_changed;
 	}
 
 	bool OwnsOutput()
@@ -3270,6 +3284,23 @@ namespace VKZeroFG
 		const float draw_h = frame.draw[3] - frame.draw[1];
 		if (content_w <= 0 || content_h <= 0 || draw_w < 1.0f || draw_h < 1.0f)
 			return;
+		// The output path the frame comes from (GameFrame::game_width is set on the game-image paths, also on
+		// their boot screens): another than the connection's waits for the next connection, not captured here.
+		// The game's image also carries the resolution scale it was drawn at: a new scale in game is a new size of
+		// picture, so a new connection too.
+		const u32 capture_path = frame.game_width ? (1u | (frame.resolution_scale << 8)) : 2u;
+		if (!s.capture_path)
+			s.capture_path = capture_path;
+		else if (capture_path != s.capture_path)
+		{
+			if (!s.capture_path_changed)
+				INFO_LOG("ZeroFG: the output path changed ({}); the presenter reconnects for it.",
+					capture_path == 2   ? std::string("to the finished screen") :
+					s.capture_path == 2 ? std::string("to the game's image") :
+										  fmt::format("resolution scale {}% to {}%", s.capture_path >> 8, frame.resolution_scale));
+			s.capture_path_changed = true;
+			return;
+		}
 
 		const VulkanDevice* const device = s.kit_device_a.get();
 		const VulkanDevice::Functions& f = device->functions();
@@ -3528,6 +3559,7 @@ namespace VKZeroFG
 	bool Connected() { return false; }
 	bool CanConnect() { return false; }
 	bool ModeChanged() { return false; }
+	bool CaptureChanged() { return false; }
 	bool OwnsOutput() { return false; }
 	bool MainSurfaceHandoffPending() { return false; }
 	void MainSurfaceReleasedByA() {}
@@ -3559,6 +3591,7 @@ namespace VKZeroFG
 	bool Connected() { return false; }
 	bool CanConnect() { return false; }
 	bool ModeChanged() { return false; }
+	bool CaptureChanged() { return false; }
 	bool OwnsOutput() { return false; }
 	bool MainSurfaceHandoffPending() { return false; }
 	void MainSurfaceReleasedByA() {}
