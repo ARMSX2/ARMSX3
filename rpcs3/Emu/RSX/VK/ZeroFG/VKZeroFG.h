@@ -24,9 +24,10 @@
 /// presents both, Real and generated, on the window: once it takes the window, the renderer drops
 /// its swap chain and presents nothing (Main Surface Authority). On the plain output path the frame
 /// ZeroFG takes is the game's own image, at the game's size (never the upscaled screen), and RPCS3's
-/// overlays go apart on a layer the Post lays over every output, so they are never interpolated;
-/// the other output paths (calibration, FSR and the other upscalers, stereo) hand it the finished
-/// screen with the overlays on it. A failure gives the window back to the renderer. Switched off
+/// overlays go apart on a layer the Post lays over every output, so they are never interpolated.
+/// The Post upscales as the renderer does: its sampler for bilinear and nearest, the renderer's own
+/// SGSR shaders for SGSR. The other output paths (calibration, FSR, RetroArch shaders, stereo) hand
+/// it the finished screen with the overlays on it. A failure gives the window back to the renderer. Switched off
 /// or to another engine in game, ZeroFG gives it back and takes it again.
 ///
 /// Every entry point is a no-op when ARMSX3_HAS_ZEROFG is undefined (the play flavour, and every
@@ -149,6 +150,11 @@ namespace VKZeroFG
 		VkImage overlay = VK_NULL_HANDLE;
 		u32 overlay_width = 0;
 		u32 overlay_height = 0;
+		/// How the renderer upscales [image] into the draw rectangle, which the Post repeats on every
+		/// output: 0 its sampler ([linear]), 1 SGSR, 2 SGSR edge (the same shaders), with SGSR's
+		/// sharpness (Qualcomm's edge_sharpness, 1.0 their default).
+		u32 upscaler = 0;
+		float upscaler_sharpness = 1.0f;
 	};
 
 	/// Records the copy of [frame] into the image ZeroFG takes it from, at the size frames are generated

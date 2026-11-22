@@ -84,6 +84,7 @@ namespace Vulkan
 #include "xenia/ui/vulkan/zerofg_independent_presenter.h"
 
 #include "Emu/RSX/VK/ZeroFG/VKZeroFGPostShaders.h"
+#include "Emu/RSX/VK/ZeroFG/VKZeroFGSgsrShaders.h"
 
 // The Post's overlay pipeline is ImGui's vertex layout; RPCS3 has no ImGui and never hands it
 // draw data, so the Post draws the frame alone. The layout is kept for the pipeline it builds.
@@ -207,6 +208,9 @@ namespace VKZeroFG
 			PFN_vkCmdBindIndexBuffer CmdBindIndexBuffer = nullptr;
 			PFN_vkCmdPushConstants CmdPushConstants = nullptr;
 			PFN_vkCmdDrawIndexed CmdDrawIndexed = nullptr;
+			// The renderer's upscaler (SGSR) on device B: optional, without them the Post scales with its sampler.
+			PFN_vkCreateComputePipelines CreateComputePipelines = nullptr;
+			PFN_vkCmdDispatch CmdDispatch = nullptr;
 		};
 
 		/// An image with its own memory and a 2D colour view, on device A or B.
@@ -306,6 +310,11 @@ namespace VKZeroFG
 				uint64_t signal_value = 0;
 				// Samples the overlay layer (RPCS3's overlays, P above W) for the second draw.
 				VkDescriptorSet layer_set = VK_NULL_HANDLE;
+				// The renderer's upscaler (SGSR): the input upscaled to the draw rectangle's size, which
+				// the draw then samples 1:1, and the set the compute pass reads the input and writes it with.
+				OwnedImage scaled;
+				bool scaled_written = false;
+				VkDescriptorSet scale_set = VK_NULL_HANDLE;
 				// The overlay's vertices, indices and texture uploads for this job, mapped. Rewritten
 				// only when the job is recorded again, after its last submission completed.
 				VkBuffer overlay_buffer = VK_NULL_HANDLE;
@@ -343,6 +352,13 @@ namespace VKZeroFG
 			// (it failed to build) the Post draws the frame alone.
 			VkShaderModule layer_fragment = VK_NULL_HANDLE;
 			VkPipeline layer_pipeline = VK_NULL_HANDLE;
+			// The renderer's upscalers, the same shaders (VKZeroFGSgsrShaders.h): index 0 SGSR, 1 SGSR
+			// edge. Optional: a null pipeline scales with the sampler instead.
+			VkDescriptorSetLayout scale_set_layout = VK_NULL_HANDLE;
+			VkPipelineLayout scale_layout = VK_NULL_HANDLE;
+			VkDescriptorPool scale_pool = VK_NULL_HANDLE;
+			std::array<VkShaderModule, 2> scale_modules = {};
+			std::array<VkPipeline, 2> scale_pipelines = {};
 			// The overlay: ImGui's pipeline over the frame, and its textures. Without them (they
 			// failed to build) the Post draws the frame alone.
 			VkShaderModule overlay_vertex = VK_NULL_HANDLE;
@@ -508,6 +524,10 @@ namespace VKZeroFG
 		// The newest frame published came with RPCS3's overlays apart (its layer on the HUD handoff): the
 		// Post lays the newest layer over its outputs. False after a frame with none, or with them in it.
 		std::atomic<bool> s_layer_visible{false};
+		// The renderer's upscaler for the newest frame and SGSR's sharpness (GameFrame::upscaler), for the
+		// Post to run the same on every output. Under s_paint_mutex.
+		u32 s_upscaler = 0;
+		float s_upscaler_sharpness = 1.0f;
 #endif
 
 		template <typename T>
@@ -1694,6 +1714,124 @@ namespace VKZeroFG
 			job.overlay_size = 0;
 		}
 
+		/// The renderer's upscalers on device B, and the jobs' images and sets for them. After device B drained (DestroyPost),
+		/// or before any job used them (a failed PrepareScale).
+		void DestroyScale(PostContext& context)
+		{
+			State& s = s_state;
+			const VulkanDevice* const device = s.kit_device_b.get();
+			const VkDevice d = device->device();
+			const PostFunctions& p = s.pfn;
+			for (PostContext::Job& job : context.jobs)
+			{
+				job.scaled.Destroy(device);
+				job.scaled_written = false;
+				job.scale_set = VK_NULL_HANDLE; // freed with the pool
+			}
+			for (VkPipeline& pipeline : context.scale_pipelines)
+			{
+				if (pipeline != VK_NULL_HANDLE)
+					p.DestroyPipeline(d, pipeline, nullptr);
+				pipeline = VK_NULL_HANDLE;
+			}
+			for (VkShaderModule& module : context.scale_modules)
+			{
+				if (module != VK_NULL_HANDLE)
+					p.DestroyShaderModule(d, module, nullptr);
+				module = VK_NULL_HANDLE;
+			}
+			if (context.scale_pool != VK_NULL_HANDLE)
+				p.DestroyDescriptorPool(d, context.scale_pool, nullptr);
+			if (context.scale_layout != VK_NULL_HANDLE)
+				p.DestroyPipelineLayout(d, context.scale_layout, nullptr);
+			if (context.scale_set_layout != VK_NULL_HANDLE)
+				p.DestroyDescriptorSetLayout(d, context.scale_set_layout, nullptr);
+			context.scale_pool = VK_NULL_HANDLE;
+			context.scale_layout = VK_NULL_HANDLE;
+			context.scale_set_layout = VK_NULL_HANDLE;
+		}
+
+		/// SGSR's push constants, laid out as RPCS3's sgsr_pass.cpp writes them (offsets from the SPIR-V).
+		struct ScaleConstants
+		{
+			u32 dst_size[2];
+			float uv_offset[2];
+			float uv_scale[2];
+			float src_size[2];
+			float inv_src_size[2];
+			float sharpness;
+		};
+		static_assert(sizeof(ScaleConstants) == 44);
+
+		/// The renderer's upscalers, built from the same shaders it runs (SGSR, SGSR edge), one set per job. Optional: on any
+		/// failure nothing of it stays and the Post scales with its sampler.
+		void PrepareScale(PostContext& context)
+		{
+			State& s = s_state;
+			const PostFunctions& p = s.pfn;
+			if (!p.CreateComputePipelines || !p.CmdDispatch)
+				return;
+			const VkDevice d = s.kit_device_b->device();
+			const VkDescriptorSetLayoutBinding bindings[2] = {
+				{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+				{1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+			VkDescriptorSetLayoutCreateInfo set_layout_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+			set_layout_info.bindingCount = 2;
+			set_layout_info.pBindings = bindings;
+			const VkPushConstantRange push = {VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ScaleConstants)};
+			const VkDescriptorPoolSize pool_sizes[2] = {
+				{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, PostContext::COUNT}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, PostContext::COUNT}};
+			VkDescriptorPoolCreateInfo pool_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+			pool_info.maxSets = PostContext::COUNT;
+			pool_info.poolSizeCount = 2;
+			pool_info.pPoolSizes = pool_sizes;
+			bool ok = p.CreateDescriptorSetLayout(d, &set_layout_info, nullptr, &context.scale_set_layout) == VK_SUCCESS &&
+					  p.CreateDescriptorPool(d, &pool_info, nullptr, &context.scale_pool) == VK_SUCCESS;
+			if (ok)
+			{
+				VkPipelineLayoutCreateInfo layout_info = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+				layout_info.setLayoutCount = 1;
+				layout_info.pSetLayouts = &context.scale_set_layout;
+				layout_info.pushConstantRangeCount = 1;
+				layout_info.pPushConstantRanges = &push;
+				ok = p.CreatePipelineLayout(d, &layout_info, nullptr, &context.scale_layout) == VK_SUCCESS;
+			}
+			const std::array<std::pair<const uint32_t*, size_t>, 2> code = {{
+				{zerofg_sgsr_shader_spv, sizeof(zerofg_sgsr_shader_spv)},
+				{zerofg_sgsr_shader_edge_spv, sizeof(zerofg_sgsr_shader_edge_spv)}}};
+			for (size_t i = 0; ok && i < code.size(); ++i)
+			{
+				VkShaderModuleCreateInfo module_info = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+				module_info.codeSize = code[i].second;
+				module_info.pCode = code[i].first;
+				ok = p.CreateShaderModule(d, &module_info, nullptr, &context.scale_modules[i]) == VK_SUCCESS;
+				if (!ok)
+					break;
+				VkComputePipelineCreateInfo pipeline_info = {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+				pipeline_info.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+				pipeline_info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+				pipeline_info.stage.module = context.scale_modules[i];
+				pipeline_info.stage.pName = "main";
+				pipeline_info.layout = context.scale_layout;
+				ok = p.CreateComputePipelines(d, VK_NULL_HANDLE, 1, &pipeline_info, nullptr, &context.scale_pipelines[i]) == VK_SUCCESS;
+			}
+			for (PostContext::Job& job : context.jobs)
+			{
+				if (!ok)
+					break;
+				VkDescriptorSetAllocateInfo set_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+				set_info.descriptorPool = context.scale_pool;
+				set_info.descriptorSetCount = 1;
+				set_info.pSetLayouts = &context.scale_set_layout;
+				ok = p.AllocateDescriptorSets(d, &set_info, &job.scale_set) == VK_SUCCESS;
+			}
+			if (!ok)
+			{
+				WARNING_LOG("ZeroFG: the renderer's SGSR could not be built on device B; the Post scales with its sampler");
+				DestroyScale(context);
+			}
+		}
+
 		void DestroyPost()
 		{
 			State& s = s_state;
@@ -1731,6 +1869,7 @@ namespace VKZeroFG
 				if (job.pool != VK_NULL_HANDLE)
 					f.vkDestroyCommandPool(d, job.pool, nullptr);
 			}
+			DestroyScale(context);
 			if (context.layer_pipeline != VK_NULL_HANDLE)
 				p.DestroyPipeline(d, context.layer_pipeline, nullptr);
 			if (context.layer_fragment != VK_NULL_HANDLE)
@@ -1961,9 +2100,11 @@ namespace VKZeroFG
 				return false;
 			}
 			PrepareOverlay(context);
-			INFO_LOG("ZeroFG: Post built for format {}{}", static_cast<int>(final_format),
+			PrepareScale(context);
+			INFO_LOG("ZeroFG: Post built for format {}{}{}", static_cast<int>(final_format),
 				context.layer_pipeline != VK_NULL_HANDLE ? ", with RPCS3's overlay layer" :
-														   ", the frame alone (no overlay layer: RPCS3's overlays only come in finished screens)");
+														   ", the frame alone (no overlay layer: RPCS3's overlays only come in finished screens)",
+				context.scale_pipelines[0] != VK_NULL_HANDLE ? " and the renderer's SGSR" : "");
 			return true;
 		}
 
@@ -2276,9 +2417,57 @@ namespace VKZeroFG
 				y1 = out_h;
 			}
 
+			// The renderer's upscaler (SGSR), when it has one and the frame is upscaled: the same shader into an image the
+			// draw rectangle's size, on whole pixels, which the draw then samples 1:1.
+			u32 upscaler;
+			float sharpness;
+			{
+				std::unique_lock paint_lock(s_paint_mutex);
+				upscaler = s_upscaler;
+				sharpness = s_upscaler_sharpness;
+			}
+			bool scale = (upscaler == 1 || upscaler == 2) && context.scale_pipelines[upscaler - 1] != VK_NULL_HANDLE;
+			VkExtent2D scaled_extent = {};
+			if (scale)
+			{
+				x0 = std::floor(x0);
+				y0 = std::floor(y0);
+				x1 = std::ceil(x1);
+				y1 = std::ceil(y1);
+				scaled_extent = {static_cast<u32>(x1 - x0), static_cast<u32>(y1 - y0)};
+				// Upscaling only, as the renderer runs it.
+				scale = scaled_extent.width > content.width || scaled_extent.height > content.height;
+			}
+			if (scale && (job.scaled.extent.width != scaled_extent.width || job.scaled.extent.height != scaled_extent.height))
+			{
+				job.scaled.Destroy(device);
+				job.scaled_written = false;
+				scale = job.scaled.Create(device, scaled_extent, VK_FORMAT_R8G8B8A8_UNORM,
+					VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+			}
+			if (scale)
+			{
+				VkDescriptorImageInfo scale_images[2] = {};
+				scale_images[0].sampler = context.linear;
+				scale_images[0].imageView = job.input.view;
+				scale_images[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+				scale_images[1].imageView = job.scaled.view;
+				scale_images[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+				VkWriteDescriptorSet scale_writes[2] = {{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}, {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}};
+				for (u32 i = 0; i < 2; ++i)
+				{
+					scale_writes[i].dstSet = job.scale_set;
+					scale_writes[i].dstBinding = i;
+					scale_writes[i].descriptorCount = 1;
+					scale_writes[i].descriptorType = i ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+					scale_writes[i].pImageInfo = &scale_images[i];
+				}
+				p.UpdateDescriptorSets(d, 2, scale_writes, 0, nullptr);
+			}
+
 			VkDescriptorImageInfo image_info = {};
-			image_info.sampler = request.config.linear_filter ? context.linear : context.nearest;
-			image_info.imageView = job.input.view;
+			image_info.sampler = scale ? context.nearest : (request.config.linear_filter ? context.linear : context.nearest);
+			image_info.imageView = scale ? job.scaled.view : job.input.view;
 			image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 			VkWriteDescriptorSet write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
 			write.dstSet = job.set;
@@ -2360,6 +2549,45 @@ namespace VKZeroFG
 			f.vkCmdPipelineBarrier(job.buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
 				VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 2,
 				ready);
+
+			if (scale)
+			{
+				// The renderer's SGSR, the input into the draw rectangle's size: after the last draw that sampled the image,
+				// then ready for this one's.
+				VkImageMemoryBarrier to_store = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+				to_store.srcAccessMask = 0;
+				to_store.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+				to_store.oldLayout = job.scaled_written ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
+				to_store.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+				to_store.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+				to_store.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+				to_store.image = job.scaled.image;
+				to_store.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+				f.vkCmdPipelineBarrier(job.buffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
+					nullptr, 0, nullptr, 1, &to_store);
+				p.CmdBindPipeline(job.buffer, VK_PIPELINE_BIND_POINT_COMPUTE, context.scale_pipelines[upscaler - 1]);
+				p.CmdBindDescriptorSets(
+					job.buffer, VK_PIPELINE_BIND_POINT_COMPUTE, context.scale_layout, 0, 1, &job.scale_set, 0, nullptr);
+				// The input is the frame's own pixels exactly, so no crop: offset 0, scale 1.
+				ScaleConstants constants = {};
+				constants.dst_size[0] = scaled_extent.width;
+				constants.dst_size[1] = scaled_extent.height;
+				constants.uv_scale[0] = constants.uv_scale[1] = 1.0f;
+				constants.src_size[0] = static_cast<float>(content.width);
+				constants.src_size[1] = static_cast<float>(content.height);
+				constants.inv_src_size[0] = 1.0f / constants.src_size[0];
+				constants.inv_src_size[1] = 1.0f / constants.src_size[1];
+				constants.sharpness = sharpness;
+				p.CmdPushConstants(job.buffer, context.scale_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(constants), &constants);
+				p.CmdDispatch(job.buffer, (scaled_extent.width + 7) / 8, (scaled_extent.height + 7) / 8, 1);
+				VkImageMemoryBarrier to_sample = to_store;
+				to_sample.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+				to_sample.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+				to_sample.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+				to_sample.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+				f.vkCmdPipelineBarrier(job.buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0,
+					nullptr, 0, nullptr, 1, &to_sample);
+			}
 
 			// The overlay of the latest GS present, the same over Real and Synthetic outputs.
 			std::shared_ptr<const OverlaySnapshot> overlay;
@@ -2463,6 +2691,8 @@ namespace VKZeroFG
 			job.signal_value = signal_value;
 			job.submitted = true;
 			job.input_written = true;
+			if (scale)
+				job.scaled_written = true;
 			job.completion.MarkSubmitted(timeline);
 			context.owner_stats.CountSubmit(true, result.submit_host_ns);
 			result.signal_value = signal_value;
@@ -2532,6 +2762,8 @@ namespace VKZeroFG
 			ZEROFG_POST_PROC(CmdBindIndexBuffer, vkCmdBindIndexBuffer);
 			ZEROFG_POST_PROC(CmdPushConstants, vkCmdPushConstants);
 			ZEROFG_POST_PROC(CmdDrawIndexed, vkCmdDrawIndexed);
+			ZEROFG_POST_PROC(CreateComputePipelines, vkCreateComputePipelines);
+			ZEROFG_POST_PROC(CmdDispatch, vkCmdDispatch);
 #undef ZEROFG_POST_PROC
 			return p.CreateRenderPass && p.DestroyRenderPass && p.CreateFramebuffer && p.DestroyFramebuffer &&
 				   p.CreateShaderModule && p.DestroyShaderModule && p.CreateDescriptorSetLayout &&
@@ -3153,6 +3385,8 @@ namespace VKZeroFG
 			const float sy = static_cast<float>(s_output_extent.height) / static_cast<float>(frame.output_height);
 			s_paint_config.draw_rect = {frame.draw[0] * sx, frame.draw[1] * sy, frame.draw[2] * sx, frame.draw[3] * sy};
 			s_paint_config.linear_filter = frame.linear;
+			s_upscaler = frame.upscaler;
+			s_upscaler_sharpness = frame.upscaler_sharpness;
 		}
 		source.aspect_x = static_cast<u32>(std::lround(draw_w));
 		source.aspect_y = static_cast<u32>(std::lround(draw_h));

@@ -2410,9 +2410,17 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 	// output paths keep handing it the finished screen. Pre-rotation does not matter here: the game's
 	// image and the layer are upright, and ZeroFG's presenter turns its own output.
 	const output_scaling_mode zerofg_scaling = g_cfg.video.output_scaling.get();
+	// SGSR too: the Post runs the same shaders (VKZeroFGSgsrShaders.h) on every output, Real and generated.
+	u32 zerofg_upscaler = 0;
+#ifdef __ANDROID__
+	if (zerofg_scaling == output_scaling_mode::sgsr)
+		zerofg_upscaler = 1;
+	else if (zerofg_scaling == output_scaling_mode::sgsr_edge)
+		zerofg_upscaler = 2;
+#endif
 	const bool zerofg_game_frame = image_to_flip && !cardboard_on && !avconfig.stereo_enabled &&
 		g_cfg.video.full_rgb_range_output.get() && rsx::fcmp(avconfig.gamma, 1.f) &&
-		(zerofg_scaling == output_scaling_mode::bilinear || zerofg_scaling == output_scaling_mode::nearest);
+		(zerofg_scaling == output_scaling_mode::bilinear || zerofg_scaling == output_scaling_mode::nearest || zerofg_upscaler);
 	// ... and while its presenter owns the window, this renderer's offscreen image reaches no screen:
 	// nothing is cleared, scaled or drawn into it then (a frame dump still gets it whole).
 	const bool zerofg_screen_unused = zerofg_game_frame && m_swapchain->is_offscreen() && VKZeroFG::OwnsOutput() &&
@@ -2881,6 +2889,9 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 			zerofg_frame.draw[2] = static_cast<float>(aspect_ratio.x2);
 			zerofg_frame.draw[3] = static_cast<float>(aspect_ratio.y2);
 			zerofg_frame.linear = zerofg_scaling != output_scaling_mode::nearest;
+			zerofg_frame.upscaler = zerofg_upscaler;
+			// As sgsr_pass.cpp: Qualcomm's edge_sharpness is 0..2, one percent of the slider worth 0.01.
+			zerofg_frame.upscaler_sharpness = g_cfg.video.sgsr_sharpening_intensity * 0.01f;
 			zerofg_frame.output_width = m_swapchain_dims.width;
 			zerofg_frame.output_height = m_swapchain_dims.height;
 			VKZeroFG::CaptureGameFrame(*m_current_command_buffer, zerofg_frame);
