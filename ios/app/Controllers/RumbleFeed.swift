@@ -20,6 +20,7 @@ import GameController
         var players: [CHHapticAdvancedPatternPlayer] = []
         var playing: [Bool] = []
         let externalRumbler: GameSirG8MFiRumble?
+        var borrowsRumbler = false
         // Set by an engine's stopped or reset handler; the next poll drops and rebuilds the target.
         var stale = false
 
@@ -108,7 +109,15 @@ import GameController
         endTest()
         switch route {
         case .phone: testing = makePhoneTarget()
-        case .controller: testing = controller.flatMap(controllerTarget)
+        case .controller:
+            if let existing = targets[slot], existing.controller == controller.map(ObjectIdentifier.init),
+            let rumbler = existing.externalRumbler {
+                let borrowed = Target(controller: existing.controller, externalRumbler: rumbler)
+                borrowed.borrowsRumbler = true
+                testing = borrowed
+            } else {
+                testing = controller.flatMap(controllerTarget)
+            }
         case .none: break
         }
         if let started = testing {
@@ -128,7 +137,16 @@ import GameController
 
     private func endTest() {
         if let testing {
-            testing.externalRumbler?.invalidate()
+            if testing.borrowsRumbler {
+                // The slot's target owns this rumbler: only silence it. Invalidating would disable the slot's rumble for good.
+                testing.externalRumbler?.stop()
+                // The stop may have cut the game's own rumble, so let the next poll send it again.
+                for slot in targets.indices where targets[slot]?.externalRumbler === testing.externalRumbler {
+                    gates[slot] = RumbleMath.ChangeGate()
+                }
+            } else {
+                testing.externalRumbler?.invalidate()
+            }
             for player in testing.players { try? player.stop(atTime: CHHapticTimeImmediate) }
             // Never the shared phone engine, which slot 0 may be playing on.
             for engine in testing.engines where engine !== phone { engine.stop(completionHandler: nil) }
