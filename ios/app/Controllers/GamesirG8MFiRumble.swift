@@ -8,6 +8,7 @@ import UIKit
 final class GameSirG8MFiRumble: NSObject, StreamDelegate {
     private static let accessoryProtocol = "com.xiaoji.M2boot"
     private static let repeatInterval: TimeInterval = 0.167253
+    private static let closeDrainTimeout: TimeInterval = 0.5
     private static let registerAccessoryNotifications: Void = {
         EAAccessoryManager.shared().registerForLocalNotifications()
     }()
@@ -15,7 +16,6 @@ final class GameSirG8MFiRumble: NSObject, StreamDelegate {
     private let stateLock = NSLock()
     private var accessoryAvailable = false
     private var invalidated = false
-    private var loggedSessionFailure = false
 
     private var session: EASession?
     private var inFlightPacket: Data?
@@ -25,6 +25,10 @@ final class GameSirG8MFiRumble: NSObject, StreamDelegate {
     private var activePacket: Data?
     private var repeatTimer: Timer?
     private var appActive = true
+    private var closeAfterDrain = false
+    private var closeTimeoutWork: DispatchWorkItem?
+
+    private var hasPendingWrites: Bool { inFlightPacket != nil || queuedPacket != nil }
 
     static var isAccessoryConnected: Bool {
         _ = registerAccessoryNotifications
@@ -146,7 +150,7 @@ final class GameSirG8MFiRumble: NSObject, StreamDelegate {
         stateLock.unlock()
 
         if !available {
-            stopAndClose()
+            stopAndClose(drain: false)
         }
     }
 
@@ -172,14 +176,9 @@ final class GameSirG8MFiRumble: NSObject, StreamDelegate {
               let newSession = EASession(accessory: accessory, forProtocol: Self.accessoryProtocol),
               let inputStream = newSession.inputStream,
               let outputStream = newSession.outputStream else {
-            if !loggedSessionFailure {
-                NSLog("GameSir G8+ MFi rumble: unable to open ExternalAccessory session")
-                loggedSessionFailure = true
-            }
             return false
         }
 
-        loggedSessionFailure = false
         session = newSession
         inputStream.delegate = self
         outputStream.delegate = self
@@ -208,6 +207,7 @@ final class GameSirG8MFiRumble: NSObject, StreamDelegate {
 
     private func flushOutput() {
         guard let outputStream = session?.outputStream else { return }
+        defer { closeIfDrained() }
 
         while outputStream.streamStatus == .open, outputStream.hasSpaceAvailable {
             if inFlightPacket == nil {
@@ -226,10 +226,6 @@ final class GameSirG8MFiRumble: NSObject, StreamDelegate {
 
             guard written > 0 else {
                 if written < 0 {
-                    NSLog(
-                        "GameSir G8+ MFi rumble: stream write failed: %@",
-                        outputStream.streamError?.localizedDescription ?? "unknown error"
-                    )
                     closeSession()
                 }
                 return
@@ -242,6 +238,11 @@ final class GameSirG8MFiRumble: NSObject, StreamDelegate {
                 inFlightOffset = 0
             }
         }
+    }
+
+    private func closeIfDrained() {
+        guard closeAfterDrain, session != nil, !hasPendingWrites else { return }
+        closeSession()
     }
 
     private func startRepeatTimer() {
@@ -266,26 +267,40 @@ final class GameSirG8MFiRumble: NSObject, StreamDelegate {
         queuePacket(Data(RumbleMath.gameSirStopPacket), force: true)
     }
 
-    private func stopAndClose() {
+    private func stopAndClose(drain: Bool = true) {
         dispatchPrecondition(condition: .onQueue(.main))
         let wasActive = activePacket != nil || repeatTimer != nil
         activePacket = nil
         stopRepeatTimer()
 
-        if wasActive,
-           let outputStream = session?.outputStream,
-           outputStream.streamStatus == .open,
-           outputStream.hasSpaceAvailable {
-            let packet = Data(RumbleMath.gameSirStopPacket)
-            _ = packet.withUnsafeBytes { bytes -> Int in
-                guard let baseAddress = bytes.bindMemory(to: UInt8.self).baseAddress else { return -1 }
-                return outputStream.write(baseAddress, maxLength: packet.count)
-            }
+        guard session != nil else { return }
+        guard drain, wasActive || hasPendingWrites else {
+            closeSession()
+            return
         }
-        closeSession()
+
+        // The stop packet can't be written while another packet is in flight, so queue it and
+        // keep the session open until the pending writes drain.
+        closeAfterDrain = true
+        if wasActive {
+            queuePacket(Data(RumbleMath.gameSirStopPacket), force: true)
+        } else {
+            flushOutput()
+        }
+        guard session != nil else { return }
+
+        // Close anyway if the stream never drains.
+        closeTimeoutWork?.cancel()
+        let work = DispatchWorkItem { [self] in closeSession() }
+        closeTimeoutWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.closeDrainTimeout, execute: work)
     }
 
     private func closeSession() {
+        closeAfterDrain = false
+        closeTimeoutWork?.cancel()
+        closeTimeoutWork = nil
+
         guard let session else { return }
         let streams: [Stream?] = [session.inputStream, session.outputStream]
         for stream in streams.compactMap({ $0 }) {
@@ -317,7 +332,6 @@ final class GameSirG8MFiRumble: NSObject, StreamDelegate {
         }
 
         if eventCode.contains(.errorOccurred) || eventCode.contains(.endEncountered) {
-            NSLog("GameSir G8+ MFi rumble: ExternalAccessory stream closed")
             closeSession()
         }
     }
