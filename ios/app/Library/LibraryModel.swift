@@ -16,8 +16,6 @@ import Observation
     static let favouritesKey = "armsx3.library.favourites"
     // Boot paths of games removed from the library while their files stay where they are.
     static let hiddenKey = "armsx3.library.hidden"
-    // The player's one answer to "move folders out of a temporary place?".
-    static let moveTemporaryKey = "armsx3.library.moveTemporary"
 
     nonisolated static var defaultDirectory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -29,8 +27,6 @@ import Observation
     private(set) var favourites: Set<String>
     private(set) var hidden: Set<String>
     private(set) var folders: [FolderRow] = []
-    private(set) var askingMove = false
-    private var moveWaiters: [CheckedContinuation<Void, Never>] = []
 
     // Only scanned façade objects can boot; a cached entry becomes playable once the scan behind it lands.
     private var live: [String: Rpcs3GameEntry] = [:]
@@ -173,7 +169,7 @@ import Observation
 
     /// False when the bookmark could not be made, so setup's games step can say the folder could not be read.
     @discardableResult func addFolder(_ url: URL) async -> Bool {
-        let url = await relocated(url)
+        let url = relocated(url)
         do {
             _ = try store.add(url)
         } catch {
@@ -186,49 +182,18 @@ import Observation
 
     /// Bookmark only, for setup with JIT off: no emulator call, so nothing initialises the emulator.
     func rememberFolder(_ url: URL) async throws {
-        let url = await relocated(url)
+        let url = relocated(url)
         _ = try store.add(url)
     }
 
-    // Only after the player answered Move; with no answer yet the ask is raised and the pick waits for it.
-    private func relocated(_ url: URL) async -> URL {
-        if moveAnswer == nil, LibraryRelocation.isTemporary(url) {
-            askingMove = true
-            await withCheckedContinuation { moveWaiters.append($0) }
-        }
-        return moveIfAllowed(url) ?? url
-    }
+    // Folders in tmp or an Inbox vanish when iOS or LiveContainer clears them, so they always move.
+    private func relocated(_ url: URL) -> URL { moveIfTemporary(url) ?? url }
 
-    private var moveAnswer: Bool? { defaults.object(forKey: Self.moveTemporaryKey) as? Bool }
-
-    private func mayMoveNow() -> Bool {
-        switch moveAnswer {
-        case true?:
-            return true
-        case false?:
-            return false
-        case nil:
-            askingMove = true
-            return false
-        }
-    }
-
-    // The only place the model moves anything. isTemporary comes first, so a folder kept elsewhere never raises the ask.
-    private func moveIfAllowed(_ url: URL) -> URL? {
-        guard LibraryRelocation.isTemporary(url), mayMoveNow(),
+    // The only place the model moves anything: a rename into Documents/games, never a copy.
+    private func moveIfTemporary(_ url: URL) -> URL? {
+        guard LibraryRelocation.isTemporary(url),
               case .moved(let destination) = LibraryRelocation.relocate(url) else { return nil }
         return destination
-    }
-
-    func answerMove(_ move: Bool) {
-        guard askingMove else { return }
-        defaults.set(move, forKey: Self.moveTemporaryKey)
-        askingMove = false
-        let waiting = moveWaiters
-        moveWaiters = []
-        for waiter in waiting { waiter.resume() }
-        // A JIT-off remember that waited carries on by itself, so a JIT-off Move never reaches Rpcs3Bridge.prepare.
-        if move && waiting.isEmpty { Task { await refresh() } }
     }
 
     // Synchronous on purpose: no await, so the refresh's generation rule is untouched.
@@ -240,14 +205,14 @@ import Observation
             }
         }
         for case let (folder, url?) in resolved {
-            guard let destination = moveIfAllowed(url) else { continue }
+            guard let destination = moveIfTemporary(url) else { continue }
             moved = true
             // The old row goes only once the new one exists; a failed add keeps it.
             if keep(destination) { store.remove(folder.id) }
         }
         for entry in entries where FileManager.default.fileExists(atPath: entry.bootPath) {
             guard let item = LibraryRelocation.item(containing: entry.bootPath),
-                  let destination = moveIfAllowed(item) else { continue }
+                  let destination = moveIfTemporary(item) else { continue }
             moved = true
             _ = keep(destination)
         }
