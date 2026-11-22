@@ -109,8 +109,9 @@ namespace VKZeroFG
 	/// off the window, and the next ConnectSurface rebuilds the engine in the new mode.
 	bool ModeChanged();
 	/// The frames changed kind in game (the output path went from one that hands ZeroFG the game's image
-	/// to one that hands it the finished screen, or back): the GS device takes the presenter off the
-	/// window, and the next connection generates at the size the new kind needs.
+	/// to one that hands it the finished screen, or back; the resolution scale changed; the window turned
+	/// between portrait and landscape): the GS device takes the presenter off the window, and the next
+	/// connection generates at the size the new frames need.
 	bool CaptureChanged();
 
 	/// The presenter owns what reaches the screen: the GS device must not present.

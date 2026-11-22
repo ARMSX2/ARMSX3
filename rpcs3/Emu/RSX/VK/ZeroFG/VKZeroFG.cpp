@@ -3301,6 +3301,25 @@ namespace VKZeroFG
 			s.capture_path_changed = true;
 			return;
 		}
+		// The window turned under the connection (connected in portrait while the app was still turning to
+		// the game's landscape, say): the presenter's output and the generation size are the old shape's, so a
+		// new connection too. By orientation only, so a size that differs by rounding never loops.
+		{
+			VkExtent2D connected;
+			{
+				std::unique_lock paint_lock(s_paint_mutex);
+				connected = s_output_extent;
+			}
+			if (connected.width && connected.height &&
+				(frame.output_width > frame.output_height) != (connected.width > connected.height))
+			{
+				if (!s.capture_path_changed)
+					INFO_LOG("ZeroFG: the window turned ({}x{} to {}x{}); the presenter reconnects for it.", connected.width,
+						connected.height, frame.output_width, frame.output_height);
+				s.capture_path_changed = true;
+				return;
+			}
+		}
 
 		const VulkanDevice* const device = s.kit_device_a.get();
 		const VulkanDevice::Functions& f = device->functions();
