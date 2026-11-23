@@ -270,8 +270,7 @@ namespace
 	const SEL k_sel_gpu_start = sel_registerName("GPUStartTime");
 	const SEL k_sel_gpu_end = sel_registerName("GPUEndTime");
 
-	// shortcut: assumes Metal's host time is mach_absolute_time; if gpu_ms reads 0 on running ticks, compare with mach_continuous_time.
-	double host_seconds()
+	double mach_seconds(u64 ticks)
 	{
 		static const double s_scale = []
 		{
@@ -280,7 +279,13 @@ namespace
 			return base.denom ? static_cast<double>(base.numer) / base.denom / 1e9 : 1e-9;
 		}();
 
-		return static_cast<double>(mach_absolute_time()) * s_scale;
+		return static_cast<double>(ticks) * s_scale;
+	}
+
+	// shortcut: assumes Metal's host time is mach_absolute_time; if gpu_ms reads 0 on running ticks, compare with mach_continuous_time.
+	double host_seconds()
+	{
+		return mach_seconds(mach_absolute_time());
 	}
 
 	// Runs on Metal's completion thread, so it never logs, never touches the emulator and allocates nothing.
@@ -1035,6 +1040,9 @@ namespace
 		u64 last_energy_nj = 0;
 		u64 last_penergy_nj = 0;
 		u64 last_wkups = 0;
+		u64 last_cpu_time = 0;
+		u64 last_ptime = 0;
+		u64 last_runnable_time = 0;
 		u64 ticks = 0;
 		bool prepare_told = false;
 		std::vector<u32> window;
@@ -1172,7 +1180,31 @@ namespace
 				last_wkups = wkups;
 			}
 
-			diag_log.notice("perf fps=%.1f frame_ms=%.1f shaders_new=%u mem_mib=%u headroom_mib=%d vk_mib=%u vk_tex_mib=%u vk_rtt_mib=%u int_mib=%u cmp_mib=%u gfx_mib=%u pnv_mib=%u malloc_mib=%u mtl_mib=%u vk_blk_mib=%u jit2_mib=%u jit3_mib=%u thermal=%s ft_n=%u ft_low1_fps=%.1f ft_p95_ms=%.1f ft_p99_ms=%.1f ft_gt100=%u ft_gt250=%u ft_gt500=%u dsk_wr_mib=%u lgc_wr_mib=%u gpu_ms=%.1f gpu_pct=%.0f gpu_cbs=%u cpu_mj_frame=%.2f pcore_pct=%.0f wkups_s=%.0f",
+			// Runnable time counts running plus waiting for a core, so ready_cores is the average number of threads kept waiting.
+			double cpu_cores = -1.0;
+			double ready_cores = -1.0;
+			double ptime_pct = -1.0;
+			const u64 cpu_time = io.ri_user_time + io.ri_system_time;
+			const u64 ptime = io.ri_user_ptime + io.ri_system_ptime;
+
+			if (cpu_time > last_cpu_time && io.ri_runnable_time >= last_runnable_time && ptime >= last_ptime && seconds > 0)
+			{
+				const u64 cpu_delta = cpu_time - last_cpu_time;
+				const u64 runnable_delta = io.ri_runnable_time - last_runnable_time;
+				cpu_cores = mach_seconds(cpu_delta) / seconds;
+				// The two timers tick at different moments, so a fully fed second can read a hair below zero.
+				ready_cores = runnable_delta > cpu_delta ? mach_seconds(runnable_delta - cpu_delta) / seconds : 0.0;
+				ptime_pct = 100.0 * static_cast<double>(ptime - last_ptime) / static_cast<double>(cpu_delta);
+			}
+
+			if (cpu_time != 0)
+			{
+				last_cpu_time = cpu_time;
+				last_ptime = ptime;
+				last_runnable_time = io.ri_runnable_time;
+			}
+
+			diag_log.notice("perf fps=%.1f frame_ms=%.1f shaders_new=%u mem_mib=%u headroom_mib=%d vk_mib=%u vk_tex_mib=%u vk_rtt_mib=%u int_mib=%u cmp_mib=%u gfx_mib=%u pnv_mib=%u malloc_mib=%u mtl_mib=%u vk_blk_mib=%u jit2_mib=%u jit3_mib=%u thermal=%s ft_n=%u ft_low1_fps=%.1f ft_p95_ms=%.1f ft_p99_ms=%.1f ft_gt100=%u ft_gt250=%u ft_gt500=%u dsk_wr_mib=%u lgc_wr_mib=%u gpu_ms=%.1f gpu_pct=%.0f gpu_cbs=%u cpu_mj_frame=%.2f pcore_pct=%.0f wkups_s=%.0f cpu_cores=%.2f ready_cores=%.2f ptime_pct=%.0f",
 				fps, frame_ms, adds - last_adds, vm.phys_footprint >> 20, headroom_mib(), vk_total >> 20, vk_texture >> 20, vk_surface >> 20,
 				vm.internal >> 20, vm.compressed >> 20,
 				static_cast<u64>(vm.ledger_tag_graphics_footprint + vm.ledger_tag_graphics_footprint_compressed) >> 20,
@@ -1180,7 +1212,7 @@ namespace
 				static_cast<u64>(heap.size_in_use) >> 20, metal_allocated_bytes() >> 20,
 				vk_blocks >> 20, jit2_bytes >> 20, (jit.llvm_units_peak * jit.llvm_unit_bytes) >> 20,
 				thermal_word(), ft.n, ft.low1_fps, ft.p95_ms, ft.p99_ms, ft.gt100, ft.gt250, ft.gt500,
-				io.ri_diskio_byteswritten >> 20, io.ri_logical_writes >> 20, gpu.gpu_ms, gpu.gpu_pct, gpu.cbs, cpu_mj_frame, pcore_pct, wkups_s);
+				io.ri_diskio_byteswritten >> 20, io.ri_logical_writes >> 20, gpu.gpu_ms, gpu.gpu_pct, gpu.cbs, cpu_mj_frame, pcore_pct, wkups_s, cpu_cores, ready_cores, ptime_pct);
 
 			// The lock is held across the dump, which never waits on a lock.
 			{
