@@ -23,9 +23,6 @@ namespace
 	// How long finish waits for AVAssetWriter to close the file before reporting failure.
 	constexpr std::int64_t k_finish_wait_seconds = 10;
 
-	// At most this much media is lost when the file is cut off.
-	constexpr double k_fragment_seconds = 5.0;
-
 	// Destination channel i takes source channel k_rgba_to_bgra[i].
 	constexpr std::uint8_t k_rgba_to_bgra[4] = {2, 1, 0, 3};
 
@@ -232,7 +229,7 @@ namespace
 			}
 			if (!writing())
 			{
-				return false; // the writer failed: the fragments already on disk are kept, and the stop reports failure
+				return false; // the writer failed, and the stop reports failure
 			}
 			[video markAsFinished];
 			[audio markAsFinished];
@@ -344,8 +341,6 @@ namespace armsx3::bridge
 			}
 			[state->writer addInput:state->video];
 			[state->writer addInput:state->audio];
-			// Movie fragments keep the file playable up to its last fragment if the app is killed or the writer fails.
-			state->writer.movieFragmentInterval = CMTimeMakeWithSeconds(k_fragment_seconds, 600);
 			if (![state->writer startWriting])
 			{
 				return nullptr;
