@@ -163,9 +163,14 @@ namespace
 			{
 				return false;
 			}
-			// An encoder that has fallen behind drops the block; nothing queues here.
+			// An encoder that has fallen behind drops the block; nothing queues here. The block's time still
+			// passes, or the audio after it would close the hole and play ahead of the picture.
 			if (![audio isReadyForMoreMediaData])
 			{
+				if (next_sample >= 0)
+				{
+					next_sample += frames;
+				}
 				return false;
 			}
 			// A contiguous sample count, moved forward by the wall clock only across a real gap, so blocks never overlap.
@@ -173,6 +178,12 @@ namespace
 			if (next_sample < 0 || wall > next_sample + frames)
 			{
 				next_sample = wall;
+			}
+			// A block that would land more than a tenth of a second ahead of the clock is dropped, so audio arriving
+			// faster than real time cannot drift away from the picture.
+			if (next_sample > wall + sample_rate / 10)
+			{
+				return false;
 			}
 			const CMTime time = CMTimeMake(next_sample, static_cast<std::int32_t>(sample_rate));
 			if (!moves_forward(last_audio, time) || !audio_format_for(channels))

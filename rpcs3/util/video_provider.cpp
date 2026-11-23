@@ -127,7 +127,16 @@ namespace utils
 		return pts > m_last_video_pts_incoming;
 	}
 
+#ifdef __APPLE__
 	void video_provider::present_frame(std::vector<u8>&& data, u32 pitch, u32 width, u32 height, bool is_bgra)
+	{
+		present_frame(std::move(data), pitch, width, height, is_bgra, get_system_time());
+	}
+
+	void video_provider::present_frame(std::vector<u8>&& data, u32 pitch, u32 width, u32 height, bool is_bgra, u64 captured_us)
+#else
+	void video_provider::present_frame(std::vector<u8>&& data, u32 pitch, u32 width, u32 height, bool is_bgra)
+#endif
 	{
 		if (!m_active)
 		{
@@ -141,12 +150,24 @@ namespace utils
 			return;
 		}
 
+#ifdef __APPLE__
+		const u64 current_time_us = captured_us;
+#else
 		const u64 current_time_us = get_system_time();
+#endif
 
 		if (m_start_time_us.compare_and_swap_test(umax, current_time_us))
 		{
 			media_log.notice("video_provider: start time = %d", current_time_us);
 		}
+
+#ifdef __APPLE__
+		// A frame captured before an audio block started the clock, or before a pause it then sat through, has no place on it.
+		if (current_time_us < m_start_time_us + m_pause_time_us)
+		{
+			return;
+		}
+#endif
 
 		// Calculate presentation timestamp.
 		const usz elapsed_us = current_time_us - m_start_time_us;

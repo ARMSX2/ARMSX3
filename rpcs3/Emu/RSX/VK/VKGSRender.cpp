@@ -1107,6 +1107,9 @@ VKGSRender::~VKGSRender()
 	m_frame_context_storage.clear();
 
 	m_overlay_recording_img.reset();
+#ifdef __APPLE__
+	recording_readback_release(true);
+#endif
 	if (m_prerotation_frame)
 	{
 		vk::remove_framebuffers_with_image(m_prerotation_frame->value);
