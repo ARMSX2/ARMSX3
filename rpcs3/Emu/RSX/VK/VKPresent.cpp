@@ -2083,6 +2083,10 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 
 	const auto overlay_manager = RSX(m_ctx)->overlay_manager();
 	const bool has_overlay = (overlay_manager && overlay_manager->has_visible());
+#ifdef __APPLE__
+	// Frames the GPU finished since the last flip go to the recorder first, so it does not ask for one it already has.
+	recording_readback_drain();
+#endif
 	const bool user_asked_for_screenshot = g_user_asked_for_screenshot.exchange(false);
 	// Remote play takes the recording hook too, but reads frames back on its own path (below).
 	const u32 remote_play_max_size = g_remote_play_max_size.load();
@@ -2090,7 +2094,11 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 	const bool user_is_recording = !remote_play_max_size && (g_recording_mode != recording_mode::stopped && m_frame->can_consume_frame());
 	const bool need_media_capture = user_asked_for_screenshot || user_is_recording;
 
+#ifdef __APPLE__
+	const auto render_overlays = [&](vk::framebuffer_holder* fbo, const areau& area, bool advance = true)
+#else
 	const auto render_overlays = [&](vk::framebuffer_holder* fbo, const areau& area)
+#endif
 	{
 		if (!has_overlay) return;
 
@@ -2102,7 +2110,11 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 		for (const auto& view : overlay_manager->get_views())
 		{
 			const areau render_area = view->use_window_space ? display_area : area;
+#ifdef __APPLE__
+			ui_renderer->run(*m_current_command_buffer, render_area, fbo, single_target_pass, m_texture_upload_buffer_ring_info, *view.get(), advance);
+#else
 			ui_renderer->run(*m_current_command_buffer, render_area, fbo, single_target_pass, m_texture_upload_buffer_ring_info, *view.get());
+#endif
 		}
 	};
 
@@ -2140,12 +2152,33 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 
 	// WARNING: We have to do this here. We cannot touch the acquired image on the CB and then do a hard sync on it before it is submitted to the presentation engine.
 	// That introduces a WRITE_AFTER_PRESENT (from the previous present) when we later try to present on a different CB
+#ifdef __APPLE__
+	// A recorded frame goes to a readback slot, and is dropped when none is free; a screenshot still waits for the GPU.
+	recording_readback_slot* readback_slot = nullptr;
+	if (image_to_flip && user_is_recording && !user_asked_for_screenshot)
+	{
+		readback_slot = recording_readback_acquire(usz{buffer_height} * buffer_width * 4);
+	}
+
+	if (image_to_flip && need_media_capture && (user_asked_for_screenshot || readback_slot))
+#else
 	if (image_to_flip && need_media_capture)
+#endif
 	{
 		const usz sshot_size = buffer_height * buffer_width * 4;
 
+#ifdef __APPLE__
+		std::unique_ptr<vk::buffer> sshot_owned;
+		if (!readback_slot)
+		{
+			sshot_owned = std::make_unique<vk::buffer>(*m_device, utils::align(sshot_size, 0x100000), m_device->get_memory_mapping().host_visible_coherent,
+				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0, VMM_ALLOCATION_POOL_UNDEFINED);
+		}
+		vk::buffer& sshot_vkbuf = readback_slot ? *readback_slot->buffer : *sshot_owned;
+#else
 		vk::buffer sshot_vkbuf(*m_device, utils::align(sshot_size, 0x100000), m_device->get_memory_mapping().host_visible_coherent,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0, VMM_ALLOCATION_POOL_UNDEFINED);
+#endif
 
 		VkBufferImageCopy copy_info{};
 		copy_info.bufferOffset = 0;
@@ -2207,7 +2240,12 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 
 			vk::framebuffer_holder* sshot_fbo = vk::get_framebuffer(*m_device, buffer_width, buffer_height, VK_FALSE, single_target_pass, { m_overlay_recording_img.get() });
 			sshot_fbo->add_ref();
+#ifdef __APPLE__
+			// The screen's draw later in this flip steps the overlays; stepping them here too doubled the performance overlay's FPS.
+			render_overlays(sshot_fbo, areau(rect), false);
+#else
 			render_overlays(sshot_fbo, areau(rect));
+#endif
 			sshot_fbo->release();
 
 			image_to_copy = m_overlay_recording_img.get();
@@ -2217,6 +2255,14 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 		vk::copy_image_to_buffer(*m_current_command_buffer, image_to_copy, &sshot_vkbuf, copy_info);
 		image_to_copy->pop_layout(*m_current_command_buffer);
 
+#ifdef __APPLE__
+		if (readback_slot)
+		{
+			recording_readback_queue(*readback_slot, buffer_width, buffer_height, image_to_copy->format() == VK_FORMAT_B8G8R8A8_UNORM);
+		}
+		else
+		{
+#endif
 		// We need to disable the driver manager temporarily as this next section is out of sequence.
 		// We're not supposed to be halting the GPU here and we certainly do not want to run driver management as we will end up deleting temp resources too early.
 		auto& driver_manager = g_fxo->get<vk::driver_manager_thread>();
@@ -2248,6 +2294,9 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 		{
 			m_frame->present_frame(std::move(sshot_frame), buffer_width * 4, buffer_width, buffer_height, is_bgra);
 		}
+#ifdef __APPLE__
+		}
+#endif
 	}
 
 	// Coverage, not just inset.
@@ -3382,3 +3431,154 @@ void VKGSRender::remote_capture_release(bool device_idle)
 	discard(m_remote_capture_uv);
 	discard(m_remote_capture_rgba);
 }
+
+#ifdef __APPLE__
+// A free slot whose buffer holds size bytes, or null when every slot still waits for the GPU or the recorder.
+VKGSRender::recording_readback_slot* VKGSRender::recording_readback_acquire(usz size)
+{
+	recording_readback_slot* slot = nullptr;
+	for (auto& candidate : m_recording_readback)
+	{
+		if (!candidate.seq)
+		{
+			slot = &candidate;
+			break;
+		}
+	}
+
+	if (!slot)
+	{
+		return nullptr;
+	}
+
+	if (!slot->buffer || slot->buffer->size() < size)
+	{
+		if (slot->buffer)
+		{
+			slot->buffer->unmap();
+			vk::get_resource_manager()->dispose(slot->buffer);
+		}
+
+		slot->buffer = std::make_unique<vk::buffer>(*m_device, utils::align(size, 0x100000), m_device->get_memory_mapping().host_visible_coherent,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0, VMM_ALLOCATION_POOL_UNDEFINED);
+		slot->data = static_cast<const u8*>(slot->buffer->map(0, slot->buffer->size()));
+	}
+
+	if (!m_recording_readback_marker)
+	{
+		m_recording_readback_marker = std::make_unique<vk::buffer>(*m_device, 0x100, m_device->get_memory_mapping().host_visible_coherent,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0, VMM_ALLOCATION_POOL_UNDEFINED);
+		auto markers = static_cast<u32*>(m_recording_readback_marker->map(0, sizeof(u32) * m_recording_readback.size()));
+		std::memset(markers, 0, sizeof(u32) * m_recording_readback.size());
+		m_recording_readback_markers = markers;
+	}
+
+	return slot;
+}
+
+// Called once the frame's copy into the slot is recorded: the marker write after it tells the drain the frame is in.
+void VKGSRender::recording_readback_queue(recording_readback_slot& slot, u32 width, u32 height, bool bgra)
+{
+	auto& cmd = *m_current_command_buffer;
+	const usz index = &slot - m_recording_readback.data();
+	const usz size = usz{width} * height * 4;
+
+	vk::insert_buffer_memory_barrier(cmd, slot.buffer->value, 0, size,
+		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_HOST_BIT,
+		VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT);
+
+	if (!++m_recording_readback_seq)
+	{
+		// 0 marks a free slot.
+		++m_recording_readback_seq;
+	}
+
+	vkCmdFillBuffer(cmd, m_recording_readback_marker->value, index * sizeof(u32), sizeof(u32), m_recording_readback_seq);
+	vk::insert_buffer_memory_barrier(cmd, m_recording_readback_marker->value, index * sizeof(u32), sizeof(u32),
+		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT);
+
+	slot.seq = m_recording_readback_seq;
+	slot.width = width;
+	slot.height = height;
+	slot.bgra = bgra;
+	slot.captured_us = get_system_time();
+}
+
+// RSX thread, every flip. Hands the recorder each finished frame, oldest first, timed from its capture, and frees the
+// slots once recording has stopped.
+void VKGSRender::recording_readback_drain()
+{
+	if (!m_recording_readback_markers)
+	{
+		return;
+	}
+
+	while (true)
+	{
+		recording_readback_slot* oldest = nullptr;
+		for (auto& slot : m_recording_readback)
+		{
+			if (slot.seq && (!oldest || static_cast<s32>(slot.seq - oldest->seq) < 0))
+			{
+				oldest = &slot;
+			}
+		}
+
+		if (!oldest)
+		{
+			break;
+		}
+
+		const usz index = oldest - m_recording_readback.data();
+		if (atomic_storage<u32>::load(m_recording_readback_markers[index]) != oldest->seq)
+		{
+			// The queue completes in order, so nothing newer is in either.
+			return;
+		}
+
+		std::atomic_thread_fence(std::memory_order_acquire);
+
+		const usz size = usz{oldest->width} * oldest->height * 4;
+		std::vector<u8> frame(oldest->data, oldest->data + size);
+		oldest->seq = 0;
+		g_fxo->get<utils::video_provider>().present_frame(std::move(frame), oldest->width * 4, oldest->width, oldest->height, oldest->bgra, oldest->captured_us);
+	}
+
+	if (g_recording_mode == recording_mode::stopped)
+	{
+		recording_readback_release(false);
+	}
+}
+
+// device_idle: nothing is in flight, so the buffers go now rather than through the resource manager.
+void VKGSRender::recording_readback_release(bool device_idle)
+{
+	const auto discard = [device_idle](std::unique_ptr<vk::buffer>& buffer)
+	{
+		if (!buffer)
+		{
+			return;
+		}
+
+		buffer->unmap();
+
+		if (device_idle)
+		{
+			buffer.reset();
+		}
+		else
+		{
+			vk::get_resource_manager()->dispose(buffer);
+		}
+	};
+
+	for (auto& slot : m_recording_readback)
+	{
+		discard(slot.buffer);
+		slot = {};
+	}
+
+	discard(m_recording_readback_marker);
+	m_recording_readback_markers = nullptr;
+}
+#endif

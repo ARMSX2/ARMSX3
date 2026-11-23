@@ -24,6 +24,8 @@ ios_video_sink::ios_video_sink(std::shared_ptr<armsx3::bridge::video_writer> wri
 	m_sample_rate = sample_rate;
 	use_internal_audio = true;
 	use_internal_video = true;
+	// The writer stamps audio by sample count; the provider's per-block timestamp check dropped blocks cellAudio mixed back to back.
+	accept_all_samples = true;
 	m_drain_thread = std::thread([this] { drain_loop(); });
 	m_trim_thread = std::thread([this]
 	{
