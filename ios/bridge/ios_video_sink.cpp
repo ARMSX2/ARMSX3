@@ -3,6 +3,8 @@
 
 #include "ios_video_sink.h"
 
+#include "util/logs.hpp"
+
 extern "C"
 {
 #include <libavutil/pixfmt.h>
@@ -11,6 +13,8 @@ extern "C"
 #include <chrono>
 #include <deque>
 #include <utility>
+
+LOG_CHANNEL(recording_log, "Recording");
 
 namespace
 {
@@ -143,12 +147,19 @@ void ios_video_sink::drain_loop()
 	};
 
 	// A dead writer sets has_error, so the provider stops the recording at the next frame or sample block.
+	const auto log_failure = [&]
+	{
+		const std::string why = m_writer->failure ? m_writer->failure() : std::string();
+		recording_log.error("The recording writer failed: %s", why.empty() ? "no reason given" : why);
+	};
+
 	const auto check_writer = [&]
 	{
 		if (!m_writer_failed && m_writer->failed && m_writer->failed())
 		{
 			m_writer_failed = true;
 			has_error = true;
+			log_failure();
 		}
 	};
 
@@ -166,6 +177,10 @@ void ios_video_sink::drain_loop()
 	check_writer();
 
 	const bool finished = m_writer->finish();
+	if (!finished && !m_writer_failed)
+	{
+		log_failure();
+	}
 	m_finished_ok = finished && !m_writer_failed;
 }
 
