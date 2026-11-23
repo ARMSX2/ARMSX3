@@ -13,7 +13,9 @@
 #include "ios_video_writer.h"
 
 #include <cstdint>
+#include <cstdio>
 #include <limits>
+#include <string>
 #include <vector>
 
 namespace
@@ -43,6 +45,7 @@ namespace
 		CMAudioFormatDescriptionRef audio_format = nullptr;
 		unsigned audio_format_channels = 0;
 		std::vector<std::uint8_t> permuted; // an RGBA frame turned BGRA, before scaling
+		bool finish_timed_out = false;
 
 		~av_writer()
 		{
@@ -243,9 +246,30 @@ namespace
 			// A writer that never completes is reported failed after ten seconds.
 			if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, k_finish_wait_seconds * NSEC_PER_SEC)) != 0)
 			{
+				finish_timed_out = true;
 				return false;
 			}
 			return writer.status == AVAssetWriterStatusCompleted;
+		}
+
+		// The error's underlying OSStatus is the only clue to why a recording stopped.
+		std::string failure() const
+		{
+			if (finish_timed_out)
+			{
+				return "AVAssetWriter did not finish within " + std::to_string(k_finish_wait_seconds) + " s";
+			}
+			NSError* error = writer.error;
+			if (!error)
+			{
+				return {};
+			}
+			NSError* underlying = error.userInfo[NSUnderlyingErrorKey];
+			char text[512];
+			std::snprintf(text, sizeof(text), "AVAssetWriter status %d, %s %ld, underlying %s %ld: %s", static_cast<int>(writer.status),
+				error.domain.UTF8String, static_cast<long>(error.code), underlying ? underlying.domain.UTF8String : "none",
+				underlying ? static_cast<long>(underlying.code) : 0L, error.localizedDescription.UTF8String);
+			return text;
 		}
 	};
 
@@ -355,6 +379,13 @@ namespace armsx3::bridge
 			{
 				const AVAssetWriterStatus status = state->writer.status;
 				return status == AVAssetWriterStatusFailed || status == AVAssetWriterStatusCancelled;
+			};
+			writer->failure = [state]
+			{
+				@autoreleasepool
+				{
+					return state->failure();
+				}
 			};
 			return writer;
 		}
