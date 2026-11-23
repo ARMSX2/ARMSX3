@@ -1141,6 +1141,9 @@ VKGSRender::~VKGSRender()
 		vk::remove_framebuffers_with_image(m_zerofg_overlay_layer.get());
 		m_zerofg_overlay_layer.reset();
 	}
+#ifdef __APPLE__
+	recording_readback_release(true);
+#endif
 	if (m_prerotation_frame)
 	{
 		vk::remove_framebuffers_with_image(m_prerotation_frame->value);

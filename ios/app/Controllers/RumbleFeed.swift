@@ -19,16 +19,20 @@ import GameController
         var engines: [CHHapticEngine] = []
         var players: [CHHapticAdvancedPatternPlayer] = []
         var playing: [Bool] = []
+        let externalRumbler: GameSirG8MFiRumble?
+        var borrowsRumbler = false
         // Set by an engine's stopped or reset handler; the next poll drops and rebuilds the target.
         var stale = false
 
-        init(controller: ObjectIdentifier?) {
+        init(controller: ObjectIdentifier?, externalRumbler: GameSirG8MFiRumble? = nil) {
             self.controller = controller
+            self.externalRumbler = externalRumbler
         }
     }
 
     private var targets: [Target?] = Array(repeating: nil, count: PlayerSlots.count)
     private var gates = Array(repeating: RumbleMath.ChangeGate(), count: PlayerSlots.count)
+    private var accessoryRoutes = Array(repeating: false, count: PlayerSlots.count)
     // A change of route stops the old target first.
     private var routes = Array(repeating: RumbleTarget.none, count: PlayerSlots.count)
     // The smoke scenes set it true so their routes do not depend on the Simulator; the app never writes it.
@@ -74,6 +78,8 @@ import GameController
 
     private func silence(_ slot: Int) {
         if let target = targets[slot] {
+            // pauseAll() runs every frame under the menu, so a Test Rumble borrowing this rumbler would last one frame.
+            if testing?.externalRumbler !== target.externalRumbler { target.externalRumbler?.stop() }
             for (index, player) in target.players.enumerated() where target.playing[index] {
                 try? player.stop(atTime: CHHapticTimeImmediate)
                 target.playing[index] = false
@@ -104,12 +110,22 @@ import GameController
         endTest()
         switch route {
         case .phone: testing = makePhoneTarget()
-        case .controller: testing = controller.flatMap(Self.controllerTarget)
+        case .controller:
+            if let existing = targets[slot], existing.controller == controller.map(ObjectIdentifier.init),
+            let rumbler = existing.externalRumbler {
+                let borrowed = Target(controller: existing.controller, externalRumbler: rumbler)
+                borrowed.borrowsRumbler = true
+                testing = borrowed
+            } else {
+                testing = controller.flatMap(controllerTarget)
+            }
         case .none: break
         }
         if let started = testing {
-            for (index, player) in started.players.enumerated() {
-                started.playing[index] = (try? player.start(atTime: CHHapticTimeImmediate)) != nil
+            if started.externalRumbler?.rumble(left: 1, right: 1) != true {
+                for (index, player) in started.players.enumerated() {
+                    started.playing[index] = (try? player.start(atTime: CHHapticTimeImmediate)) != nil
+                }
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                 MainActor.assumeIsolated {
@@ -122,6 +138,16 @@ import GameController
 
     private func endTest() {
         if let testing {
+            if testing.borrowsRumbler {
+                // The slot's target owns this rumbler: only silence it. Invalidating would disable the slot's rumble for good.
+                testing.externalRumbler?.stop()
+                // The stop may have cut the game's own rumble, so let the next poll send it again.
+                for slot in targets.indices where targets[slot]?.externalRumbler === testing.externalRumbler {
+                    gates[slot] = RumbleMath.ChangeGate()
+                }
+            } else {
+                testing.externalRumbler?.invalidate()
+            }
             for player in testing.players { try? player.stop(atTime: CHHapticTimeImmediate) }
             // Never the shared phone engine, which slot 0 may be playing on.
             for engine in testing.engines where engine !== phone { engine.stop(completionHandler: nil) }
@@ -132,7 +158,8 @@ import GameController
     // nil `controller`: no controller holds the slot.
     private func target(_ slot: Int, _ controller: GCController?) -> RumbleTarget {
         let haptics = controller?.haptics.map { !$0.supportedLocalities.isEmpty } ?? false
-        return RumbleMath.target(slot: slot, hasController: controller != nil, controllerHasHaptics: haptics,
+        let externalRumble = controller.map(GameSirG8MFiRumble.supports) == true && GameSirG8MFiRumble.isAccessoryConnected
+        return RumbleMath.target(slot: slot, hasController: controller != nil, controllerHasHaptics: haptics || externalRumble,
                                  phoneHasHaptics: phoneHasHaptics)
     }
 
@@ -141,6 +168,11 @@ import GameController
         for slot in 0..<PlayerSlots.count {
             // A slot whose controller left changes target, which stops and drops its engines before anything else plays.
             let controller = slots.holders[slot].flatMap { controllers[$0] }
+            let accessoryRoute = controller.map(GameSirG8MFiRumble.supports) == true && GameSirG8MFiRumble.isAccessoryConnected
+            if accessoryRoutes[slot] != accessoryRoute {
+                accessoryRoutes[slot] = accessoryRoute
+                gates[slot] = RumbleMath.ChangeGate()
+            }
             let route = target(slot, controller)
             if route != routes[slot] {
                 drop(slot)
@@ -168,11 +200,23 @@ import GameController
             guard motors != .off else { return true }
             switch route {
             case .phone: targets[slot] = makePhoneTarget()
-            case .controller: targets[slot] = controller.flatMap(Self.controllerTarget)
+            case .controller: targets[slot] = controller.flatMap(controllerTarget)
             case .none: return true
             }
         }
         guard let target = targets[slot] else { return false }
+        if motors == .off {
+            target.externalRumbler?.stop()
+        }
+        if motors != .off, target.externalRumbler?.rumble(left: motors.large, right: motors.small) == true {
+            for (index, player) in target.players.enumerated() where target.playing[index] {
+                try? player.stop(atTime: CHHapticTimeImmediate)
+                target.playing[index] = false
+            }
+            return true
+        }
+        guard !target.players.isEmpty else { return motors == .off }
+
         var played = true
         let values = target.players.count == 2 ? [motors.large, motors.small] : [RumbleMath.single(motors)]
         for (index, value) in values.enumerated() where index < target.players.count {
@@ -195,6 +239,7 @@ import GameController
     // The next non-zero motor builds them again.
     private func drop(_ slot: Int) {
         if let target = targets[slot] {
+            target.externalRumbler?.invalidate()
             for player in target.players { try? player.stop(atTime: CHHapticTimeImmediate) }
             // Never the shared phone engine; its asynchronous stop could also land after the rebuild's start.
             for engine in target.engines where engine !== phone { engine.stop(completionHandler: nil) }
@@ -204,17 +249,23 @@ import GameController
     }
 
     // Large motor left, small right (inference); nil when the controller has no haptics or an engine fails.
-    private static func controllerTarget(_ controller: GCController) -> Target? {
-        guard let haptics = controller.haptics, !haptics.supportedLocalities.isEmpty else { return nil }
+    private func controllerTarget(_ controller: GCController) -> Target? {
+        let externalRumbler = GameSirG8MFiRumble.supports(controller) ? GameSirG8MFiRumble() : nil
+        let owner = ObjectIdentifier(controller)
+        guard let haptics = controller.haptics, !haptics.supportedLocalities.isEmpty else {
+            return externalRumbler.map { Target(controller: owner, externalRumbler: $0) }
+        }
         let localities = haptics.supportedLocalities
         let wanted: [GCHapticsLocality] = localities.contains(.leftHandle) && localities.contains(.rightHandle)
             ? [.leftHandle, .rightHandle] : [.default]
         var engines: [CHHapticEngine] = []
         for locality in wanted {
-            guard let engine = haptics.createEngine(withLocality: locality) else { return nil }
+            guard let engine = haptics.createEngine(withLocality: locality) else {
+                return externalRumbler.map { Target(controller: owner, externalRumbler: $0) }
+            }
             engines.append(engine)
         }
-        return makeTarget(owner: ObjectIdentifier(controller), engines: engines)
+        return Self.makeTarget(owner: owner, engines: engines, externalRumbler: externalRumbler)
     }
 
     // nil on an iPad or when the engine cannot be made or started.
@@ -230,8 +281,9 @@ import GameController
     }
 
     // `owner` is nil for the phone.
-    private static func makeTarget(owner: ObjectIdentifier?, engines: [CHHapticEngine]) -> Target? {
-        let target = Target(controller: owner)
+    private static func makeTarget(owner: ObjectIdentifier?, engines: [CHHapticEngine],
+                                   externalRumbler: GameSirG8MFiRumble? = nil) -> Target? {
+        let target = Target(controller: owner, externalRumbler: externalRumbler)
         do {
             let event = CHHapticEvent(eventType: .hapticContinuous,
                                       parameters: [CHHapticEventParameter(parameterID: .hapticIntensity, value: 1)],
@@ -254,6 +306,12 @@ import GameController
         } catch {
             // The phone's engine is shared, so only a controller's engines are stopped here.
             if owner != nil { for engine in target.engines { engine.stop(completionHandler: nil) } }
+            if externalRumbler != nil {
+                target.engines = []
+                target.players = []
+                target.playing = []
+                return target
+            }
             return nil
         }
         return target

@@ -377,6 +377,29 @@ private:
 	// instead, over black (top half) and over white (bottom half), window-sized planes, for device B
 	// to lay over every output (VKZeroFG::GameFrame::overlay).
 	std::unique_ptr<vk::image> m_zerofg_overlay_layer;
+#ifdef __APPLE__
+	// A recorded frame is copied into a free slot and handed to the recorder at a later flip, once the
+	// GPU has written the slot's number into its marker, so recording never waits for the GPU.
+	struct recording_readback_slot
+	{
+		std::unique_ptr<vk::buffer> buffer;
+		const u8* data = nullptr;
+		u32 seq = 0;
+		u32 width = 0;
+		u32 height = 0;
+		bool bgra = false;
+		u64 captured_us = 0;
+	};
+
+	std::array<recording_readback_slot, 3> m_recording_readback;
+	std::unique_ptr<vk::buffer> m_recording_readback_marker;
+	const u32* m_recording_readback_markers = nullptr;
+	u32 m_recording_readback_seq = 0;
+	recording_readback_slot* recording_readback_acquire(usz size);
+	void recording_readback_queue(recording_readback_slot& slot, u32 width, u32 height, bool bgra);
+	void recording_readback_drain();
+	void recording_readback_release(bool device_idle);
+#endif
 
 	// Pre-rotation (swapchain_WSI::init): with a turned swapchain, flip() assembles the frame in
 	// this upright image, exactly as it would in an unturned swapchain image, and turns it into the

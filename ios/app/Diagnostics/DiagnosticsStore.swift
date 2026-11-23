@@ -13,14 +13,13 @@ struct Redaction {
 
     // Read from rpcn.yml each time the store is made, so a report opened after a sign-in carries the current one.
     static var live: Redaction {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return Redaction(home: NSHomeDirectory(), bundle: Bundle.main.bundlePath,
-                         bundleID: Bundle.main.bundleIdentifier ?? "", rpcnName: rpcnName(inSupport: support))
+        Redaction(home: NSHomeDirectory(), bundle: Bundle.main.bundlePath,
+                  bundleID: Bundle.main.bundleIdentifier ?? "", rpcnName: rpcnName(inDocuments: DiagnosticsStore.documents))
     }
 
     // On Apple the core's config folder has no `config/` subfolder; that one is Windows-only (Utilities/File.cpp).
-    static func rpcnName(inSupport support: URL) -> String {
-        let yml = support.appendingPathComponent("rpcs3/rpcn.yml")
+    static func rpcnName(inDocuments documents: URL) -> String {
+        let yml = documents.appendingPathComponent("rpcs3/rpcn.yml")
         return rpcnName(fromRpcnYml: (try? String(contentsOf: yml, encoding: .utf8)) ?? "")
     }
 
@@ -424,6 +423,9 @@ struct DiagnosticsStore {
         stage(hasTTY ? tty : rpcs3Dir.appendingPathComponent("TTY.log"), as: "TTY.log", in: staging)
         stage(session.appendingPathComponent("launch.json"), as: "launch.json", in: staging)
         stage(recordDir.appendingPathComponent("session.json"), as: "session-record.json", in: staging)
+        // The core reads these at boot, so a report shows what a title was patched with.
+        stage(rpcs3Dir.appendingPathComponent("patches/imported_patch.yml"), as: "patches/imported_patch.yml", in: staging)
+        stage(rpcs3Dir.appendingPathComponent("patch_config.yml"), as: "patch_config.yml", in: staging)
         if !settings.allGames.isEmpty { write(settings.allGames, as: "settings-all-games.yml", in: staging) }
         if !settings.thisGame.isEmpty { write(settings.thisGame, as: "settings-this-game.yml", in: staging) }
         // Only older sessions, so a report on the previous session never carries the newer launch's log.

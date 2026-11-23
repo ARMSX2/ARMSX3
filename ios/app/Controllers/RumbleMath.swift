@@ -8,6 +8,7 @@ enum RumbleTarget: Equatable {
 }
 
 enum RumbleMath {
+    static let gameSirStopPacket: [UInt8] = [0x04, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]
 
     struct Motors: Equatable {
         var large: Float
@@ -24,6 +25,25 @@ enum RumbleMath {
 
     static func single(_ m: Motors) -> Float {
         max(m.large, m.small)
+    }
+
+    static func gameSirPacket(left: Float, right: Float) -> [UInt8] {
+        [
+            0x04,
+            gameSirAmplitude(left),
+            0x01,
+            gameSirAmplitude(right),
+            0x01,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+        ]
+    }
+
+    private static func gameSirAmplitude(_ value: Float) -> UInt8 {
+        let finite = value.isFinite ? value : 0
+        return UInt8((min(1, max(0, finite)) * 255).rounded())
     }
 
     // Players 2-4 never get a phone stand-in; any slot outside 0-3 reaches nothing.

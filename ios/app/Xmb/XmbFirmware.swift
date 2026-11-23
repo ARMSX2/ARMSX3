@@ -51,7 +51,7 @@ enum XmbRco {
                                       "explore_category_video", "explore_category_network", "impose_plugin"]
 
     nonisolated static var devFlash: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("rpcs3/dev_flash", isDirectory: true)
     }
 
@@ -283,7 +283,7 @@ enum XmbRco {
         case .cancel, .error: name = "snd_cancel"
         case .option: return nil
         }
-        let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("rpcs3/sounds/\(name).wav")
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-"""The recording writer run on the host against Apple's encoder: both files play back red with sound, and a cut-off file still plays.
+"""The recording writer run on the host against Apple's encoder: both files play back red with sound.
 """
 
 import shutil
@@ -17,8 +17,6 @@ WRITER_H = IOS_DIR / "bridge" / "ios_video_writer.h"
 WRITER_MM = IOS_DIR / "bridge" / "ios_video_writer.mm"
 
 WRITER_API = IOS_DIR / "bridge" / "video_writer.h"
-
-VSCUT_LINE = "VSCUT video=1 audio=1 decoded=1 duration_ok=1"
 
 VS_LINE = "VS video=1 codec=avc1 audio=1 duration_ok=1 rgba=1 bgra=1"
 
@@ -182,40 +180,10 @@ namespace
 	{
 		return f.r > 200 && f.g < 60 && f.b < 60;
 	}
-
-	// 7 s of frames and tone, then the process ends WITHOUT finish, as a kill would.
-	int write_cut(const std::string& path)
-	{
-		armsx3::bridge::video_writer_settings s;
-		s.path = path;
-		s.width = 320;
-		s.height = 180;
-		s.fps = 30;
-		s.video_bps = 1000000;
-		s.sample_rate = k_rate;
-		s.audio_bps = 192000;
-		const auto w = armsx3::bridge::make_avfoundation_video_writer(s);
-		if (!w)
-			return 1;
-		std::vector<std::uint8_t> frame(std::size_t{k_pitch} * k_frame_h, 255);
-		std::vector<float> tone(1600 * 2, 0.1f);
-		for (int f = 0; f < 7 * 30; ++f)
-		{
-			const std::int64_t pts = std::int64_t{f} * 1000 / 30;
-			if (!offered([&] { return w->append_video(frame.data(), k_pitch, k_frame_w, k_frame_h, true, pts); }) ||
-				!offered([&] { return w->append_audio(tone.data(), 1600, 2, std::int64_t{f} * 1600 * 1000000 / k_rate); }))
-				return 1;
-		}
-		std::this_thread::sleep_for(std::chrono::seconds(1));
-		std::fflush(stdout);
-		_exit(0);
-	}
 }
 
 int main(int argc, char** argv)
 {
-	if (argc == 3 && std::string(argv[2]) == "cut")
-		return write_cut(std::string(argv[1]) + "/cut.mp4");
 	if (argc != 2)
 		return 2;
 	const std::string dir = argv[1];
@@ -229,9 +197,6 @@ int main(int argc, char** argv)
 	std::printf("VSPIX rgba=%d,%d,%d bgra=%d,%d,%d\n", a.r, a.g, a.b, b.r, b.g, b.b);
 	std::printf("VS video=%d codec=%s audio=%d duration_ok=%d rgba=%d bgra=%d\n", int(a.video && b.video),
 		a.avc1 && b.avc1 ? "avc1" : "other", int(a.audio && b.audio), int(a.duration && b.duration), red(a), red(b));
-	const read_back c = read_file(dir + "/cut.mp4");
-	std::printf("VSCUT video=%d audio=%d decoded=%d duration_ok=%d\n", int(c.video), int(c.audio), int(c.r >= 0),
-		int(c.seconds >= 4.5 && c.seconds <= 7.5));
 	return 0;
 }
 '''
@@ -265,24 +230,16 @@ class TheWriterMakesAPlayableFile(unittest.TestCase):
             )
             if built.returncode != 0:
                 raise AssertionError("clang++ failed:\n" + built.stdout)
-            cut = subprocess.run([str(binary), tmp, "cut"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                 timeout=RUN_TIMEOUT_SECONDS, universal_newlines=True, cwd=tmp)
             ran = subprocess.run([str(binary), tmp], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                  timeout=RUN_TIMEOUT_SECONDS, universal_newlines=True, cwd=tmp)
-        cls.cut_code, cls.cut_out = cut.returncode, cut.stdout
         cls.code, cls.out = ran.returncode, ran.stdout
         cls.lines = [line for line in cls.out.splitlines() if line.startswith("VS ")]
-        cls.cut_lines = [line for line in cls.out.splitlines() if line.startswith("VSCUT ")]
         pixels = [line for line in cls.out.splitlines() if line.startswith("VSPIX ")]
-        sys.stderr.write("\n" + "\n".join(cls.lines + pixels + cls.cut_lines) + "\n")
+        sys.stderr.write("\n" + "\n".join(cls.lines + pixels) + "\n")
 
     def test_both_files_play_back_red_with_sound(self):
         self.assertEqual(0, self.code, self.out[-4000:])
         self.assertEqual([VS_LINE], self.lines, self.out[-4000:])
-
-    def test_a_file_cut_off_before_finish_still_plays(self):
-        self.assertEqual(0, self.cut_code, self.cut_out[-4000:])
-        self.assertEqual([VSCUT_LINE], self.cut_lines, self.out[-4000:])
 
 
 if __name__ == "__main__":

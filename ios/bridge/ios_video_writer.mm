@@ -13,16 +13,15 @@
 #include "ios_video_writer.h"
 
 #include <cstdint>
+#include <cstdio>
 #include <limits>
+#include <string>
 #include <vector>
 
 namespace
 {
 	// How long finish waits for AVAssetWriter to close the file before reporting failure.
 	constexpr std::int64_t k_finish_wait_seconds = 10;
-
-	// At most this much media is lost when the file is cut off.
-	constexpr double k_fragment_seconds = 5.0;
 
 	// Destination channel i takes source channel k_rgba_to_bgra[i].
 	constexpr std::uint8_t k_rgba_to_bgra[4] = {2, 1, 0, 3};
@@ -43,6 +42,7 @@ namespace
 		CMAudioFormatDescriptionRef audio_format = nullptr;
 		unsigned audio_format_channels = 0;
 		std::vector<std::uint8_t> permuted; // an RGBA frame turned BGRA, before scaling
+		bool finish_timed_out = false;
 
 		~av_writer()
 		{
@@ -163,9 +163,14 @@ namespace
 			{
 				return false;
 			}
-			// An encoder that has fallen behind drops the block; nothing queues here.
+			// An encoder that has fallen behind drops the block; nothing queues here. The block's time still
+			// passes, or the audio after it would close the hole and play ahead of the picture.
 			if (![audio isReadyForMoreMediaData])
 			{
+				if (next_sample >= 0)
+				{
+					next_sample += frames;
+				}
 				return false;
 			}
 			// A contiguous sample count, moved forward by the wall clock only across a real gap, so blocks never overlap.
@@ -173,6 +178,12 @@ namespace
 			if (next_sample < 0 || wall > next_sample + frames)
 			{
 				next_sample = wall;
+			}
+			// A block that would land more than a tenth of a second ahead of the clock is dropped, so audio arriving
+			// faster than real time cannot drift away from the picture.
+			if (next_sample > wall + sample_rate / 10)
+			{
+				return false;
 			}
 			const CMTime time = CMTimeMake(next_sample, static_cast<std::int32_t>(sample_rate));
 			if (!moves_forward(last_audio, time) || !audio_format_for(channels))
@@ -218,7 +229,7 @@ namespace
 			}
 			if (!writing())
 			{
-				return false; // the writer failed: the fragments already on disk are kept, and the stop reports failure
+				return false; // the writer failed, and the stop reports failure
 			}
 			[video markAsFinished];
 			[audio markAsFinished];
@@ -232,9 +243,30 @@ namespace
 			// A writer that never completes is reported failed after ten seconds.
 			if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, k_finish_wait_seconds * NSEC_PER_SEC)) != 0)
 			{
+				finish_timed_out = true;
 				return false;
 			}
 			return writer.status == AVAssetWriterStatusCompleted;
+		}
+
+		// The error's underlying OSStatus is the only clue to why a recording stopped.
+		std::string failure() const
+		{
+			if (finish_timed_out)
+			{
+				return "AVAssetWriter did not finish within " + std::to_string(k_finish_wait_seconds) + " s";
+			}
+			NSError* error = writer.error;
+			if (!error)
+			{
+				return {};
+			}
+			NSError* underlying = error.userInfo[NSUnderlyingErrorKey];
+			char text[512];
+			std::snprintf(text, sizeof(text), "AVAssetWriter status %d, %s %ld, underlying %s %ld: %s", static_cast<int>(writer.status),
+				error.domain.UTF8String, static_cast<long>(error.code), underlying ? underlying.domain.UTF8String : "none",
+				underlying ? static_cast<long>(underlying.code) : 0L, error.localizedDescription.UTF8String);
+			return text;
 		}
 	};
 
@@ -309,8 +341,6 @@ namespace armsx3::bridge
 			}
 			[state->writer addInput:state->video];
 			[state->writer addInput:state->audio];
-			// Movie fragments keep the file playable up to its last fragment if the app is killed or the writer fails.
-			state->writer.movieFragmentInterval = CMTimeMakeWithSeconds(k_fragment_seconds, 600);
 			if (![state->writer startWriting])
 			{
 				return nullptr;
@@ -344,6 +374,13 @@ namespace armsx3::bridge
 			{
 				const AVAssetWriterStatus status = state->writer.status;
 				return status == AVAssetWriterStatusFailed || status == AVAssetWriterStatusCancelled;
+			};
+			writer->failure = [state]
+			{
+				@autoreleasepool
+				{
+					return state->failure();
+				}
 			};
 			return writer;
 		}

@@ -18,14 +18,14 @@ APP = ROOT / "ios" / "app"
 RULES = APP / "Shell" / "SetupRules.swift"
 FLOW = APP / "Shell" / "SetupFlow.swift"
 FRONTEND_ROOT = APP / "Shell" / "ARMSX3FrontendRoot.swift"
-DIAGNOSTICS = ROOT / "ios" / "app" / "Diagnostics" / "DiagnosticsStore.swift"
+FILE_CPP = ROOT / "Utilities" / "File.cpp"
 VFS_CONFIG = ROOT / "rpcs3" / "Emu" / "vfs_config.h"
 SYSINFO = ROOT / "rpcs3" / "util" / "sysinfo.cpp"
 
 SAVED = (-3, 0, 1, 3, 6, 7, 8, 9)
 LAUNCH_CASES = list(itertools.product((False, True), SAVED, (False, True), (False, True)))
 STEPS = range(-1, 9)
-SUPPORT = "/AppSupport"
+DOCUMENTS = "/Documents"
 TITLES = {"continueStep": "Continue", "installFirmware": "Install Firmware", "addGameFolder": "Add Game Folder",
           "finishSetup": "Finish Setup"}
 ROUTER = ".environment(\\.menuControllerInputRouter, controllerInput)"
@@ -88,8 +88,8 @@ def driver():
     for n in STEPS:
         lines.append("print(\"next {0} \\(show(SetupRules.next({0})))\")".format(n))
         lines.append("print(\"prev {0} \\(show(SetupRules.previous({0})))\")".format(n))
-    lines.append("print(\"marker \\(SetupRules.firmwareMarker(applicationSupport: URL(fileURLWithPath: \"{0}\", "
-                 "isDirectory: true)).path)\")".format(SUPPORT))
+    lines.append("print(\"marker \\(SetupRules.firmwareMarker(documents: URL(fileURLWithPath: \"{0}\", "
+                 "isDirectory: true)).path)\")".format(DOCUMENTS))
     for raw in sorted(TITLES):
         lines.append("print(\"title {0} \\(SetupPrimary.{0}.title)\")".format(raw))
     for (folders, games, on) in sorted(FOLDER_CASES, key=str):
@@ -106,21 +106,26 @@ def driver():
     return "\n".join(lines) + "\n"
 
 
-def core_marker(diagnostics, vfs, sysinfo):
-    """The firmware marker's path under Application Support, from the three files that define it."""
+def core_marker(file_cpp, vfs, sysinfo):
+    """The firmware marker's path under Documents, from the four files that define it."""
     problems = []
-    config = re.search(r'rpcs3Dir: support\.appendingPathComponent\("([^"]+)"', diagnostics)
+    start = file_cpp.find("fs::get_config_dir(")
+    config_dir = file_cpp[start:file_cpp.find("fs::get_cache_dir(", start)] if start >= 0 else ""
+    ios_arm = re.search(r'#if TARGET_OS_IPHONE\s+(?://[^\n]*\s+)?dir = home \+ "(/Documents)"s;', config_dir)
+    config = re.search(r'dir \+= "/([^"/]+)/";', config_dir)
     dev_flash = re.search(r'cfg::string dev_flash\{ this, "/dev_flash/", "\$\(EmulatorDir\)([^"]+)" \};', vfs)
     version = re.search(r'g_cfg_vfs\.get_dev_flash\(\) \+ "([^"]+)"', sysinfo)
+    if ios_arm is None:
+        problems.append("core: Utilities/File.cpp get_config_dir no longer puts the iOS config folder in Documents")
     if config is None:
-        problems.append("core: DiagnosticsStore.swift names no rpcs3Dir under Application Support")
+        problems.append("core: Utilities/File.cpp get_config_dir names no config folder")
     if dev_flash is None:
         problems.append("core: rpcs3/Emu/vfs_config.h no longer defaults dev_flash to $(EmulatorDir)<folder>")
     if version is None:
         problems.append("core: rpcs3/util/sysinfo.cpp no longer reads get_dev_flash() + <version file>")
     if problems:
         return None, problems
-    return "{0}/{1}/{2}{3}".format(SUPPORT, config.group(1), dev_flash.group(1), version.group(1)), []
+    return "{0}/{1}/{2}{3}".format(DOCUMENTS, config.group(1), dev_flash.group(1), version.group(1)), []
 
 
 def rules_problems(out, marker):
@@ -352,7 +357,7 @@ def run(rules_text):
 
 
 def real_marker():
-    marker, problems = core_marker(read(DIAGNOSTICS), read(VFS_CONFIG), read(SYSINFO))
+    marker, problems = core_marker(read(FILE_CPP), read(VFS_CONFIG), read(SYSINFO))
     if problems:
         raise AssertionError(problems)
     return marker
@@ -457,14 +462,14 @@ class Mutations(unittest.TestCase):
 
     def test_mutation_core_the_dev_flash_default_moved(self):
         vfs = self.edited(read(VFS_CONFIG), '"$(EmulatorDir)dev_flash/"', '"$(EmulatorDir)flash/"')
-        marker, problems = core_marker(read(DIAGNOSTICS), vfs, read(SYSINFO))
+        marker, problems = core_marker(read(FILE_CPP), vfs, read(SYSINFO))
         self.caught("marker:", rules_problems(run(self.rules), marker))
         self.assertEqual(problems, [])
 
     def test_mutation_core_the_version_file_read_moved(self):
         sysinfo = self.edited(read(SYSINFO), 'g_cfg_vfs.get_dev_flash() + "vsh/etc/version.txt"',
                               'g_cfg_vfs.get_dev_flash() + std::string("vsh/etc/version.txt")')
-        self.caught("core:", core_marker(read(DIAGNOSTICS), read(VFS_CONFIG), sysinfo)[1])
+        self.caught("core:", core_marker(read(FILE_CPP), read(VFS_CONFIG), sysinfo)[1])
 
     def test_mutation_title_finish_reworded(self):
         text = self.edited(self.rules, '"Finish Setup"', '"Done"')
@@ -493,7 +498,7 @@ class Mutations(unittest.TestCase):
         self.caught("games:", games_problems(run(text)))
 
     def test_mutation_games_wiring_remember_refreshes(self):
-        anchor = 'let url = await relocated(url)\n        _ = try store.add(url)'
+        anchor = 'let url = relocated(url)\n        _ = try store.add(url)'
         text = self.edited(self.library, anchor, anchor + "\n        Task { await refresh() }")
         self.caught("games-wiring:", games_wiring_problems(text, self.flow))
 

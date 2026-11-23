@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """LibraryRelocation.swift compiled and run on the Mac host against a temporary tree: a folder picked from a
 temporary place moves into Documents/games by rename, a user folder stays, a failed move leaves the folder,
-and a clash lands in a numbered name."""
+and a clash lands in a numbered name. LibraryModel moves every such folder it adds or keeps, with no stored answer."""
 
 import json
 import tempfile
@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 
 from swiftc_host import compile_and_run
+from source_helpers import braced, scan
 from source_helpers import read_library_view as read
 
 
@@ -18,6 +19,8 @@ IOS = Path(__file__).resolve().parents[1]
 APP = IOS / "app"
 
 HELPER = APP / "Library" / "LibraryRelocation.swift"
+
+MODEL = APP / "Library" / "LibraryModel.swift"
 
 DRIVER = r"""
 import Foundation
@@ -116,6 +119,48 @@ class TheHelperHolds(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = compile_and_run([HELPER], DRIVER.replace("@@TMP@@", json.dumps(tmp)), tmp)
         self.assertEqual(EXPECTED, [line for line in out.splitlines() if line.strip()])
+
+
+def move_problems(model):
+    """Each way into the library goes through the move, and the move asks nothing stored or shown."""
+    code, _ = scan(model)
+    problems = []
+    move = braced(code, "private func moveIfTemporary(")
+    for call in ("LibraryRelocation.isTemporary(", "LibraryRelocation.relocate("):
+        if call not in move:
+            problems.append("move: moveIfTemporary does not call {0}".format(call))
+    for word in ("defaults", "await"):
+        if word in move or word in braced(code, "private func relocated("):
+            problems.append("move: the move path names {0}, so something besides the folder's place decides".format(word))
+    for opener in ("func addFolder(", "func rememberFolder("):
+        body = braced(code, opener)
+        at = body.find("relocated(url)")
+        if at < 0 or at > body.find("store.add("):
+            problems.append("move: {0} bookmarks without relocated(url) first".format(opener))
+    if braced(code, "private func migrateTemporary(").count("moveIfTemporary(") != 2:
+        problems.append("move: migrateTemporary does not move both kept folders and entries")
+    return problems
+
+
+class TheModelAlwaysMoves(unittest.TestCase):
+    def setUp(self):
+        self.model = read(MODEL)
+
+    def test_source(self):
+        self.assertEqual([], move_problems(self.model))
+
+    def edited(self, old, new):
+        self.assertEqual(1, self.model.count(old), old)
+        return self.model.replace(old, new)
+
+    def test_mutation_stored_answer(self):
+        text = self.edited("guard LibraryRelocation.isTemporary(url),",
+                           "guard LibraryRelocation.isTemporary(url), defaults.bool(forKey: \"move\"),")
+        self.assertTrue(any("names defaults" in p for p in move_problems(text)))
+
+    def test_mutation_add_skips_move(self):
+        text = self.edited("let url = relocated(url)\n        do {", "do {")
+        self.assertTrue(any("addFolder" in p for p in move_problems(text)))
 
 
 if __name__ == "__main__":

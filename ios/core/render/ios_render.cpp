@@ -413,7 +413,7 @@ namespace armsx3::ios_render
 			// Mid-frame submits and the paused RSX loop never reach the flip hold, so the core asks the same gate itself.
 			vk::g_gpu_work_refused = armsx3::ios_frame::present_gate_closed;
 
-			// iOS starts apps in /, which is not writable, and vm.cpp opens its block files by relative name, so chdir to the config directory.
+			// iOS starts apps in /, which is not writable, and vm.cpp opens its block files by relative name, so chdir to the cache directory.
 			const char* home = std::getenv("HOME");
 
 			if (home == nullptr || home[0] == '\0')
