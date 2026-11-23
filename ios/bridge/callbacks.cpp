@@ -384,6 +384,13 @@ namespace armsx3::bridge
 				{
 					if (!rpcs3::utils::install_pkg(pkg, from_optical_drive))
 					{
+						// A disc extra such as a demo is not needed to play, so a phone short on storage still boots the game.
+						if (pkg.find("/PS3_EXTRA/") != std::string::npos)
+						{
+							bridge_log.warning("on_install_pkgs: skipped disc extra %s, it did not install", pkg);
+							continue;
+						}
+
 						bridge_log.error("on_install_pkgs: failed to install %s", pkg);
 						return false;
 					}
