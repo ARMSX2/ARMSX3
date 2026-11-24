@@ -6,18 +6,35 @@ import Foundation
 import GameController
 import UIKit
 
-final class GameSirG8MFiRumble: NSObject, StreamDelegate {
+// One instance for the app: iOS opens one session per accessory and protocol, so every slot and Test Rumble share it.
+// Everything runs on the main thread: the streams are scheduled on the main run loop and the notifications arrive there.
+@MainActor final class GameSirG8MFiRumble: NSObject, StreamDelegate {
+    static let shared = GameSirG8MFiRumble()
+
     private static let accessoryProtocol = "com.xiaoji.M2boot"
     // Resend period of the active rumble packet while a motor is on.
     private static let repeatInterval: TimeInterval = 0.167253
     private static let closeDrainTimeout: TimeInterval = 0.5
-    private static let registerAccessoryNotifications: Void = {
-        EAAccessoryManager.shared().registerForLocalNotifications()
-    }()
+    // After a session fails to open or errors out, no new one is tried for this long.
+    private static let reopenDelay: TimeInterval = 1
+    private static let stopPacket = Data(RumbleMath.gameSirStopPacket)
 
-    private let stateLock = NSLock()
-    private var accessoryAvailable = false
-    private var invalidated = false
+    // How long both lists must hold exactly one G8+ before they are paired, so the two halves of one device's
+    // connect or disconnect, which arrive as separate notifications, are never paired across two devices.
+    private static let pairSettle: TimeInterval = 1
+
+    private var appActive: Bool
+    // The accessory and the controller of one G8+, paired as a unit. iOS does not say which controller is which
+    // accessory, so they are paired only while each list holds exactly one G8+, and dropped together when either
+    // half leaves. A second G8+ connecting later never moves the pair; with two and no pair, neither rumbles.
+    // Kept from the connect and disconnect notifications, so the 30 Hz poll never walks either list.
+    private var pinnedAccessory: Int?
+    private var pinnedController: ObjectIdentifier?
+    // Some G8+ accessory is connected, paired or not.
+    private var hasAccessory = false
+    private var pairWork: DispatchWorkItem?
+
+    var isConnected: Bool { pinnedAccessory != nil }
 
     private var session: EASession?
     private var inFlightPacket: Data?
@@ -26,15 +43,28 @@ final class GameSirG8MFiRumble: NSObject, StreamDelegate {
     private var lastSentPacket: Data?
     private var activePacket: Data?
     private var repeatTimer: Timer?
-    private var appActive = true
     private var closeAfterDrain = false
     private var closeTimeoutWork: DispatchWorkItem?
+    // System uptime before which openSessionIfNeeded() does not try again; 0 when it may.
+    private var reopenNotBefore: TimeInterval = 0
 
     private var hasPendingWrites: Bool { inFlightPacket != nil || queuedPacket != nil }
 
-    static var isAccessoryConnected: Bool {
-        _ = registerAccessoryNotifications
-        return matchingAccessory(in: EAAccessoryManager.shared().connectedAccessories) != nil
+    private override init() {
+        appActive = UIApplication.shared.applicationState == .active
+        super.init()
+
+        EAAccessoryManager.shared().registerForLocalNotifications()
+        let center = NotificationCenter.default
+        center.addObserver(self, selector: #selector(devicesDidChange(_:)), name: .EAAccessoryDidConnect, object: nil)
+        center.addObserver(self, selector: #selector(devicesDidChange(_:)), name: .EAAccessoryDidDisconnect, object: nil)
+        center.addObserver(self, selector: #selector(applicationWillResignActive(_:)),
+                           name: UIApplication.willResignActiveNotification, object: nil)
+        center.addObserver(self, selector: #selector(applicationDidBecomeActive(_:)),
+                           name: UIApplication.didBecomeActiveNotification, object: nil)
+        center.addObserver(self, selector: #selector(devicesDidChange(_:)), name: .GCControllerDidConnect, object: nil)
+        center.addObserver(self, selector: #selector(devicesDidChange(_:)), name: .GCControllerDidDisconnect, object: nil)
+        refreshPair()
     }
 
     static func supports(_ controller: GCController) -> Bool {
@@ -42,81 +72,43 @@ final class GameSirG8MFiRumble: NSObject, StreamDelegate {
         return name.contains("gamesir") && name.contains("g8+")
     }
 
-    override init() {
-        super.init()
-        appActive = UIApplication.shared.applicationState == .active
-
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(accessoryDidChange(_:)),
-            name: .EAAccessoryDidConnect,
-            object: nil
-        )
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(accessoryDidChange(_:)),
-            name: .EAAccessoryDidDisconnect,
-            object: nil
-        )
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(applicationWillResignActive(_:)),
-            name: UIApplication.willResignActiveNotification,
-            object: nil
-        )
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(applicationDidBecomeActive(_:)),
-            name: UIApplication.didBecomeActiveNotification,
-            object: nil
-        )
-
-        refreshAccessory()
+    /// Whether `controller` rumbles here: the paired G8+.
+    func drives(_ controller: GCController) -> Bool {
+        isConnected && pinnedController == ObjectIdentifier(controller)
     }
 
-    deinit {
-        NotificationCenter.default.removeObserver(self)
+    /// A G8+ that is not the paired one while some G8+ accessory is connected: it keeps its own haptics, if any,
+    /// but never the accessory or the phone, either of which may be in another player's hands.
+    func isSpare(_ controller: GCController) -> Bool {
+        hasAccessory && Self.supports(controller) && !drives(controller)
     }
 
+    /// False when nothing could be sent: no accessory, the app inactive, or the session would not open.
     func rumble(left: Float, right: Float) -> Bool {
-        dispatchPrecondition(condition: .onQueue(.main))
-        stateLock.lock()
-        let shouldHandle = accessoryAvailable && !invalidated
-        stateLock.unlock()
-        guard shouldHandle, appActive, openSessionIfNeeded() else { return false }
-        send(left: left, right: right)
+        guard isConnected, appActive, openSessionIfNeeded() else { return false }
+
+        let packet = Data(RumbleMath.gameSirPacket(left: left, right: right))
+        let isStop = packet == Self.stopPacket
+        if isStop {
+            activePacket = nil
+            stopRepeatTimer()
+        } else {
+            activePacket = packet
+            startRepeatTimer()
+        }
+        queuePacket(packet, force: isStop)
         return true
     }
 
     func stop() {
-        if Thread.isMainThread {
-            stopRumble()
-        } else {
-            DispatchQueue.main.async { [weak self] in self?.stopRumble() }
-        }
+        guard activePacket != nil || repeatTimer != nil else { return }
+        activePacket = nil
+        stopRepeatTimer()
+        queuePacket(Self.stopPacket, force: true)
     }
 
-    func invalidate() {
-        stateLock.lock()
-        invalidated = true
-        accessoryAvailable = false
-        stateLock.unlock()
-
-        if Thread.isMainThread {
-            stopAndClose()
-        } else {
-            DispatchQueue.main.async { [self] in stopAndClose() }
-        }
-    }
-
-    private var isInvalidated: Bool {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        return invalidated
-    }
-
-    private static func matchingAccessory(in accessories: [EAAccessory]) -> EAAccessory? {
-        accessories.first { accessory in
+    private static func matchingAccessories() -> [EAAccessory] {
+        EAAccessoryManager.shared().connectedAccessories.filter { accessory in
             accessory.isConnected &&
                 accessory.manufacturer.caseInsensitiveCompare("GameSir") == .orderedSame &&
                 accessory.modelNumber.caseInsensitiveCompare("G8+ MFi") == .orderedSame &&
@@ -124,12 +116,18 @@ final class GameSirG8MFiRumble: NSObject, StreamDelegate {
         }
     }
 
-    private func matchingAccessory() -> EAAccessory? {
-        Self.matchingAccessory(in: EAAccessoryManager.shared().connectedAccessories)
+    // Only the pinned accessory: a reopen after an error never moves the session to a second G8+.
+    private func pinnedMatchingAccessory() -> EAAccessory? {
+        guard let pinnedAccessory else { return nil }
+        return Self.matchingAccessories().first { $0.connectionID == pinnedAccessory }
     }
 
-    @objc private func accessoryDidChange(_ notification: Notification) {
-        refreshAccessory()
+    private static func matchingControllers() -> [ObjectIdentifier] {
+        GCController.controllers().filter(supports).map(ObjectIdentifier.init)
+    }
+
+    @objc private func devicesDidChange(_ notification: Notification) {
+        refreshPair()
     }
 
     @objc private func applicationWillResignActive(_ notification: Notification) {
@@ -139,45 +137,66 @@ final class GameSirG8MFiRumble: NSObject, StreamDelegate {
 
     @objc private func applicationDidBecomeActive(_ notification: Notification) {
         appActive = true
-        refreshAccessory()
+        // Back within the drain timeout: the session the resign was closing stays open for the next rumble.
+        closeAfterDrain = false
+        closeTimeoutWork?.cancel()
+        closeTimeoutWork = nil
+        refreshPair()
     }
 
-    private func refreshAccessory() {
-        dispatchPrecondition(condition: .onQueue(.main))
-        guard !isInvalidated else { return }
-
-        let available = matchingAccessory() != nil
-        stateLock.lock()
-        accessoryAvailable = available
-        stateLock.unlock()
-
-        if !available {
+    // A pair whose two halves are still connected stays, so a second G8+ connecting or leaving never touches its
+    // session. Otherwise the pair, and its session, go, and a new one is tried once the lists settle.
+    private func refreshPair() {
+        let accessories = Self.matchingAccessories()
+        hasAccessory = !accessories.isEmpty
+        // A connect or a return to the foreground may open at once, whatever failed before.
+        reopenNotBefore = 0
+        if let pinnedAccessory, let pinnedController {
+            if accessories.contains(where: { $0.connectionID == pinnedAccessory }),
+               Self.matchingControllers().contains(pinnedController) {
+                return
+            }
+            // Both halves go together, so the half left behind is never paired with another G8+.
+            self.pinnedAccessory = nil
+            self.pinnedController = nil
             stopAndClose(drain: false)
         }
+        schedulePair()
     }
 
-    private func send(left: Float, right: Float) {
-        dispatchPrecondition(condition: .onQueue(.main))
-        guard !isInvalidated, appActive else { return }
-
-        let packet = Data(RumbleMath.gameSirPacket(left: left, right: right))
-        if packet == Data(RumbleMath.gameSirStopPacket) {
-            activePacket = nil
-            stopRepeatTimer()
-        } else {
-            activePacket = packet
-            startRepeatTimer()
+    // Each change restarts the wait, so the pair is made only after the lists stop changing.
+    private func schedulePair() {
+        pairWork?.cancel()
+        let work = DispatchWorkItem {
+            MainActor.assumeIsolated { GameSirG8MFiRumble.shared.pairIfUnambiguous() }
         }
-        queuePacket(packet, force: packet == Data(RumbleMath.gameSirStopPacket))
+        pairWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.pairSettle, execute: work)
     }
 
+    // Exactly one G8+ accessory and one G8+ controller can only be the same device; anything else stays unpaired.
+    private func pairIfUnambiguous() {
+        pairWork = nil
+        guard pinnedAccessory == nil else { return }
+        let accessories = Self.matchingAccessories()
+        let controllers = Self.matchingControllers()
+        hasAccessory = !accessories.isEmpty
+        guard accessories.count == 1, controllers.count == 1 else { return }
+        pinnedAccessory = accessories[0].connectionID
+        pinnedController = controllers[0]
+        reopenNotBefore = 0
+    }
+
+    // A failure waits `reopenDelay`, so the 30 Hz poll and the repeat timer never retry the open every tick.
     private func openSessionIfNeeded() -> Bool {
         if session != nil { return true }
+        guard ProcessInfo.processInfo.systemUptime >= reopenNotBefore else { return false }
 
-        guard let accessory = matchingAccessory(),
+        guard let accessory = pinnedMatchingAccessory(),
               let newSession = EASession(accessory: accessory, forProtocol: Self.accessoryProtocol),
               let inputStream = newSession.inputStream,
               let outputStream = newSession.outputStream else {
+            deferReopen()
             return false
         }
 
@@ -229,6 +248,7 @@ final class GameSirG8MFiRumble: NSObject, StreamDelegate {
             guard written > 0 else {
                 if written < 0 {
                     closeSession()
+                    deferReopen()
                 }
                 return
             }
@@ -249,9 +269,12 @@ final class GameSirG8MFiRumble: NSObject, StreamDelegate {
 
     private func startRepeatTimer() {
         repeatTimer?.invalidate()
-        let timer = Timer(timeInterval: Self.repeatInterval, repeats: true) { [weak self] _ in
-            guard let self, let activePacket = self.activePacket, !self.isInvalidated else { return }
-            self.queuePacket(activePacket, force: true)
+        let timer = Timer(timeInterval: Self.repeatInterval, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                let rumble = GameSirG8MFiRumble.shared
+                guard let packet = rumble.activePacket else { return }
+                rumble.queuePacket(packet, force: true)
+            }
         }
         repeatTimer = timer
         RunLoop.main.add(timer, forMode: .common)
@@ -262,15 +285,7 @@ final class GameSirG8MFiRumble: NSObject, StreamDelegate {
         repeatTimer = nil
     }
 
-    private func stopRumble() {
-        guard activePacket != nil || repeatTimer != nil else { return }
-        activePacket = nil
-        stopRepeatTimer()
-        queuePacket(Data(RumbleMath.gameSirStopPacket), force: true)
-    }
-
     private func stopAndClose(drain: Bool = true) {
-        dispatchPrecondition(condition: .onQueue(.main))
         let wasActive = activePacket != nil || repeatTimer != nil
         activePacket = nil
         stopRepeatTimer()
@@ -285,7 +300,7 @@ final class GameSirG8MFiRumble: NSObject, StreamDelegate {
         // keep the session open until the pending writes drain.
         closeAfterDrain = true
         if wasActive {
-            queuePacket(Data(RumbleMath.gameSirStopPacket), force: true)
+            queuePacket(Self.stopPacket, force: true)
         } else {
             flushOutput()
         }
@@ -293,7 +308,9 @@ final class GameSirG8MFiRumble: NSObject, StreamDelegate {
 
         // Close anyway if the stream never drains.
         closeTimeoutWork?.cancel()
-        let work = DispatchWorkItem { [self] in closeSession() }
+        let work = DispatchWorkItem {
+            MainActor.assumeIsolated { GameSirG8MFiRumble.shared.closeSession() }
+        }
         closeTimeoutWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.closeDrainTimeout, execute: work)
     }
@@ -317,7 +334,12 @@ final class GameSirG8MFiRumble: NSObject, StreamDelegate {
         lastSentPacket = nil
     }
 
-    func stream(_ stream: Stream, handle eventCode: Stream.Event) {
+    // The streams are scheduled on the main run loop, so their events arrive on the main thread.
+    nonisolated func stream(_ stream: Stream, handle eventCode: Stream.Event) {
+        MainActor.assumeIsolated { handle(stream, eventCode) }
+    }
+
+    private func handle(_ stream: Stream, _ eventCode: Stream.Event) {
         guard let session else { return }
 
         if stream === session.inputStream {
@@ -335,6 +357,11 @@ final class GameSirG8MFiRumble: NSObject, StreamDelegate {
 
         if eventCode.contains(.errorOccurred) || eventCode.contains(.endEncountered) {
             closeSession()
+            deferReopen()
         }
+    }
+
+    private func deferReopen() {
+        reopenNotBefore = ProcessInfo.processInfo.systemUptime + Self.reopenDelay
     }
 }
