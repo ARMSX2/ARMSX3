@@ -196,6 +196,11 @@ namespace vk
 #else
 			for (auto&& job : m_work_queue.pop_all())
 			{
+				if (thread_ctrl::state() == thread_state::aborting)
+				{
+					break;
+				}
+
 #endif
 				if (!job.is_graphics_job)
 				{
@@ -694,6 +699,16 @@ namespace vk
 
 			rsx_log.notice("Async pipeline compiler stopping with %u job(s) pending; queued jobs are dropped, "
 				"the ones compiling finish.", pending);
+		}
+
+#else
+		if (g_pipe_compilers)
+		{
+			// Abort all workers first, otherwise each worker is only aborted when it is joined, while the others keep compiling.
+			for (auto& thread : *g_pipe_compilers)
+			{
+				thread = thread_state::aborting;
+			}
 		}
 
 #endif
