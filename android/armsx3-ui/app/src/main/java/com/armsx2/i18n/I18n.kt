@@ -1342,7 +1342,7 @@ val EN: Map<String, String> = mapOf(
     "pad.onScreenControls.label" to "On-screen controls",
     "pad.assign.auto" to "Auto",
     "pad.usbTakeover.label" to "Direct USB control (PlayStation pads)",
-    "pad.usbTakeover.description" to "For a DualSense or DualShock 4 connected by cable. Talks to the controller directly instead of going through Android, which is the only way to reach its rumble motors on devices where the system vibration does nothing. Also gives you real analog triggers. The controller is driven entirely by this while it is on, so its layout is fixed and your custom bindings do not apply. Unplug and replug the pad after switching this off.",
+    "pad.usbTakeover.description" to "With a DualShock 3 connected over USB, PS3 games that read button pressure respond to how hard you press, as on a real PS3. With a wired DualShock 4 or DualSense, direct USB control handles analog triggers and rumble. After turning it off, unplug and reconnect the controller.",
     "pad.assign.rumble" to "rumble",
     "pad.assign.rumble.controller" to "Controller",
     "pad.assign.rumble.device" to "Handheld",

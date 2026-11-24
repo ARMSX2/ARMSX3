@@ -1811,8 +1811,12 @@ object Rpcs3Bridge {
         val label: String,
         private val motors: List<Vibrator> = emptyList(),
         private val usb: com.armsx2.input.UsbRumble.Pad? = null,
+        // The port whose DualShock 3s the USB takeover drives (UsbRumble.rumbleDualShock3), or -1.
+        private val ds3Port: Int = -1,
+        // What else plays as that player and rumbles with them ("All controllers play as Player 1").
+        private val also: RumbleTarget? = null,
     ) {
-        val motorCount get() = if (usb != null) 2 else motors.size
+        val motorCount get() = if (usb != null || ds3Port >= 0) 2 else motors.size
 
         /** Motor levels, 0..255, as the guest asked for them, scaled by the strength setting. */
         fun play(large: Int, small: Int) {
@@ -1827,6 +1831,11 @@ object Rpcs3Bridge {
             if (usb != null) {
                 // A real pad with two real motors: pass both through rather than flattening them.
                 usb.rumble(l, s)
+                return
+            }
+            if (ds3Port >= 0) {
+                com.armsx2.input.UsbRumble.rumbleDualShock3(ds3Port, l, s)
+                also?.play(large, small)
                 return
             }
             // One vibrator, two motors: take the stronger. The small motor is the high-frequency
@@ -1845,11 +1854,17 @@ object Rpcs3Bridge {
         fun cancel() {
             val port = usb
             if (port != null) { runCatching { port.stop() }; return }
+            if (ds3Port >= 0) {
+                runCatching { com.armsx2.input.UsbRumble.rumbleDualShock3(ds3Port, 0, 0) }
+                also?.cancel()
+                return
+            }
             motors.forEach { runCatching { it.cancel() } }
         }
 
         fun sameAs(other: RumbleTarget?): Boolean =
-            other != null && other.motors == motors && other.usb === usb
+            other != null && other.motors == motors && other.usb === usb && other.ds3Port == ds3Port &&
+                (if (also == null) other.also == null else also.sameAs(other.also))
     }
 
     /** Low volume by design: only resolution changes and explicit tests are logged, never the
@@ -2001,7 +2016,20 @@ object Rpcs3Bridge {
      * mid-session. Callers only ask when the motor state changes, so enumerating devices is not a
      * per-frame cost.
      */
-    private fun vibrator(port: Int = 0): RumbleTarget? = vibratorFor(deviceForPort(port), handheld = port == 0)
+    private fun vibrator(port: Int = 0): RumbleTarget? {
+        // A DualShock 3 the USB takeover drives has no Android device to look up: it is found by
+        // the port it plays as, and no other controller rumbles for that player, except under "All
+        // controllers play as Player 1", where the player's other pads rumble with it.
+        if (com.armsx2.input.UsbRumble.drivesDualShock3(port)) {
+            val others = if (PadRouter.allToPlayer1) vibratorFor(deviceForPort(port), handheld = port == 0) else null
+            return RumbleTarget(
+                "DualShock 3 (USB)" + (others?.let { " and ${it.label}" } ?: ""),
+                ds3Port = port,
+                also = others,
+            )
+        }
+        return vibratorFor(deviceForPort(port), handheld = port == 0)
+    }
 
     /** [vibrator] for a given controller. [handheld]: this device's own motor may stand in. */
     private fun vibratorFor(dev: android.view.InputDevice?, handheld: Boolean): RumbleTarget? {
@@ -2108,7 +2136,9 @@ object Rpcs3Bridge {
                     // Port 0 is always polled: touch controls and a pad yet to send its first
                     // event both play as player 1. Higher ports only once a pad has claimed
                     // them, so a single-player session does not poll seven ports for silence.
-                    if (port != 0 && PadRouter.deviceIdForPort(port) < 0) continue
+                    if (port != 0 && PadRouter.deviceIdForPort(port) < 0 &&
+                        !com.armsx2.input.UsbRumble.drivesDualShock3(port)
+                    ) continue
 
                     val packed = runCatching { ARMSX3.instance.getPadRumble(port) }.getOrDefault(0)
                     val large = (packed shr 8) and 0xFF
@@ -2198,6 +2228,7 @@ object Rpcs3Bridge {
         val onPad = controllerVibrator(port) != null
         return when {
             !rumbleEnabled -> "Vibration is switched off in settings"
+            com.armsx2.input.UsbRumble.drivesDualShock3(port) -> "Rumble sent to ${vib?.label ?: "DualShock 3 (USB)"}"
             vib == null ->
                 if (PadRouter.deviceIdForPort(port) >= 0)
                     "Player ${port + 1}'s controller exposes no vibration motor to Android"

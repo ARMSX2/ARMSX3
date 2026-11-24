@@ -333,10 +333,14 @@ fun PadTab(state: MutableState<Settings>) {
                         },
                     )
                 }
-                // Taking the pad over on USB is the only way to reach a PlayStation controller's
-                // motors when the platform's own vibrator for it does nothing. It claims the
-                // pad's single HID interface, so input has to come through us too -- which is
-                // why it is a switch and not something done quietly on the user's behalf.
+            }
+            // Taking the pad over on USB is the only way to reach a PlayStation controller's
+            // motors when the platform's own vibrator for it does nothing, and a DualShock 3's
+            // button pressure. It claims the pad's single HID interface, so input has to come
+            // through us too -- which is why it is a switch and not something done quietly on the
+            // user's behalf. Shown while it is on even with no controller listed: a DualShock 3 it
+            // drives has no Android input device left, and the switch is how to give it back.
+            if (pads.isNotEmpty() || com.armsx2.input.UsbRumble.takeover) {
                 ToggleRow(
                     str("pad.usbTakeover.label"),
                     com.armsx2.input.UsbRumble.takeover,

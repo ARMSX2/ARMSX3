@@ -28,6 +28,8 @@ object PadRouter {
     const val MAX_PADS = 7
 
     private val slots = IntArray(MAX_PADS) { -1 }
+    // Ports a DualShock 3 driven straight over USB holds, as bits (see reserveDirectUsbSlot).
+    @Volatile private var directUsbSlots = 0
     @Volatile private var pad2Enabled = false
 
     /**
@@ -70,6 +72,8 @@ object PadRouter {
     private const val KEY_ALL_P1 = "pad_router_all_p1"
 
     fun setAllToPlayer1(on: Boolean) {
+        // Pads delivered over USB change player with this: let go of what they hold first.
+        UsbPadInput.resetAll()
         allToPlayer1 = on
         reset()
         com.armsx2.runtime.MainActivityRuntime.prefs.edit().putBoolean(KEY_ALL_P1, on).apply()
@@ -261,17 +265,51 @@ object PadRouter {
      * into the `deviceId < 0` case below and always play as player 1, silently ignoring the slot
      * the user pinned -- which is the one thing the pin exists to control.
      */
-    @Volatile private var syntheticDeviceId: Int = 0
-    @Volatile private var syntheticPort: Int = 0
+    @Volatile private var syntheticPads: Map<Int, Int> = emptyMap()
 
     fun setSyntheticPad(deviceId: Int, port: Int) {
-        syntheticDeviceId = deviceId
-        syntheticPort = port.coerceIn(0, MAX_PADS - 1)
+        syntheticPads = syntheticPads + (deviceId to port.coerceIn(0, MAX_PADS - 1))
     }
 
-    fun clearSyntheticPad() {
-        syntheticDeviceId = 0
+    fun clearSyntheticPad(deviceId: Int) {
+        syntheticPads = syntheticPads - deviceId
     }
+
+    fun hasDirectUsbPad(port: Int): Boolean = directUsbSlots and (1 shl port) != 0
+
+    fun directUsbPadCount(): Int = Integer.bitCount(directUsbSlots)
+
+    /**
+     * The next port for a DualShock 3 driven straight over USB, held for it until
+     * [releaseDirectUsbSlot], or null when none is free. [candidates] are the pad's own Android
+     * nodes, whose claims and pins it may take over. The reservations outlive VM resets: the USB
+     * connections stay open across games.
+     */
+    fun reserveDirectUsbSlot(candidates: List<Pad>): Int? {
+        val connected = connectedPads()
+        val available = (0 until MAX_PADS).filter { port ->
+            !hasDirectUsbPad(port) && (port !in syntheticPads.values)
+        }
+        val port = available.firstOrNull { port ->
+            val assigned = slots[port]
+            val reservedByOther = connected.any { pad ->
+                pinned[pad.descriptor] == port && candidates.none { it.deviceId == pad.deviceId }
+            }
+            !reservedByOther &&
+                (assigned == -1 || InputDevice.getDevice(assigned) == null ||
+                    candidates.any { it.deviceId == assigned })
+        } ?: return null
+        directUsbSlots = directUsbSlots or (1 shl port)
+        return port
+    }
+
+    fun releaseDirectUsbSlot(port: Int) {
+        directUsbSlots = directUsbSlots and (1 shl port).inv()
+    }
+
+    /** Where a pad taken over on USB plays when no pin says otherwise. */
+    fun defaultSyntheticPort(): Int =
+        if (allToPlayer1) 0 else (0 until MAX_PADS).firstOrNull { !hasDirectUsbPad(it) } ?: 0
 
     /**
      * The port [deviceId] already holds, or -1. Never claims one, unlike [portForDevice]: a
@@ -279,10 +317,10 @@ object PadRouter {
      */
     fun claimedPort(deviceId: Int): Int {
         if (allToPlayer1) {
-            val ours = deviceId >= 0 || (deviceId != 0 && deviceId == syntheticDeviceId)
+            val ours = deviceId >= 0 || syntheticPads.containsKey(deviceId)
             return if (ours) 0 else -1
         }
-        if (deviceId != 0 && deviceId == syntheticDeviceId) return syntheticPort
+        syntheticPads[deviceId]?.let { return it }
         for (i in slots.indices) if (slots[i] == deviceId) return i
         // Another controller pressed last on a player this one shares: it still holds that port.
         val descriptor = descriptorOf(deviceId) ?: return -1
@@ -301,7 +339,11 @@ object PadRouter {
             }
             return 0
         }
-        if (deviceId != 0 && deviceId == syntheticDeviceId) return syntheticPort
+        // A pad delivered over USB (the takeover's synthetic ids) belongs to the port it was given.
+        syntheticPads[deviceId]?.let { port ->
+            if (port == 1 && !pad2Enabled) { pad2Enabled = true; onPlayer2Joined?.invoke() }
+            return port
+        }
         if (deviceId < 0) return 0
         // Fast path: already-claimed nodes (no InputDevice lookup).
         for (i in slots.indices) if (slots[i] == deviceId) return i
@@ -338,7 +380,7 @@ object PadRouter {
         for (i in 0 until maxSlots) {
             // A pinned slot belongs to its controller even while that controller is away;
             // handing it to the next pad to press a button is what the pin exists to prevent.
-            if (pinned.containsValue(i)) continue
+            if (pinned.containsValue(i) || hasDirectUsbPad(i)) continue
             if (slots[i] == -1) {
                 slots[i] = deviceId
                 if (i == 1 && !pad2Enabled) { pad2Enabled = true; onPlayer2Joined?.invoke() }

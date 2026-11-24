@@ -2369,7 +2369,7 @@ open class MainActivityRuntime : ComponentActivity() {
         }
     }
 
-    fun sendKeyAction(p_action: KeyEventType, p_keycode_in: Int, port: Int = 0, fromController: Boolean = true) {
+    fun sendKeyAction(p_action: KeyEventType, p_keycode_in: Int, port: Int = 0, fromController: Boolean = true, pressure: Int? = null) {
         // Any physical gamepad key event implies the user is on a
         // controller — latch the on-screen touch controls hidden until a
         // screen press flips them back on. Idempotent. Not for the phone's own volume keys
@@ -2416,6 +2416,8 @@ open class MainActivityRuntime : ComponentActivity() {
                 // buttons while the modifier is held; 0 (full press) otherwise.
                 pad_force = com.armsx2.ui.touch.TouchControls.pressureRangeFor(p_keycode)
             }
+            // A DualShock 3 driven over USB says how hard each button is pressed (UsbPadInput).
+            if (pressure != null) pad_force = com.armsx2.input.UsbPadInput.pressureRange(pressure)
             // Track for the LIVE pressure modifier (see TouchControls.notePressureKeyState).
             com.armsx2.ui.touch.TouchControls.notePressureKeyState(port, p_keycode, true)
             NativeApp.setPadButtonForPort(port, p_keycode, pad_force, true)
@@ -3825,6 +3827,41 @@ open class MainActivityRuntime : ComponentActivity() {
         return super.dispatchKeyEvent(event)
     }
 
+    /** Buttons of a pad delivered over USB whose press reached the pad with a pressure, keyed
+     *  (deviceId << 32 | keyCode), and the (port, target) it went to: a pressure change while the
+     *  button stays held is sent as the same press again (updateUsbButtonPressure). Main thread. */
+    private val usbPressureTargets = HashMap<Long, Pair<Int, Int>>()
+
+    /**
+     * A DualShock 3 button's pressure changed while it stays held: the press is sent again with the
+     * new pressure. Continuous pressure has no key edge, so it never fires a hotkey, macro, turbo or
+     * menu action, only a plain gameplay press that is still mapped where it went.
+     */
+    fun updateUsbButtonPressure(deviceId: Int, keyCode: Int) {
+        if (eState.value != EmuState.RUNNING || controllerDrivesFrontend()) return
+        val key = (deviceId.toLong() shl 32) or (keyCode.toLong() and 0xffffffffL)
+        val (port, target) = usbPressureTargets[key] ?: return
+        if (com.armsx2.input.PadRouter.portForDevice(deviceId) != port ||
+            ControllerMappings.targetForPhysical(keyCode, port) != target ||
+            ControllerMappings.isTurboTarget(target, port) ||
+            com.armsx2.ui.touch.TouchControls.macroForPhysicalCode(keyCode) != null
+        ) return
+        val pressure = com.armsx2.input.UsbPadInput.pressureFor(deviceId, keyCode) ?: return
+        sendKeyAction(KeyEventType.KeyDown, target, port, pressure = pressure)
+    }
+
+    /** A pad delivered over USB went away: let go of the stick and D-pad state on its port too, as
+     *  its key releases may have come while a menu had the controller. */
+    fun releaseUsbPadInput(deviceId: Int) {
+        val port = com.armsx2.input.PadRouter.portForDevice(deviceId)
+        usbPressureTargets.keys.removeAll { (it shr 32).toInt() == deviceId }
+        if (port !in analogPrevSent.indices) return
+        analogPrevSent[port].keys.toList().forEach { NativeApp.setPadButtonForPort(port, it, 0, false) }
+        analogPrevSent[port].clear()
+        dpadOwnHeld[port].forEach { NativeApp.setPadButtonForPort(port, it, 0, false) }
+        dpadOwnHeld[port].clear()
+    }
+
     /** Route one gameplay key edge directly from Activity dispatch to the native pad. */
     private fun dispatchGameplayKey(event: KeyEvent): Boolean {
         if (eState.value != EmuState.RUNNING || controllerDrivesFrontend()) return false
@@ -3834,6 +3871,9 @@ open class MainActivityRuntime : ComponentActivity() {
             else -> return false
         }
         val physicalCode = event.keyCode
+        // Every edge ends the pressure updates of the press before it (updateUsbButtonPressure).
+        val usbKey = (event.deviceId.toLong() shl 32) or (physicalCode.toLong() and 0xffffffffL)
+        usbPressureTargets.remove(usbKey)
         if (physicalCode == KeyEvent.KEYCODE_UNKNOWN) return false
 
         // A trigger that reports BOTH ways gets written by both paths, and they fight.
@@ -3882,7 +3922,10 @@ open class MainActivityRuntime : ComponentActivity() {
         if (ControllerMappings.isTurboTarget(target, port)) {
             handleTurbo(physicalCode, type, target, port)
         } else {
-            sendKeyAction(type, target, port, fromController)
+            // A DualShock 3 on USB: the press carries how hard the button is pressed.
+            val pressure = com.armsx2.input.UsbPadInput.pressureFor(event.deviceId, physicalCode)
+            if (pressure != null && type == KeyEventType.KeyDown) usbPressureTargets[usbKey] = port to target
+            sendKeyAction(type, target, port, fromController, pressure)
         }
         return true
     }
@@ -5531,6 +5574,8 @@ open class MainActivityRuntime : ComponentActivity() {
      *  binder call and motion events arrive far too often to query per event, hence the cache. */
     private val axisPresenceCache = HashMap<Long, Boolean>()
     private fun deviceHasAxis(deviceId: Int, axis: Int): Boolean {
+        // A pad delivered over USB has no InputDevice to ask: it says which axes it sends.
+        com.armsx2.input.UsbPadInput.hasAxis(deviceId, axis)?.let { return it }
         if (axis < 0) return false
         return axisPresenceCache.getOrPut((deviceId.toLong() shl 32) or (axis.toLong() and 0xffffffffL)) {
             runCatching { InputDevice.getDevice(deviceId)?.getMotionRange(axis) }.getOrNull() != null
