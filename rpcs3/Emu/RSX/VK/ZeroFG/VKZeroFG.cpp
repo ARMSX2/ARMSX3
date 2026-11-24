@@ -6,6 +6,7 @@
 // (settings through SetUserSettings, logging into RPCS3's log, the timer). ImGui's overlay is gone,
 // and ZeroGS's HUD handoff carries RPCS3's overlays instead: drawn on A over black and over white
 // (GameFrame::overlay), apart from the game's image, and laid over every output by the Post.
+// Feature contributed by hy300leosquizz-ctrl (PR #331).
 
 #include "Emu/RSX/VK/ZeroFG/VKZeroFG.h"
 

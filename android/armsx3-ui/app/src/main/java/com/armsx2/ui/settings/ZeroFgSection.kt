@@ -8,6 +8,7 @@ import com.armsx2.i18n.str
  * ZeroFG frame generation, above the experimental (Lossless Scaling) one: Off, or the frames on
  * screen per game frame. It is its own frame generator on its own Vulkan device and needs nothing
  * imported, so it is in every build. While it is on, Lossless Scaling's frame generation stays off.
+ * Feature contributed by hy300leosquizz-ctrl (PR #331).
  */
 @Composable
 internal fun ZeroFgSection(s: Settings, apply: (Settings) -> Unit) {

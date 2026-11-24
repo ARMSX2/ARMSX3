@@ -71,6 +71,9 @@ internal val SETTINGS_SEARCH_INDEX: List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry("adv.accurateSpuRsv.label", true, SettingsCategory.Performance),
     SettingsSearchEntry("adv.accurateCacheLine.label", true, SettingsCategory.Performance),
     SettingsSearchEntry("adv.xfloat.label", true, SettingsCategory.Performance),
+    // ZeroFgSection (ZeroFgSection.kt, which the generator does not read).
+    SettingsSearchEntry("perf.zerofg.title", true, SettingsCategory.Performance),
+    SettingsSearchEntry("perf.zerofg.label", true, SettingsCategory.Performance),
     SettingsSearchEntry("perf.caches.title", true, SettingsCategory.Performance),
     SettingsSearchEntry("renderer.section.displayResolution", true, SettingsCategory.Graphics),
     SettingsSearchEntry("renderer.upscale.label", true, SettingsCategory.Graphics),
