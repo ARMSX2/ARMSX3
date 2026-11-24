@@ -55,8 +55,17 @@ namespace rsx
 			fade_animation.duration_sec = 0.15f;
 
 			btn_hold_to_skip.set_size(30, 30);
-			btn_hold_to_skip.set_pos(625, 640);
+			btn_hold_to_skip.set_font(16);
+			// ARMSX3: the text itself, not upstream's new localized_string_id. That enum is in a header the
+			// SPU compiler includes, so a new id changes the SPU object cache key and every game's compiled
+			// SPU code would be rebuilt. Android's overlay text is English only anyway.
+			btn_hold_to_skip.set_text("Hold to skip");
 			btn_hold_to_skip.set_image_resource(resource_config::confirm_button_resource());
+
+			// Center the icon and its label horizontally.
+			u16 text_w = 0, text_h = 0;
+			btn_hold_to_skip.measure_text(text_w, text_h);
+			btn_hold_to_skip.set_pos(static_cast<s16>((virtual_width - (40 + text_w)) / 2), 640);
 
 			update_custom_background();
 
