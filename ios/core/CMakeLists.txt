@@ -86,3 +86,11 @@ set_property(SOURCE "${CMAKE_SOURCE_DIR}/rpcs3/Emu/Cell/SPUCommonRecompiler.cpp"
 
 # The remote play counters and Cardboard VR flag VKPresent.cpp reads, zero and off.
 target_sources(rpcs3_emu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ios_remote_play_globals.cpp)
+
+# ZeroFG's adapter, which the Vulkan renderer calls with no #ifdef of its own. Built without the engine
+# (no ARMSX3_HAS_ZEROFG), every entry point is a no-op stub, as on any build that leaves ZeroFG out.
+set(_armsx3_zerofg_adapter "${CMAKE_SOURCE_DIR}/rpcs3/Emu/RSX/VK/ZeroFG/VKZeroFG.cpp")
+target_sources(rpcs3_emu PRIVATE "${_armsx3_zerofg_adapter}")
+set_source_files_properties("${_armsx3_zerofg_adapter}"
+    TARGET_DIRECTORY rpcs3_emu
+    PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
