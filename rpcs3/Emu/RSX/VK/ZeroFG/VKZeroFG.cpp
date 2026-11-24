@@ -189,6 +189,8 @@ namespace VKZeroFG
 		constexpr uint64_t SYNTHETIC_COST_SEED_NS = 8000000ull;
 		// Presenters replaced after giving the window back, per device, before the GS device keeps it.
 		constexpr u32 MAX_FAIL_OPENS = 3;
+		// Out-of-date surfaces replaced without counting as failures, per device (see FailOpen).
+		constexpr u32 MAX_SURFACE_REBUILDS = 50;
 
 		uint64_t NowNs()
 		{
@@ -511,6 +513,10 @@ namespace VKZeroFG
 			// MAX_FAIL_OPENS times per device; past that the GS device keeps the window.
 			u32 fail_opens = 0;
 			bool failed_open = false;
+			// Windows given back because the surface went out of date under device B (the app sent to
+			// the background and back, a rotation): not failures, but counted apart so a surface that
+			// goes out of date on every connection cannot rebuild forever.
+			u32 surface_rebuilds = 0;
 			// The size frames are generated at, fixed for a connection: the presenter treats any change
 			// of it as a structural break and fails open. Zero until the first frame of the connection.
 			VkExtent2D generation_extent = {};
@@ -602,6 +608,7 @@ namespace VKZeroFG
 			// them use the devices below.
 			TeardownHostLocked();
 			s.fail_opens = 0;
+			s.surface_rebuilds = 0;
 			{
 				std::unique_lock overlay_lock(s_overlay_mutex);
 				s_overlay.reset();
@@ -3198,18 +3205,30 @@ namespace VKZeroFG
 	{
 		std::unique_lock lock(s_mutex);
 		State& s = s_state;
+		// The surface went out of date under device B while the presenter still held the output: the
+		// presenter's own "not an MSA failure, reconnect". The app going to the background and back
+		// does this, and counted as a failure it turned ZeroFG off for the session the fourth time.
+		const bool outdated = s.presenter && s.presenter->main_surface_reconnect_requested() &&
+			s.presenter->owns_final_output() && ++s.surface_rebuilds <= MAX_SURFACE_REBUILDS;
 		DisconnectSurfaceLocked();
 		// The presenter that handed the window back refuses it from now on: a new one takes the next
 		// connection, until the device has failed open too often.
 		s.presenter.reset();
 		std::string why;
-		if (++s.fail_opens > MAX_FAIL_OPENS || !CreatePresenterLocked(&why))
+		if ((!outdated && ++s.fail_opens > MAX_FAIL_OPENS) || !CreatePresenterLocked(&why))
 		{
 			s.failed_open = true;
 			s.status = "ZeroFG: failed open, the GS presents alone";
 			WARNING_LOG("ZeroFG: the presenter gave the window back (fail-open {}, limit {}{}); the GS device presents "
 						"for the rest of this session.",
 				s.fail_opens, MAX_FAIL_OPENS, why.empty() ? std::string() : fmt::format(", {}", why));
+			return;
+		}
+		if (outdated)
+		{
+			INFO_LOG("ZeroFG: the surface went out of date under device B (rebuild {}, limit {}); a new presenter takes "
+					 "the next connection.",
+				s.surface_rebuilds, MAX_SURFACE_REBUILDS);
 			return;
 		}
 		s.status = "ZeroFG: failed open, rearmed";
