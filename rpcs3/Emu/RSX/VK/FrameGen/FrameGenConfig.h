@@ -16,7 +16,7 @@ namespace vk::lsfg
 {
 	inline bool enabled()
 	{
-		return g_cfg.video.frame_generation != frame_generation_mode::off;
+		return lsfg_wanted();
 	}
 
 	/// How many frames to show per rendered one. PCSX2 stored this directly; RPCS3 stores a mode.

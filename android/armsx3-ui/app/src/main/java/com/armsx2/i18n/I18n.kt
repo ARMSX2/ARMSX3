@@ -2200,4 +2200,4 @@ val EN: Map<String, String> = mapOf(
     "touch.stateAction.screenshot" to "SHOT",
     "perf.framegenPlay.title" to "Frame Generation",
     "perf.framegenPlay.note" to "Frame generation is available in the GitHub version of ARMSX3.",
-) + FRAME_GEN_STRINGS
+) + FRAME_GEN_STRINGS + ZEROFG_STRINGS

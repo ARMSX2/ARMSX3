@@ -161,8 +161,86 @@ namespace vk
 				_vkDestroySwapchainKHR(pdev, m_vk_swapchain, nullptr);
 			}
 
+			release_offscreen_images();
 			dev.destroy();
 		}
+	}
+
+	void swapchain_WSI::release_offscreen_images()
+	{
+		if (m_offscreen_images.empty())
+		{
+			return;
+		}
+
+		// swapchain_images only borrows their handles.
+		swapchain_images.clear();
+		m_offscreen_images.clear();
+		m_offscreen_in_use.clear();
+	}
+
+	// Offscreen mode: see swapchain_WSI::set_offscreen. The caller has drained the device.
+	bool swapchain_WSI::init_offscreen()
+	{
+		if (m_width == 0 || m_height == 0)
+		{
+			return false;
+		}
+
+		// The surface stays, the VkSwapchainKHR on it goes: ZeroFG's presenter makes its own.
+		if (m_vk_swapchain)
+		{
+			_vkDestroySwapchainKHR(dev, m_vk_swapchain, nullptr);
+			m_vk_swapchain = nullptr;
+		}
+
+		swapchain_images.clear();
+		m_offscreen_images.clear();
+
+		// Same count a mailbox swapchain asks for; frame contexts are sized from it.
+		constexpr u32 image_count = 3;
+
+		for (u32 i = 0; i < image_count; ++i)
+		{
+			m_offscreen_images.push_back(std::make_unique<image>(dev, dev.get_memory_mapping().device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				VK_IMAGE_TYPE_2D, m_surface_format, m_width, m_height, 1, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+				VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_TILING_OPTIMAL,
+				VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+				0, VMM_ALLOCATION_POOL_SWAPCHAIN));
+
+			swapchain_image_WSI wsi_image;
+			wsi_image.value = m_offscreen_images.back()->value;
+			swapchain_images.push_back(wsi_image);
+		}
+
+		m_offscreen_in_use.assign(image_count, false);
+		g_swapchain_transfer_src = true;
+
+		// Whatever the surface says now is what these images are built "for": nothing is turned.
+		m_built_for_transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+
+		rsx_log.notice("Swapchain: offscreen (ZeroFG presents), %u images of %ux%u.", image_count, m_width, m_height);
+		return true;
+	}
+
+	VkResult swapchain_WSI::acquire_next_swapchain_image(VkSemaphore semaphore, u64 timeout, u32* result, VkFence fence)
+	{
+		if (!m_offscreen)
+		{
+			return vkAcquireNextImageKHR(dev, m_vk_swapchain, timeout, semaphore, fence, result);
+		}
+
+		for (u32 i = 0; i < m_offscreen_in_use.size(); ++i)
+		{
+			if (!m_offscreen_in_use[i])
+			{
+				m_offscreen_in_use[i] = true;
+				*result = i;
+				return VK_SUCCESS;
+			}
+		}
+
+		return VK_NOT_READY;
 	}
 
 	std::pair<VkSurfaceCapabilitiesKHR, bool> swapchain_WSI::init_surface_capabilities()
@@ -236,6 +314,15 @@ namespace vk
 
 		m_surface_is_lost = false;
 		m_pre_rotation = 0;
+
+		if (m_offscreen)
+		{
+			return init_offscreen();
+		}
+
+		// Back from offscreen: the ring of plain images goes, and a real swapchain is built on the
+		// kept surface below (m_vk_swapchain is null there, so there is nothing to retire).
+		release_offscreen_images();
 
 		VkSwapchainKHR old_swapchain = m_vk_swapchain;
 		vk::physical_device& gpu = const_cast<vk::physical_device&>(dev.gpu());
@@ -312,7 +399,7 @@ namespace vk
 		// the camera moves.
 		//
 		// ARMSX2 forces FIFO for the same reason at the same point (VKSwapChain::SelectPresentMode).
-		if (g_cfg.video.frame_generation != frame_generation_mode::off &&
+		if (lsfg_wanted() &&
 			g_cfg.video.vsync != vsync_mode::full)
 		{
 			rsx_log.warning("Frame generation is enabled; using FIFO presentation so interpolated "
@@ -369,7 +456,7 @@ namespace vk
 		// ARMSX2 gates its own pipelined path on the chain having at least four images for the
 		// same reason.
 		const u32 extra_for_framegen =
-			g_cfg.video.frame_generation != frame_generation_mode::off ? 2u : 0u;
+			lsfg_wanted() ? 2u : 0u;
 
 		if (surface_descriptors.maxImageCount > 0)
 		{
@@ -422,7 +509,7 @@ namespace vk
 		// flickered. The same session at a 270 degree turn, which is left to the compositor, held 30
 		// with the overlay steady (11-05). With frame generation on, the compositor turns the frame, as
 		// it did before pre-rotation; the swapchain is rebuilt when frame generation is switched.
-		const bool framegen_on = g_cfg.video.frame_generation != frame_generation_mode::off;
+		const bool framegen_on = lsfg_wanted();
 
 		if (surface_turns && !g_cfg.video.disable_swapchain_prerotation && !framegen_on &&
 			(surface_descriptors.supportedTransforms & surface_descriptors.currentTransform))
@@ -481,12 +568,18 @@ namespace vk
 		// Requested only where the surface offers it, since TRANSFER_SRC is not guaranteed on
 		// Android surfaces. Where it is missing, frame generation captures nothing valid, which
 		// is a better failure than an invalid one.
-		if (g_cfg.video.frame_generation != frame_generation_mode::off &&
+		//
+		// ZeroFG too: it takes the composited frame from this swapchain's image while the renderer still
+		// presents (it counts the game's frames and qualifies its cadence before it takes the window),
+		// and from the offscreen images after.
+		const bool wants_transfer_src = lsfg_wanted() || zerofg_wanted();
+
+		if (wants_transfer_src &&
 			(surface_descriptors.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT))
 		{
 			swap_info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 		}
-		else if (g_cfg.video.frame_generation != frame_generation_mode::off)
+		else if (wants_transfer_src)
 		{
 			rsx_log.warning("Swapchain: surface does not support TRANSFER_SRC; frame generation"
 				" cannot read presented frames on this surface.");
@@ -685,6 +778,18 @@ namespace vk
 
 	VkResult swapchain_WSI::present(VkSemaphore semaphore, u32 image)
 	{
+		if (m_offscreen)
+		{
+			// Nothing to present: ZeroFG already copied the frame out in the command buffer. The frame
+			// was submitted without semaphores, so there is none to wait on.
+			if (image < m_offscreen_in_use.size())
+			{
+				m_offscreen_in_use[image] = false;
+			}
+
+			return VK_SUCCESS;
+		}
+
 		VkPresentInfoKHR present = {};
 		present.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
 		present.pNext = nullptr;

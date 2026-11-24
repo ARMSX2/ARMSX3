@@ -132,6 +132,9 @@ namespace vk
 			// the latch-without-enable shape that produced a null-function-pointer crash elsewhere
 			// in this header. Keep the probe and the request together.
 			bool external_memory_ahb = false;
+			// ZeroFG's handoff (ZeroFG/VKZeroFG.h) also signals sync files; the rest of what it needs
+			// (the two above, synchronization2) the device already asks for.
+			bool external_semaphore_fd = false;
 
 			// What the Lossless Scaling shaders themselves need, independent of how the images
 			// are shared. Eden gates on exactly these two; see the note in device.cpp.

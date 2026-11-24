@@ -139,6 +139,9 @@ data class Ps3Settings(
     /** Lossless Scaling frame generation: 0 Off, 1 x2, 2 x3, 3 x4. Off unless the user has
      *  supplied shaders from their own copy -- nothing is bundled. */
     val frameGeneration: Int = 0,
+    /** ZeroFG frame generation: 0 Off, 1 x2, 2 x3, 3 x4 (its own device; while it is on, the one
+     *  above stays off). */
+    val zeroFg: Int = 0,
     // Default ON: 3.1p is the cheaper of the two shader families framegen ships, and on a mobile
     // GPU the full-quality path costs more than the frames it buys.
     val frameGenPerformance: Boolean = true,
@@ -1191,6 +1194,7 @@ data class Settings(
         put("PS3/Video", "Disable Hardware Blending", "bool", (ps3.blendingMode == 1).toString())
         put("PS3/Video", "Disable Programmable Blending", "bool", (ps3.blendingMode == 2).toString())
         put("PS3/Video", "Frame Generation", "enum", ps3.frameGeneration.toString())
+        put("PS3/Video", "ZeroFG Frame Generation", "enum", ps3.zeroFg.coerceIn(0, 3).toString())
         put("PS3/Video", "Frame Generation Performance Mode", "bool", ps3.frameGenPerformance.toString())
         put("PS3/Video", "Frame Generation Flow Scale", "int", ps3.frameGenFlowScale.toString())
         put("PS3/Video", "Frame Generation Target Rate", "int", ps3.frameGenTargetRate.toString())
@@ -2217,6 +2221,7 @@ data class Settings(
         put("ps3ShaderMode", ps3.shaderMode)
         put("ps3BlendingMode", ps3.blendingMode)
         put("ps3FrameGeneration", ps3.frameGeneration)
+        put("ps3ZeroFg", ps3.zeroFg)
         put("ps3FrameGenPerformance", ps3.frameGenPerformance)
         put("ps3FrameGenFlowScale", ps3.frameGenFlowScale)
         put("ps3FrameGenTargetRate", ps3.frameGenTargetRate)
@@ -2595,6 +2600,7 @@ data class Settings(
                     shaderMode = json.optInt("ps3ShaderMode", def.ps3.shaderMode),
                     blendingMode = json.optInt("ps3BlendingMode", def.ps3.blendingMode),
                     frameGeneration = json.optInt("ps3FrameGeneration", def.ps3.frameGeneration),
+                    zeroFg = json.optInt("ps3ZeroFg", def.ps3.zeroFg),
                     frameGenPerformance = json.optBoolean("ps3FrameGenPerformance", def.ps3.frameGenPerformance),
                     frameGenFlowScale = json.optInt("ps3FrameGenFlowScale", def.ps3.frameGenFlowScale),
                     frameGenTargetRate = json.optInt("ps3FrameGenTargetRate", def.ps3.frameGenTargetRate),
@@ -2947,6 +2953,7 @@ data class Settings(
             if (current.ps3.shaderMode != base.ps3.shaderMode) j.put("ps3ShaderMode", current.ps3.shaderMode)
             if (current.ps3.blendingMode != base.ps3.blendingMode) j.put("ps3BlendingMode", current.ps3.blendingMode)
             if (current.ps3.frameGeneration != base.ps3.frameGeneration) j.put("ps3FrameGeneration", current.ps3.frameGeneration)
+            if (current.ps3.zeroFg != base.ps3.zeroFg) j.put("ps3ZeroFg", current.ps3.zeroFg)
             if (current.ps3.frameGenPerformance != base.ps3.frameGenPerformance) j.put("ps3FrameGenPerformance", current.ps3.frameGenPerformance)
             if (current.ps3.frameGenFlowScale != base.ps3.frameGenFlowScale) j.put("ps3FrameGenFlowScale", current.ps3.frameGenFlowScale)
             if (current.ps3.frameGenTargetRate != base.ps3.frameGenTargetRate) j.put("ps3FrameGenTargetRate", current.ps3.frameGenTargetRate)
@@ -3275,6 +3282,7 @@ data class Settings(
                     shaderMode = if (overrides.has("ps3ShaderMode")) overrides.getInt("ps3ShaderMode") else base.ps3.shaderMode,
                     blendingMode = if (overrides.has("ps3BlendingMode")) overrides.getInt("ps3BlendingMode") else base.ps3.blendingMode,
                     frameGeneration = if (overrides.has("ps3FrameGeneration")) overrides.getInt("ps3FrameGeneration") else base.ps3.frameGeneration,
+                    zeroFg = if (overrides.has("ps3ZeroFg")) overrides.getInt("ps3ZeroFg") else base.ps3.zeroFg,
                     frameGenPerformance = if (overrides.has("ps3FrameGenPerformance")) overrides.getBoolean("ps3FrameGenPerformance") else base.ps3.frameGenPerformance,
                     frameGenFlowScale = if (overrides.has("ps3FrameGenFlowScale")) overrides.getInt("ps3FrameGenFlowScale") else base.ps3.frameGenFlowScale,
                     frameGenTargetRate = if (overrides.has("ps3FrameGenTargetRate")) overrides.getInt("ps3FrameGenTargetRate") else base.ps3.frameGenTargetRate,

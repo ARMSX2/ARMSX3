@@ -1066,7 +1066,7 @@ namespace vk::frame_gen
 		// frame the passes will run on. False means capture nothing this frame.
 		bool prepare_capture(const vk::render_device& dev, u32 width, u32 height, bool game_res)
 		{
-		if (g_cfg.video.frame_generation == frame_generation_mode::off || !width || !height)
+		if (!lsfg_wanted() || !width || !height)
 		{
 			return false;
 		}

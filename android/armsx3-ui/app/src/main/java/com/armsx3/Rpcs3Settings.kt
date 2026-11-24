@@ -594,6 +594,12 @@ object Rpcs3Settings {
     fun setFrameGeneration(index: Int) =
         setEnum("$VIDEO@@Frame Generation", FRAME_GENERATION.getOrElse(index) { FRAME_GENERATION[0] })
 
+    /** ZeroFG Frame Generation, by name as above: in step with zerofg_mode (system_config_types.h). */
+    private val ZEROFG = arrayOf("Off", "x2", "x3", "x4")
+
+    fun setZeroFg(index: Int) =
+        setEnum("$VIDEO@@ZeroFG Frame Generation", ZEROFG.getOrElse(index) { ZEROFG[0] })
+
     fun setWriteDepthBuffer(v: Boolean) = setBool("$VIDEO@@Write Depth Buffer", v)
     fun setReadColorBuffers(v: Boolean) = setBool("$VIDEO@@Read Color Buffers", v)
     fun setReadDepthBuffer(v: Boolean) = setBool("$VIDEO@@Read Depth Buffer", v)

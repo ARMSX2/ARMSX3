@@ -234,6 +234,12 @@ struct cfg_root : cfg::node
 		// shared images, which the present path handles.
 		cfg::_enum<frame_generation_mode> frame_generation{ this, "Frame Generation", frame_generation_mode::off, true };
 
+		// ZeroFG frame generation: Off, or the frames on screen per game frame (x2, x3, x4; the
+		// display refresh caps it). Its own device and its own setting, apart from the LSFG one above;
+		// while it is on, LSFG stays off. Dynamic: off, on and the multiplier switch in game, if the
+		// game started with it on (its device is made at boot).
+		cfg::_enum<zerofg_mode> zerofg{ this, "ZeroFG Frame Generation", zerofg_mode::off, true };
+
 		// Defaults to ON. This selects framegen's 3.1p shader family, which is materially cheaper
 		// than 3.1, and on a mobile GPU the full-quality path costs more than the frames it buys.
 		// Both families are extracted from the user's DLL already, so this switches between shaders
@@ -558,3 +564,25 @@ struct cfg_root : cfg::node
 
 extern cfg_root g_cfg;
 extern cfg_root g_backup_cfg;
+
+// The two frame generators, one at a time: ZeroFG when it is on, LSFG otherwise.
+inline bool zerofg_wanted()
+{
+	return g_cfg.video.zerofg != zerofg_mode::off;
+}
+
+inline bool lsfg_wanted()
+{
+	return is_lsfg_mode(g_cfg.video.frame_generation) && !zerofg_wanted();
+}
+
+// ZeroFG's multiplier, 2..4 (2 while it is off).
+inline unsigned zerofg_multiplier()
+{
+	switch (g_cfg.video.zerofg.get())
+	{
+	case zerofg_mode::x3: return 3;
+	case zerofg_mode::x4: return 4;
+	default: return 2;
+	}
+}

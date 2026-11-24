@@ -253,6 +253,18 @@ private:
 	// the generated frames of an image to be presented from.
 	bool m_framegen_pipelined = false;
 
+	// ZeroFG took this flip's frame (VKZeroFG::CaptureGameFrame ran); queue_swap_request publishes it
+	// once the frame's command buffer is submitted.
+	bool m_zerofg_captured = false;
+
+	// The swapchain rebuild now under way is the one that hands the window to ZeroFG (the images
+	// become offscreen ones), as opposed to a rebuild of it while ZeroFG holds the window.
+	bool m_zerofg_handoff_reinit = false;
+
+	// Main Surface Authority, once per flip: offers the window to ZeroFG, hands it over when ZeroFG
+	// asks, takes it back when ZeroFG fails or is switched off. May set swapchain_unavailable.
+	void zerofg_update_authority();
+
 	// Acquire/present semaphores for GENERATED frames.
 	//
 	// The real frame has had a pair of these all along (frame_context_t's
@@ -309,6 +321,11 @@ private:
 	// as a VSync change does.
 	bool m_swapchain_framegen = false;
 
+	// Whether ZeroFG was on when the swapchain was built. Its images carry TRANSFER_SRC only then
+	// (swapchain.cpp), and ZeroFG captures the composited frame from them: a swapchain built while it
+	// was off cannot be captured, so switching it on in game rebuilds the swapchain. Like the above.
+	bool m_swapchain_zerofg = false;
+
 	// Whether pre-rotation was allowed (not switched off in Fixes) when the swapchain was built.
 	// swapchain.cpp reads the setting there, so a change rebuilds it, as above.
 	bool m_swapchain_prerotation = true;
@@ -356,6 +373,10 @@ private:
 
 	std::unique_ptr<vk::image> m_overlay_recording_img;
 
+	// ZeroFG's overlay layer: while it takes the game's own image, RPCS3's overlays are drawn here
+	// instead, over black (top half) and over white (bottom half), window-sized planes, for device B
+	// to lay over every output (VKZeroFG::GameFrame::overlay).
+	std::unique_ptr<vk::image> m_zerofg_overlay_layer;
 #ifdef __APPLE__
 	// A recorded frame is copied into a free slot and handed to the recorder at a later flip, once the
 	// GPU has written the slot's number into its marker, so recording never waits for the GPU.

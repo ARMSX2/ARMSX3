@@ -5,6 +5,7 @@
 #include "VKCommandStream.h"
 #include "VKGSRender.h"
 #include "VKFrameGen.h"
+#include "ZeroFG/VKZeroFG.h"
 #include "vkutils/buffer_object.h"
 #include "vkutils/memory.h"
 #include "Emu/RSX/Overlays/overlay_manager.h"
@@ -69,6 +70,90 @@ namespace
 	}
 }
 
+void VKGSRender::zerofg_update_authority()
+{
+#if defined(ANDROID)
+	const bool wanted = zerofg_wanted();
+	VKZeroFG::SetUserSettings(wanted, zerofg_multiplier());
+
+	auto* wsi = dynamic_cast<vk::swapchain_WSI*>(m_swapchain.get());
+	if (!wsi || swapchain_unavailable || m_zerofg_handoff_reinit)
+	{
+		// A rebuild is under way; reinitialize_swapchain deals with ZeroFG's side of it.
+		return;
+	}
+
+	if (m_swapchain_zerofg != wanted)
+	{
+		// ZeroFG was switched on or off in game, and the swapchain was built for the other state: its
+		// images lack TRANSFER_SRC when built with ZeroFG off, so nothing could be captured (this is
+		// why switching it back on never armed). ZeroFG leaves the window first, then the swapchain is
+		// rebuilt (reinitialize_swapchain sets m_swapchain_zerofg); the next flip offers the window again.
+		if (VKZeroFG::Connected())
+		{
+			VKZeroFG::DisconnectSurface();
+		}
+
+		if (wsi->is_offscreen())
+		{
+			wsi->set_offscreen(false);
+		}
+
+		swapchain_unavailable = true;
+		return;
+	}
+
+	const bool failed = VKZeroFG::ReconnectRequested();
+
+	if (failed || (VKZeroFG::Connected() && (!wanted || VKZeroFG::ModeChanged() || VKZeroFG::CaptureChanged())))
+	{
+		// The presenter gave the window back, or ZeroFG was switched off (or to another engine) in
+		// game, or the output path changed what kind of frame it gets (CaptureChanged: a new connection
+		// generates at the new kind's size): take it off the window, and give this renderer a real
+		// swapchain on the surface again. CanConnect offers the window again on a later flip.
+		if (failed)
+		{
+			VKZeroFG::FailOpen();
+		}
+		else
+		{
+			VKZeroFG::DisconnectSurface();
+		}
+
+		if (wsi->is_offscreen())
+		{
+			wsi->set_offscreen(false);
+			swapchain_unavailable = true;
+		}
+	}
+	else if (!wsi->is_offscreen() && wanted && VKZeroFG::CanConnect() &&
+		(m_swapchain->supports_automatic_wm_reports() ||
+			(m_swapchain_dims.width == m_frame->client_width() + 0u &&
+				m_swapchain_dims.height == m_frame->client_height() + 0u)))
+	{
+		// Only on a swapchain that matches the window. Right after a rotation the window has its new
+		// size but the swapchain still has the old one (the size check in flip, below this call,
+		// rebuilds it): connected then, the presenter took the old size, the game's next frames did
+		// not fit it (invalid_geometry), and it gave the window back, one of its three fail-opens.
+		VKZeroFG::OutputSurface output;
+		output.window = std::get<ANativeWindow*>(m_frame->handle());
+		output.surface = wsi->get_surface();
+		output.width = m_swapchain->get_width();
+		output.height = m_swapchain->get_height();
+		output.format = m_swapchain->get_surface_format();
+		VKZeroFG::ConnectSurface(output);
+	}
+	else if (!wsi->is_offscreen() && VKZeroFG::OwnsOutput() && VKZeroFG::MainSurfaceHandoffPending())
+	{
+		// The swapchain goes, the surface stays for ZeroFG's presenter. Rebuilt as offscreen images
+		// by reinitialize_swapchain (which drains the device first); ZeroFG is told once that is done.
+		wsi->set_offscreen(true);
+		m_zerofg_handoff_reinit = true;
+		swapchain_unavailable = true;
+	}
+#endif
+}
+
 bool VKGSRender::reinitialize_swapchain()
 {
 	// Never rebuild a swapchain on a lost device.
@@ -93,8 +178,29 @@ bool VKGSRender::reinitialize_swapchain()
 	// it when the swapchain is already unusable.
 	present_after_generated(true);
 
+	// A rebuild while ZeroFG holds the window (a resize, a rotation, a new window): its presenter is on
+	// the surface this is about to rebuild around, so it leaves first, and this renderer goes back to a
+	// real swapchain. The next flip offers the window again (zerofg_update_authority). The handoff
+	// itself is also a rebuild, but one that is meant to end offscreen.
+	if (auto* zerofg_wsi = dynamic_cast<vk::swapchain_WSI*>(m_swapchain.get());
+		zerofg_wsi && zerofg_wsi->is_offscreen() && !m_zerofg_handoff_reinit)
+	{
+		VKZeroFG::DisconnectSurface();
+		zerofg_wsi->set_offscreen(false);
+
+		// Offscreen images cannot tell that the window was replaced; a real swapchain finds out by
+		// failing, and by then the surface is the one that has to be rebuilt.
+		if (m_display_epoch != m_frame->display_epoch())
+		{
+			m_surface_lost = true;
+		}
+	}
+
 	if (m_surface_lost)
 	{
+		// ZeroFG's presenter may be on the surface that is about to be destroyed.
+		VKZeroFG::DisconnectSurface();
+
 		// Not while the emulator is stopping. Leaving a game closes its screen, so Android destroys
 		// the window while the renderer is still drawing its last frames, and the surface is lost
 		// mid-stop. handle() cannot wait for a new window then and hands back the one it already
@@ -233,7 +339,8 @@ bool VKGSRender::reinitialize_swapchain()
 	m_held_generated_count = 0;
 
 	// Read with the same setting init() reads to pick the present mode. See m_swapchain_framegen.
-	m_swapchain_framegen = g_cfg.video.frame_generation != frame_generation_mode::off;
+	m_swapchain_framegen = lsfg_wanted();
+	m_swapchain_zerofg = zerofg_wanted();
 	m_swapchain_prerotation = !g_cfg.video.disable_swapchain_prerotation;
 
 	// Rebuild swapchain. Old swapchain destruction is handled by the init_swapchain call
@@ -241,6 +348,18 @@ bool VKGSRender::reinitialize_swapchain()
 	{
 		rsx_log.warning("Swapchain initialization failed. Request ignored [%dx%d]", m_swapchain_dims.width, m_swapchain_dims.height);
 		swapchain_unavailable = true;
+
+		if (m_zerofg_handoff_reinit)
+		{
+			// The offscreen images could not be made: ZeroFG leaves, and the retry builds a real swapchain.
+			m_zerofg_handoff_reinit = false;
+			VKZeroFG::DisconnectSurface();
+
+			if (auto* zerofg_wsi = dynamic_cast<vk::swapchain_WSI*>(m_swapchain.get()))
+			{
+				zerofg_wsi->set_offscreen(false);
+			}
+		}
 
 		// Distinguish "no usable window right now" from "the VkSurfaceKHR is dead". Retrying
 		// against a dead surface queries the same dead handle forever; the block at the top of
@@ -316,6 +435,18 @@ bool VKGSRender::reinitialize_swapchain()
 	swapchain_unavailable = false;
 	should_reinitialize_swapchain = false;
 	m_vsync_mode = g_cfg.video.vsync;
+
+	if (m_zerofg_handoff_reinit)
+	{
+		// The window is free of this renderer's swapchain: ZeroFG's presenter takes it.
+		m_zerofg_handoff_reinit = false;
+
+		if (m_swapchain->is_offscreen())
+		{
+			VKZeroFG::MainSurfaceReleasedByA();
+		}
+	}
+
 	return true;
 }
 
@@ -1020,6 +1151,12 @@ void VKGSRender::queue_swap_request()
 		m_swapchain->end_frame(*m_current_command_buffer, m_current_frame->present_image);
 		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[14]++; close_and_submit_command_buffer();
 	}
+	else if (m_swapchain->is_offscreen())
+	{
+		// ZeroFG owns the window. Nothing was acquired from a presentation engine, so there is no
+		// semaphore to wait on or signal; the frame's own fence is all that retires it.
+		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[14]++; close_and_submit_command_buffer();
+	}
 	else
 	{
 		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[15]++; close_and_submit_command_buffer(nullptr,
@@ -1036,6 +1173,20 @@ void VKGSRender::queue_swap_request()
 	// on OUR device and OUR graphics queue, and with Multithreaded RSX the submit above has only
 	// handed this frame to the offloader thread so far.)
 	vk::frame_gen::commit_capture();
+
+	if (m_zerofg_captured)
+	{
+		// ZeroFG copies the frame out of the staging image with a submit of its own, on this queue,
+		// "after the frame". With multithreaded RSX this frame's submit may still sit with the offloader,
+		// so wait for it to reach the queue first (present() does the same before it presents), and take
+		// the lock the queue's other users take: ZeroFG submits through the same VkQueue. Publishing may
+		// wait for ZeroFG's buffers, which is its Source backpressure and holds this thread only.
+		m_zerofg_captured = false;
+		m_current_frame->swap_command_buffer->flush();
+		vk::acquire_global_submit_lock();
+		VKZeroFG::PublishCapturedFrame();
+		vk::release_global_submit_lock();
+	}
 
 	if (framegen_frames && !m_framegen_pipelined)
 	{
@@ -1637,6 +1788,9 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 		}
 	}
 
+	// ZeroFG (Main Surface Authority): who holds the window this flip. May ask for a rebuild below.
+	zerofg_update_authority();
+
 	// Check swapchain condition/status
 	if (!m_swapchain->supports_automatic_wm_reports())
 	{
@@ -1668,7 +1822,7 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 	// first swapchain exists, and can be switched in-game, so it ran in MAILBOX: the real frame
 	// presented right after each generated one replaced it, and measured on the Odin 3 only 51 of
 	// 60 refreshes showed a new frame. Rebuild on a change, as for VSync.
-	if (m_swapchain_framegen != (g_cfg.video.frame_generation != frame_generation_mode::off))
+	if (m_swapchain_framegen != lsfg_wanted())
 	{
 		swapchain_unavailable = true;
 	}
@@ -2299,6 +2453,45 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 #endif
 	}
 
+	// ZeroFG takes the game's own image, at the game's size, on the plain output path: no calibration
+	// pass, no stereo or Cardboard, and a blit upscaler (bilinear or nearest), which its Post repeats
+	// when it scales the frame into the same area. Generating from the upscaled screen instead cost
+	// the ratio of the two sizes (a 1280x720 game on a 2560x1200 window: 3.3x the pixels) for no
+	// detail the game drew. RPCS3's overlays go apart then (zerofg_overlay_layer below). The other
+	// output paths keep handing it the finished screen. Pre-rotation does not matter here: the game's
+	// image and the layer are upright, and ZeroFG's presenter turns its own output.
+	const output_scaling_mode zerofg_scaling = g_cfg.video.output_scaling.get();
+	// SGSR too: the Post runs the same shaders, compiled from the same sources, on every output, Real and generated.
+	u32 zerofg_upscaler = 0;
+#ifdef __ANDROID__
+	if (zerofg_scaling == output_scaling_mode::sgsr)
+		zerofg_upscaler = 1;
+	else if (zerofg_scaling == output_scaling_mode::sgsr_edge)
+		zerofg_upscaler = 2;
+#endif
+	const bool zerofg_game_path = !cardboard_on && !avconfig.stereo_enabled &&
+		g_cfg.video.full_rgb_range_output.get() && rsx::fcmp(avconfig.gamma, 1.f) &&
+		(zerofg_scaling == output_scaling_mode::bilinear || zerofg_scaling == output_scaling_mode::nearest || zerofg_upscaler);
+	const bool zerofg_game_frame = image_to_flip && zerofg_game_path;
+	// The game's picture size on that path, also for a present without a game image (a boot screen,
+	// handed over finished): the output resolution at the resolution scale, which the game's image
+	// will have. ZeroFG never generates past it (GameFrame::game_width).
+	u32 zerofg_game_w = 0;
+	u32 zerofg_game_h = 0;
+	const u32 zerofg_game_scale = zerofg_game_path ? static_cast<u32>(g_cfg.video.resolution_scale_percent) : 0;
+	if (zerofg_game_path)
+	{
+		if (image_to_flip)
+			std::tie(zerofg_game_w, zerofg_game_h) = std::make_tuple(buffer_width, buffer_height);
+		else
+			std::tie(zerofg_game_w, zerofg_game_h) = rsx::apply_resolution_scale<true>(
+				RSX(m_ctx)->resolution_scaling_config, static_cast<u16>(buffer_width), static_cast<u16>(buffer_height));
+	}
+	// ... and while its presenter owns the window, this renderer's offscreen image reaches no screen:
+	// nothing is cleared, scaled or drawn into it then (a frame dump still gets it whole).
+	const bool zerofg_screen_unused = zerofg_game_frame && m_swapchain->is_offscreen() && VKZeroFG::OwnsOutput() &&
+		VKZeroFG::WantsFrames() && !m_frame_dump.take_screen;
+
 	// Coverage, not just inset.
 	//
 	// target_layout is now UNDEFINED on the WSI path, so any pixel the blit does not write is
@@ -2316,9 +2509,9 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 	// window where m_swapchain_dims lags the actual image size (Android rotation, a WSI
 	// currentExtent override). Exact-fit and stretch_to_display_area cases are unaffected, so the
 	// extra clear costs nothing in the normal path.
-	if (!image_to_flip || cardboard_on || aspect_ratio.x1 || aspect_ratio.y1 ||
+	if (!zerofg_screen_unused && (!image_to_flip || cardboard_on || aspect_ratio.x1 || aspect_ratio.y1 ||
 		u32(aspect_ratio.x2) < m_swapchain->get_width() ||
-		u32(aspect_ratio.y2) < m_swapchain->get_height())
+		u32(aspect_ratio.y2) < m_swapchain->get_height()))
 	{
 		// Clear the window background to black
 		VkClearColorValue clear_black {};
@@ -2456,7 +2649,7 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 
 		direct_fbo->release();
 	}
-	else if (image_to_flip)
+	else if (image_to_flip && !zerofg_screen_unused)
 	{
 		const bool use_full_rgb_range_output = g_cfg.video.full_rgb_range_output.get();
 
@@ -2542,42 +2735,48 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 
 	if (g_cfg.video.debug_overlay || has_overlay)
 	{
-		if (target_layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+		// The unused screen gets no overlays: they go on ZeroFG's layer, which steps them then.
+		if (!zerofg_screen_unused)
 		{
-			// Change the image layout whilst setting up a dependency on waiting for the blit op to finish before we start writing
-			VkImageMemoryBarrier barrier = {};
-			barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-			barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-			barrier.oldLayout = target_layout;
-			barrier.image = target_image;
-			barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-			barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
-			barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-			barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-			barrier.subresourceRange = subresource_range;
-			vkCmdPipelineBarrier(*m_current_command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_DEPENDENCY_BY_REGION_BIT, 0, nullptr, 0, nullptr, 1, &barrier);
+			if (target_layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+			{
+				// Change the image layout whilst setting up a dependency on waiting for the blit op to finish before we start writing
+				VkImageMemoryBarrier barrier = {};
+				barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+				barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+				barrier.oldLayout = target_layout;
+				barrier.image = target_image;
+				barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+				barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+				barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+				barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+				barrier.subresourceRange = subresource_range;
+				vkCmdPipelineBarrier(*m_current_command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_DEPENDENCY_BY_REGION_BIT, 0, nullptr, 0, nullptr, 1, &barrier);
 
-			target_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-		}
+				target_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+			}
 
-		if (!direct_fbo)
-		{
-			const auto key = vk::get_renderpass_key(m_swapchain->get_surface_format());
-			single_target_pass = vk::get_renderpass(*m_device, key);
-			ensure(single_target_pass != VK_NULL_HANDLE);
+			if (!direct_fbo)
+			{
+				const auto key = vk::get_renderpass_key(m_swapchain->get_surface_format());
+				single_target_pass = vk::get_renderpass(*m_device, key);
+				ensure(single_target_pass != VK_NULL_HANDLE);
 
-			direct_fbo = vk::get_framebuffer(*m_device, m_swapchain_dims.width, m_swapchain_dims.height, VK_FALSE, single_target_pass, m_swapchain->get_surface_format(), target_image);
-		}
+				direct_fbo = vk::get_framebuffer(*m_device, m_swapchain_dims.width, m_swapchain_dims.height, VK_FALSE, single_target_pass, m_swapchain->get_surface_format(), target_image);
+			}
 
-		direct_fbo->add_ref();
+			direct_fbo->add_ref();
 
-		if (cardboard_on)
-		{
-			render_overlays_cardboard(direct_fbo);
-		}
-		else
-		{
-			render_overlays(direct_fbo, areau(aspect_ratio));
+			if (cardboard_on)
+			{
+				render_overlays_cardboard(direct_fbo);
+			}
+			else
+			{
+				render_overlays(direct_fbo, areau(aspect_ratio));
+			}
+
+			direct_fbo->release();
 		}
 
 		if (g_cfg.video.debug_overlay && res())
@@ -2632,8 +2831,6 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 				program_cache_ellided, program_cache_lookups, program_cache_ellision_rate)
 			);
 		}
-
-		direct_fbo->release();
 	}
 
 	// Hand the finished frame to frame generation.
@@ -2664,6 +2861,138 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 	// less by the ratio of the two (720p on a 1080p screen: 2.25x fewer pixels to generate). Every
 	// other output mode renders through passes a generated frame would need a run of its own of,
 	// so those keep capturing the finished screen.
+	// ZeroFG takes the game's own image on the same plain path (zerofg_game_frame), with RPCS3's
+	// overlays (performance overlay, dialogs, trophies) on a layer of their own its Post lays over
+	// every output, Real and generated, sharp and never interpolated. On the other paths it takes this
+	// image, the finished screen with the overlays on it. Either way the Post puts the frame back where
+	// this present drew it.
+	//
+	// NOT only once it owns the window. ZeroFG counts the game's frames (NoteSourceFrame) and qualifies
+	// their cadence while this renderer still presents on a real swapchain; only then does it accept
+	// frames, take the window and have this renderer go offscreen. Gating this on is_offscreen() waited
+	// for a handoff that needs these very calls, and ZeroFG never armed.
+	{
+		VKZeroFG::NoteSourceFrame();
+
+		if (VKZeroFG::WantsFrames() && zerofg_game_frame)
+		{
+			VKZeroFG::GameFrame zerofg_frame;
+
+			if (has_overlay)
+			{
+				// The overlays over black (P, top half) and over white (W, bottom half): P is their colour
+				// weighted by their coverage and W - P what they leave of the picture under them, all the
+				// Post needs (P + frame * (W - P)) through ZeroFG's 10-bit handoff, whose alpha has two
+				// bits. Stepped here only when the screen above did not draw them.
+				const u32 layer_w = m_swapchain_dims.width;
+				const u32 layer_h = m_swapchain_dims.height;
+				constexpr VkFormat layer_format = VK_FORMAT_R8G8B8A8_UNORM;
+
+				if (m_zerofg_overlay_layer && (m_zerofg_overlay_layer->width() != layer_w || m_zerofg_overlay_layer->height() != layer_h * 2))
+				{
+					vk::remove_framebuffers_with_image(m_zerofg_overlay_layer.get());
+					vk::get_resource_manager()->dispose(m_zerofg_overlay_layer);
+				}
+
+				if (!m_zerofg_overlay_layer)
+				{
+					m_zerofg_overlay_layer = std::make_unique<vk::image>(*m_device, m_device->get_memory_mapping().device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+						VK_IMAGE_TYPE_2D, layer_format, layer_w, layer_h * 2, 1, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+						VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+						0, VMM_ALLOCATION_POOL_SYSTEM);
+				}
+
+				vk::image* const layer = m_zerofg_overlay_layer.get();
+
+				// All of it black, then the bottom half white inside the render pass the overlays draw in.
+				layer->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+				const VkClearColorValue black {};
+				const VkImageSubresourceRange whole = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+				vkCmdClearColorImage(*m_current_command_buffer, layer->value, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &whole);
+				layer->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+				const VkRenderPass layer_pass = vk::get_renderpass(*m_device, vk::get_renderpass_key(layer_format));
+				ensure(layer_pass != VK_NULL_HANDLE);
+				vk::framebuffer_holder* layer_fbo = vk::get_framebuffer(*m_device, layer_w, layer_h * 2, VK_FALSE, layer_pass, { layer });
+				layer_fbo->add_ref();
+
+				vk::get_overlay_pass<vk::attachment_clear_pass>()->run(*m_current_command_buffer, layer_fbo,
+					VkRect2D{ { 0, s32(layer_h) }, { layer_w, layer_h } }, 0xF0, color4f(1.f, 1.f, 1.f, 1.f), layer_pass);
+
+				{
+					auto ui_renderer = vk::get_overlay_pass<vk::ui_overlay_renderer>();
+					std::lock_guard lock(*overlay_manager);
+
+					const areau game_area = areau(aspect_ratio);
+					for (const auto& view : overlay_manager->get_views())
+					{
+						for (u32 plane = 0; plane < 2; ++plane)
+						{
+							const u32 top = plane * layer_h;
+							const areau area = view->use_window_space ? areau{ 0, top, layer_w, top + layer_h }
+								: areau{ game_area.x1, game_area.y1 + top, game_area.x2, game_area.y2 + top };
+							ui_renderer->run(*m_current_command_buffer, area, layer_fbo, layer_pass, m_texture_upload_buffer_ring_info,
+								*view.get(), plane == 1 && zerofg_screen_unused);
+						}
+					}
+				}
+
+				layer_fbo->release();
+				layer->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+				zerofg_frame.overlay = layer->value;
+				zerofg_frame.overlay_width = layer_w;
+				zerofg_frame.overlay_height = layer_h;
+			}
+
+			// The game's picture, the part the blit above takes, and where it draws it.
+			image_to_flip->push_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+			zerofg_frame.image = image_to_flip->value;
+			zerofg_frame.src[2] = static_cast<s32>(buffer_width);
+			zerofg_frame.src[3] = static_cast<s32>(buffer_height);
+			zerofg_frame.draw[0] = static_cast<float>(aspect_ratio.x1);
+			zerofg_frame.draw[1] = static_cast<float>(aspect_ratio.y1);
+			zerofg_frame.draw[2] = static_cast<float>(aspect_ratio.x2);
+			zerofg_frame.draw[3] = static_cast<float>(aspect_ratio.y2);
+			zerofg_frame.linear = zerofg_scaling != output_scaling_mode::nearest;
+			zerofg_frame.upscaler = zerofg_upscaler;
+			// As sgsr_pass.cpp: Qualcomm's edge_sharpness is 0..2, one percent of the slider worth 0.01.
+			zerofg_frame.upscaler_sharpness = g_cfg.video.sgsr_sharpening_intensity * 0.01f;
+			zerofg_frame.game_width = zerofg_game_w;
+			zerofg_frame.game_height = zerofg_game_h;
+			zerofg_frame.resolution_scale = zerofg_game_scale;
+			zerofg_frame.output_width = m_swapchain_dims.width;
+			zerofg_frame.output_height = m_swapchain_dims.height;
+			VKZeroFG::CaptureGameFrame(*m_current_command_buffer, zerofg_frame);
+			image_to_flip->pop_layout(*m_current_command_buffer);
+			m_zerofg_captured = true;
+		}
+		// A real swapchain's image can be read only if it was made with TRANSFER_SRC (swapchain.cpp).
+		else if (VKZeroFG::WantsFrames() && (m_swapchain->is_offscreen() || vk::g_swapchain_transfer_src))
+		{
+			vk::change_image_layout(*m_current_command_buffer, target_image, target_layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, subresource_range);
+			target_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+
+			const s32 screen_w = static_cast<s32>(m_swapchain_dims.width);
+			const s32 screen_h = static_cast<s32>(m_swapchain_dims.height);
+
+			VKZeroFG::GameFrame zerofg_frame;
+			zerofg_frame.image = target_image;
+			zerofg_frame.src[2] = screen_w;
+			zerofg_frame.src[3] = screen_h;
+			zerofg_frame.draw[2] = static_cast<float>(screen_w);
+			zerofg_frame.draw[3] = static_cast<float>(screen_h);
+			zerofg_frame.linear = true;
+			zerofg_frame.game_width = zerofg_game_w;
+			zerofg_frame.game_height = zerofg_game_h;
+			zerofg_frame.resolution_scale = zerofg_game_scale;
+			zerofg_frame.output_width = m_swapchain_dims.width;
+			zerofg_frame.output_height = m_swapchain_dims.height;
+			VKZeroFG::CaptureGameFrame(*m_current_command_buffer, zerofg_frame);
+			m_zerofg_captured = true;
+		}
+	}
+
 	const bool framegen_plain_output = image_to_flip && !pre_rotation && !avconfig.stereo_enabled && !cardboard_on &&
 		g_cfg.video.full_rgb_range_output.get() && rsx::fcmp(avconfig.gamma, 1.f) &&
 		(m_output_scaling == output_scaling_mode::bilinear || m_output_scaling == output_scaling_mode::nearest);

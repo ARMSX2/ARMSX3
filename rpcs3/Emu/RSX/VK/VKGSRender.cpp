@@ -9,6 +9,7 @@
 #include "VKCompute.h"
 #include "VKGSRender.h"
 #include "VKFrameGen.h"
+#include "ZeroFG/VKZeroFG.h"
 #include "Emu/RSX/rsx_profiler.h"
 #include "vk_vspec.h"
 #include "vkutils/gpu_timer.h"
@@ -441,6 +442,10 @@ VKGSRender::VKGSRender(rsx::context* ctx, rsx::display_output* output) noexcept 
 	g_fxo->need<rsx::dma_manager>();
 	g_fxo->need<vk::driver_manager_thread>();
 
+	// ZeroFG is chosen in the same selector as LSFG: read before the instance, which is created at 1.3
+	// when it is on (device B shares it). A no-op unless built in (Android arm64).
+	VKZeroFG::SetUserSettings(zerofg_wanted(), zerofg_multiplier());
+
 	if (!m_instance.create("RPCS3"))
 	{
 		rsx_log.fatal("Could not find a Vulkan compatible GPU driver. Your GPU(s) may not support Vulkan, or you need to install the Vulkan runtime and drivers");
@@ -509,7 +514,8 @@ VKGSRender::VKGSRender(rsx::context* ctx, rsx::display_output* output) noexcept 
 	m_swapchain_dims.height = m_frame->client_height();
 
 	// Read with the same setting init() reads to pick the present mode. See m_swapchain_framegen.
-	m_swapchain_framegen = g_cfg.video.frame_generation != frame_generation_mode::off;
+	m_swapchain_framegen = lsfg_wanted();
+	m_swapchain_zerofg = zerofg_wanted();
 	m_swapchain_prerotation = !g_cfg.video.disable_swapchain_prerotation;
 
 	if (!m_swapchain->init(m_swapchain_dims.width, m_swapchain_dims.height))
@@ -522,6 +528,24 @@ VKGSRender::VKGSRender(rsx::context* ctx, rsx::display_output* output) noexcept 
 		// than the one requested, and m_swapchain_dims sizes the present framebuffer.
 		m_swapchain_dims.width = m_swapchain->get_width();
 		m_swapchain_dims.height = m_swapchain->get_height();
+	}
+
+	// ZeroFG's own device on this GPU, now that this one is up. Never fails this one: any problem
+	// leaves ZeroFG off and logged. The window is offered to it on the first present (flip).
+	{
+		const vk::physical_device& gpu = m_device->gpu();
+		VkPhysicalDeviceProperties gpu_props{};
+		vkGetPhysicalDeviceProperties(gpu, &gpu_props);
+
+		VKZeroFG::SourceDevice source;
+		source.instance = gpu;
+		source.instance_api_version = VKZeroFG::InstanceApiVersion(VK_API_VERSION_1_2);
+		source.physical_device = gpu;
+		source.device = *m_device;
+		source.queue = m_device->get_graphics_queue();
+		source.queue_family = m_device->get_graphics_queue_family();
+		source.api_version = gpu_props.apiVersion;
+		VKZeroFG::OnDeviceCreated(source);
 	}
 
 	// create command buffer...
@@ -1037,6 +1061,11 @@ VKGSRender::~VKGSRender()
 	//Wait for device to finish up with resources
 	vkDeviceWaitIdle(*m_device);
 
+	// ZeroFG leaves the window and releases its device first: its presenter is on this renderer's
+	// surface and its handoff holds images of this device.
+	VKZeroFG::DisconnectSurface();
+	VKZeroFG::Shutdown();
+
 	// Frame generation owns fences, a command pool, an allocator and images, all children of this
 	// device. Released here, while it is still alive: without this they outlived it, and the next
 	// boot in the same process reused the stale handles because the stack still looked valid.
@@ -1107,6 +1136,11 @@ VKGSRender::~VKGSRender()
 	m_frame_context_storage.clear();
 
 	m_overlay_recording_img.reset();
+	if (m_zerofg_overlay_layer)
+	{
+		vk::remove_framebuffers_with_image(m_zerofg_overlay_layer.get());
+		m_zerofg_overlay_layer.reset();
+	}
 #ifdef __APPLE__
 	recording_readback_release(true);
 #endif
@@ -1157,6 +1191,9 @@ VKGSRender::~VKGSRender()
 
 	// Descriptors
 	vk::descriptors::flush();
+
+	// ZeroFG's offscreen images, before the memory check below counts them as leaked.
+	m_swapchain->release_offscreen();
 
 	// Global resources
 	vk::destroy_global_resources();

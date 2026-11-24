@@ -429,7 +429,10 @@ fun PerformanceTab(state: MutableState<Settings>) {
             )
         }
         SettingsDivider()
-        // Frame generation: the real section in the github build, a note in the play one.
+        // ZeroFG frame generation first, in every build; then the experimental one: the real section
+        // in the github build, a note in the play one.
+        ZeroFgSection(s) { apply(it) }
+        SettingsDivider()
         FrameGenSection(s) { apply(it) }
         SettingsDivider()
         // Compiled-code caches. Separate from the shader cache on the Renderer tab:
