@@ -172,6 +172,12 @@ def components():
           block("3rdparty/GPUOpen/include/ffx_a.h", r"Copyright \(c\) 2021 Advanced Micro Devices", r"THE SOFTWARE\.")),
         c("Snapdragon Game Super Resolution", "BSD-3-Clause", text_id="bsd-3-clause",
           notice="Copyright (c) 2025, Qualcomm Innovation Center, Inc. All rights reserved."),
+        c("ZeroFG", "GPL-2.0-or-later", text_id="gpl-2.0",
+          notice="Copyright 2026 the ZeroFG authors. ZeroFG is available under Apache-2.0 or GPL-2.0-or-later; "
+                 "ARMSX3 uses it under GPL-2.0-or-later. Source code: https://github.com/hy300leosquizz-ctrl/ZeroFG"),
+        c("Xenia", "BSD-3-Clause", lic("xenia-LICENSE.txt"),
+          notice="Parts of ZeroFG's presenter come from the Xenia project's Vulkan presenter."),
+        c("{fmt}", "MIT", lic("fmt-LICENSE.txt"), notice="Used by ZeroFG."),
 
         # The app's own native libraries.
         c("libadrenotools", "BSD-2-Clause", lic("libadrenotools-LICENSE.txt")),
