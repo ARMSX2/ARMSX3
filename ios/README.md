@@ -32,6 +32,10 @@ Before you switch, open the old app and go to Settings › Backup & Restore, the
 
 Then install the new IPA, open the same screen and use Restore from Backup to bring your saves and settings back. Games and firmware are not in the backup, so install them again. Last, set up JIT for the new app: import your pairing file again for built-in JIT. If built-in JIT cannot start, pick ARMSX3 again in StikDebug.
 
+## Adding games
+
+Copy a game folder into Files › ARMSX3 › games and it shows in the library the next time you open ARMSX3, or straight away when you pull down on the library to refresh it. You can also tap Add Game Folder in the library and pick a folder that holds your games elsewhere. If the picker gives ARMSX3 a temporary copy of the folder, which can happen inside LiveContainer, ARMSX3 moves that copy to Files › ARMSX3 › games, because iOS deletes temporary files without warning. When the original was already in ARMSX3's folder you then have the game twice, and you can delete the original to free the space.
+
 ## Reporting problems
 
 Settings › Diagnostics › Report a Problem writes a report to Files › ARMSX3 › Reports. During setup, and on the screen ARMSX3 shows when JIT is off, the Report button at the top right writes the same report. Nothing is sent unless you share it, folder paths are removed, and the pairing file is never included. Attach the report when you open an issue on the ARMSX3 GitHub project, along with the game's title and serial and your device model.

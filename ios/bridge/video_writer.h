@@ -34,5 +34,7 @@ namespace armsx3::bridge
 		std::function<bool()> finish;
 		// Optional: empty means the writer never fails.
 		std::function<bool()> failed;
+		// Optional: why the writer failed or did not finish, for the log; empty when it did not.
+		std::function<std::string()> failure;
 	};
 }

@@ -4,6 +4,7 @@
 changes and one stop, and gives the phone to player 1 alone; static checks pin RumbleFeed's pause, stop, route,
 reset, shared phone engine and retry, and the recording haptics allowance. It says nothing about real haptics."""
 
+import plistlib
 import re
 import sys
 import tempfile
@@ -18,6 +19,8 @@ MATH = IOS / "app" / "Controllers" / "RumbleMath.swift"
 FEED = IOS / "app" / "Controllers" / "RumbleFeed.swift"
 POLLER = IOS / "app" / "Controllers" / "GamepadPoller.swift"
 AUDIO = IOS / "app" / "Support" / "ios_audio_session.mm"
+GAMESIR_RUMBLE = IOS / "app" / "Controllers" / "GameSirG8MFiRumble.swift"
+INFO = IOS / "app" / "Resources" / "Info.plist"
 
 IMPORT = re.compile(r"^\s*import\s+(\w+)", re.M)
 STOP_ALL_DEF = re.compile(r"\bfunc\s+stopAll\s*\(\s*\)\s*\{")
@@ -83,6 +86,13 @@ let motorless = RumbleMath.target(slot: 0, hasController: true, controllerHasHap
 let haptic = RumbleMath.target(slot: 0, hasController: true, controllerHasHaptics: true, phoneHasHaptics: true)
 let nophone = RumbleMath.target(slot: 0, hasController: false, controllerHasHaptics: false, phoneHasHaptics: false)
 print("R10 touch=\(touch) motorless=\(motorless) haptic=\(haptic) nophone=\(nophone)")
+print("R11 left=\(RumbleMath.gameSirPacket(left: 1, right: 0))")
+print("R12 right=\(RumbleMath.gameSirPacket(left: 0, right: 1))")
+print("R13 clamped=\(RumbleMath.gameSirPacket(left: -1, right: 2))")
+print("R14 nonfinite=\(RumbleMath.gameSirPacket(left: .nan, right: .infinity))")
+print("R15 stop=\(RumbleMath.gameSirStopPacket)")
+let zeroStrength = RumbleMath.motors(large: 255, small: 255, strengthPercent: 0, enabled: true)
+print("R16 zero_strength=\(f(zeroStrength.large)),\(f(zeroStrength.small))")
 '''
 
 
@@ -241,6 +251,24 @@ class TheRumbleHolds(unittest.TestCase):
     def test_r10_player_one_reaches_the_phone_on_touch_or_a_motorless_controller(self):
         self.check("R10", "R10 touch=phone motorless=phone haptic=controller nophone=none")
 
+    def test_r11_left_motor_packet(self):
+        self.check("R11", "R11 left=[4, 255, 1, 0, 1, 0, 0, 0, 0]")
+
+    def test_r12_right_motor_packet(self):
+        self.check("R12", "R12 right=[4, 0, 1, 255, 1, 0, 0, 0, 0]")
+
+    def test_r13_packet_clamps_amplitudes(self):
+        self.check("R13", "R13 clamped=[4, 0, 1, 255, 1, 0, 0, 0, 0]")
+
+    def test_r14_nonfinite_amplitudes_are_silent(self):
+        self.check("R14", "R14 nonfinite=[4, 0, 1, 0, 1, 0, 0, 0, 0]")
+
+    def test_r15_stop_packet(self):
+        self.check("R15", "R15 stop=[4, 0, 1, 0, 1, 0, 0, 0, 0]")
+
+    def test_r16_zero_strength_silences_both_motors(self):
+        self.check("R16", "R16 zero_strength=0.00,0.00")
+
 
 class RumbleStatic(unittest.TestCase):
     def test_real_files_have_no_problems(self):
@@ -251,6 +279,34 @@ class RumbleStatic(unittest.TestCase):
 
     def test_real_phone_stand_in_has_no_problems(self):
         self.assertEqual([], phone_problems(read(FEED), read(AUDIO)))
+
+    def test_gameSir_accessory_protocol_and_rumble_integration(self):
+        with INFO.open("rb") as stream:
+            info = plistlib.load(stream)
+        self.assertIn("com.xiaoji.M2boot", info.get("UISupportedExternalAccessoryProtocols", []))
+        implementation = read(GAMESIR_RUMBLE)
+        for required in ("EASession(", "registerForLocalNotifications()", "0.167253",
+                         "hasSpaceAvailable", "stopAndClose()", "matchingAccessory"):
+            self.assertIn(required, implementation)
+        feed = read(FEED)
+        self.assertIn("GameSirG8MFiRumble.supports(controller)", feed)
+        self.assertIn("externalRumbler?.rumble(left:", feed)
+        self.assertIn("externalRumbler?.invalidate()", feed)
+        self.assertIn("accessoryRoutes[slot] != accessoryRoute", feed)
+
+    def test_zero_strength_stops_accessory_without_haptics_players(self):
+        send = body(read(FEED), r"\bprivate func send\s*\([^{]*\{")
+        stop = send.find("if motors == .off")
+        empty_players = send.find("guard !target.players.isEmpty")
+        self.assertIn("target.externalRumbler?.stop()", send)
+        self.assertGreaterEqual(stop, 0)
+        self.assertLess(stop, empty_players)
+
+    def test_pause_leaves_the_test_rumble_playing(self):
+        # pauseAll() runs every frame under the menu; it must not stop the rumbler Test Rumble borrowed.
+        silence = body(without_comments(read(FEED)), r"\bfunc\s+silence\s*\([^{]*\{")
+        self.assertRegex(silence, r"if\s+testing\?\.externalRumbler\s*!==\s*target\.externalRumbler\s*\{\s*"
+                                  r"target\.externalRumbler\?\.stop\(\)\s*\}")
 
     def test_edge_missing_and_empty_inputs_raise(self):
         with tempfile.TemporaryDirectory() as tmp:

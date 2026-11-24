@@ -22,6 +22,10 @@ namespace utils
 
 		bool can_consume_frame();
 		void present_frame(std::vector<u8>&& data, u32 pitch, u32 width, u32 height, bool is_bgra);
+#ifdef __APPLE__
+		// For a frame read back a flip or more after it was drawn: timed from its capture, not its arrival.
+		void present_frame(std::vector<u8>&& data, u32 pitch, u32 width, u32 height, bool is_bgra, u64 captured_us);
+#endif
 
 		void present_samples(const u8* buf, u32 sample_count, u16 channels);
 

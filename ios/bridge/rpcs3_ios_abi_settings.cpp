@@ -47,12 +47,16 @@ namespace
 		return RPCS3_IOS_STATUS_INVALID_ARGUMENT;
 	}
 
+	// Bumped by the bridge's own patch writes, which can keep a file's size within one second of mtime.
+	std::atomic<u64> patch_writes{0};
+
 	// Every file a boot applies patches from, re-read only when one changed; returned by value under the lock.
 	patch_engine::patch_map cached_patch_db()
 	{
 		static std::mutex mutex;
 		static patch_engine::patch_map db;
 		static std::array<std::pair<u64, s64>, 4> cached{};
+		static u64 cached_writes = 0;
 		static bool loaded = false;
 
 		std::lock_guard lock(mutex);
@@ -71,7 +75,8 @@ namespace
 			}
 		}
 
-		if (!loaded || now != cached)
+		const u64 writes = patch_writes.load();
+		if (!loaded || now != cached || writes != cached_writes)
 		{
 			db.clear();
 			std::stringstream log;
@@ -80,6 +85,7 @@ namespace
 				patch_engine::load(db, path, {}, false, &log);
 			}
 			cached = now;
+			cached_writes = writes;
 			loaded = true;
 		}
 
@@ -517,20 +523,24 @@ Rpcs3IOS_Status Rpcs3IOS_PatchesWrite(const char* file_name, const char* yaml)
 		return finished_status("Rpcs3IOS_PatchesWrite", RPCS3_IOS_STATUS_PATCH_WRITE_FAILED);
 	}
 
+	patch_writes++;
 	return finished_status("Rpcs3IOS_PatchesWrite", RPCS3_IOS_STATUS_OK);
 }
 
-Rpcs3IOS_Status Rpcs3IOS_PatchesImport(const char* yaml)
+Rpcs3IOS_Status Rpcs3IOS_PatchesImport(const char* yaml, int32_t replace, uint32_t* imported, uint32_t* total)
 {
 	if (pthread_main_np() != 0)
 	{
 		return refuse_main_thread("Rpcs3IOS_PatchesImport");
 	}
 
-	if (yaml == nullptr)
+	if (yaml == nullptr || imported == nullptr || total == nullptr)
 	{
 		return RPCS3_IOS_STATUS_NULL_ARGUMENT;
 	}
+
+	*imported = 0;
+	*total = 0;
 
 	patch_engine::patch_map patches;
 	if (!parse_patches(patches, "<imported>", yaml))
@@ -539,15 +549,73 @@ Rpcs3IOS_Status Rpcs3IOS_PatchesImport(const char* yaml)
 	}
 
 	usz count = 0;
-	usz total = 0;
+	usz sum = 0;
 	std::stringstream log;
-	if (!fs::create_path(patch_engine::get_patches_path()) ||
-		!patch_engine::import_patches(patches, patch_engine::get_imported_patch_path(), count, total, &log))
+	const std::string path = patch_engine::get_imported_patch_path();
+	if (!fs::create_path(patch_engine::get_patches_path()))
 	{
 		return finished_status("Rpcs3IOS_PatchesImport", RPCS3_IOS_STATUS_PATCH_WRITE_FAILED);
 	}
 
+	if (replace == 0)
+	{
+		if (!patch_engine::import_patches(patches, path, count, sum, &log))
+		{
+			return finished_status("Rpcs3IOS_PatchesImport", RPCS3_IOS_STATUS_PATCH_WRITE_FAILED);
+		}
+	}
+	else
+	{
+		// A stored file the core cannot read is left alone rather than overwritten with a partial merge.
+		patch_engine::patch_map stored;
+		if (!patch_engine::load(stored, path, "", true, &log))
+		{
+			return finished_status("Rpcs3IOS_PatchesImport", RPCS3_IOS_STATUS_PATCH_WRITE_FAILED);
+		}
+
+		for (const auto& [hash, container] : patches)
+		{
+			patch_engine::patch_container& target = stored[hash];
+			target.hash = container.hash;
+			target.version = container.version;
+
+			for (const auto& [description, info] : container.patch_info_map)
+			{
+				target.patch_info_map[description] = info;
+				count++;
+				sum++;
+			}
+		}
+
+		// One save, so a stop in the middle cannot lose the stored patches.
+		if (count != 0 && !patch_engine::save_patches(stored, path, &log))
+		{
+			return finished_status("Rpcs3IOS_PatchesImport", RPCS3_IOS_STATUS_PATCH_WRITE_FAILED);
+		}
+	}
+
+	*imported = static_cast<uint32_t>(count);
+	*total = static_cast<uint32_t>(sum);
+	patch_writes++;
 	return finished_status("Rpcs3IOS_PatchesImport", RPCS3_IOS_STATUS_OK);
+}
+
+Rpcs3IOS_Status Rpcs3IOS_PatchesRemoveImported(void)
+{
+	if (pthread_main_np() != 0)
+	{
+		return refuse_main_thread("Rpcs3IOS_PatchesRemoveImported");
+	}
+
+	// A file that is already gone is the state the caller asked for.
+	const std::string file = patch_engine::get_imported_patch_path();
+	if (!fs::remove_file(file) && fs::is_file(file))
+	{
+		return finished_status("Rpcs3IOS_PatchesRemoveImported", RPCS3_IOS_STATUS_PATCH_WRITE_FAILED);
+	}
+
+	patch_writes++;
+	return finished_status("Rpcs3IOS_PatchesRemoveImported", RPCS3_IOS_STATUS_OK);
 }
 
 Rpcs3IOS_Status Rpcs3IOS_PatchesList(const char* serial, Rpcs3IOS_TextSink sink, void* context)

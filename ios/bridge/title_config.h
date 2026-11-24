@@ -579,8 +579,8 @@ namespace armsx3::bridge::title_config
 		{"NPUB31590", "Core:\n  PPU Decoder: Recompiler (LLVM)\n"},
 
 		// Tied to the bundled "Disable MLAA" patch; SPU threads at Auto avoid a prologue freeze that a cap exposes.
-		{"BCUS98234", "Video:\n  Write Color Buffers: false\n  Vulkan:\n    Fence Poll Completion Markers: true\nCore:\n  Preferred SPU Threads: 0\n"},
-		{"BCES01007", "Video:\n  Write Color Buffers: false\n  Vulkan:\n    Fence Poll Completion Markers: true\nCore:\n  Preferred SPU Threads: 0\n"},
+		{"BCUS98234", "Video:\n  Write Color Buffers: false\n  Vulkan:\n    Fence Poll Completion Markers: true\nCore:\n  Preferred SPU Threads: 0\n  SPU Inline Interrupt Idioms: true\n"},
+		{"BCES01007", "Video:\n  Write Color Buffers: false\n  Vulkan:\n    Fence Poll Completion Markers: true\nCore:\n  Preferred SPU Threads: 0\n  SPU Inline Interrupt Idioms: true\n"},
 
 		// On, the SPURS control-block atomics take vm::writer_lock about 550,000 times a second; off-spec, so this title only.
 		{"BLUS30218", "Core:\n  Accurate SPU Reservations: false\n"},
@@ -699,8 +699,16 @@ namespace armsx3::bridge::title_config
 		{"BLES00713", "Core:\n  Pause Game During SPU Compilation: true\n  SPU Poll Park Sites: 3f47c:40801083\n"},
 		{"BLES00714", "Core:\n  Pause Game During SPU Compilation: true\n"},
 
-		// Cold starts sometimes freeze while SPU code compiles on demand; pausing the game during compiles stops it.
+		// Cold starts sometimes freeze while SPU code compiles on demand; pausing the game during compiles stops it. This covers every version of The Last of Us.
 		{"BCUS98174", "Core:\n  Pause Game During SPU Compilation: true\n"},
+		{"BCES01584", "Core:\n  Pause Game During SPU Compilation: true\n"},
+		{"BCES01585", "Core:\n  Pause Game During SPU Compilation: true\n"},
+		{"BCJS37010", "Core:\n  Pause Game During SPU Compilation: true\n"},
+		{"BCAS20270", "Core:\n  Pause Game During SPU Compilation: true\n"},
+		{"NPUA80960", "Core:\n  Pause Game During SPU Compilation: true\n"},
+		{"NPEA00435", "Core:\n  Pause Game During SPU Compilation: true\n"},
+		{"NPHA80243", "Core:\n  Pause Game During SPU Compilation: true\n"},
+		{"NPJA00096", "Core:\n  Pause Game During SPU Compilation: true\n"},
 
 		// Exact ZCULL stats make the torches flicker on iPhone; approximate stats stop it.
 		{"BLES00158", "Video:\n  Accurate ZCULL stats: false\n  Relaxed ZCULL Sync: false\n"},

@@ -13,14 +13,13 @@ struct Redaction {
 
     // Read from rpcn.yml each time the store is made, so a report opened after a sign-in carries the current one.
     static var live: Redaction {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return Redaction(home: NSHomeDirectory(), bundle: Bundle.main.bundlePath,
-                         bundleID: Bundle.main.bundleIdentifier ?? "", rpcnName: rpcnName(inSupport: support))
+        Redaction(home: NSHomeDirectory(), bundle: Bundle.main.bundlePath,
+                  bundleID: Bundle.main.bundleIdentifier ?? "", rpcnName: rpcnName(inDocuments: DiagnosticsStore.documents))
     }
 
     // On Apple the core's config folder has no `config/` subfolder; that one is Windows-only (Utilities/File.cpp).
-    static func rpcnName(inSupport support: URL) -> String {
-        let yml = support.appendingPathComponent("rpcs3/rpcn.yml")
+    static func rpcnName(inDocuments documents: URL) -> String {
+        let yml = documents.appendingPathComponent("rpcs3/rpcn.yml")
         return rpcnName(fromRpcnYml: (try? String(contentsOf: yml, encoding: .utf8)) ?? "")
     }
 
@@ -132,7 +131,7 @@ struct DiagnosticsStore {
     let redaction: Redaction
     // 8 MB read as 8,000,000 bytes, under the chat apps' common free limits.
     let budget: Int
-    // Memory bounds on a phone already running a game: a log is staged from its tail, `chunk` bytes at a time.
+    // Memory bounds on a phone already running a game: a log is staged from its tail, plus a little of its start, `chunk` bytes at a time.
     let stageTail: Int
     let chunk: Int
     let ramBytes: UInt64
@@ -424,6 +423,9 @@ struct DiagnosticsStore {
         stage(hasTTY ? tty : rpcs3Dir.appendingPathComponent("TTY.log"), as: "TTY.log", in: staging)
         stage(session.appendingPathComponent("launch.json"), as: "launch.json", in: staging)
         stage(recordDir.appendingPathComponent("session.json"), as: "session-record.json", in: staging)
+        // The core reads these at boot, so a report shows what a title was patched with.
+        stage(rpcs3Dir.appendingPathComponent("patches/imported_patch.yml"), as: "patches/imported_patch.yml", in: staging)
+        stage(rpcs3Dir.appendingPathComponent("patch_config.yml"), as: "patch_config.yml", in: staging)
         if !settings.allGames.isEmpty { write(settings.allGames, as: "settings-all-games.yml", in: staging) }
         if !settings.thisGame.isEmpty { write(settings.thisGame, as: "settings-this-game.yml", in: staging) }
         // Only older sessions, so a report on the previous session never carries the newer launch's log.
@@ -737,17 +739,33 @@ struct DiagnosticsStore {
               let output = try? FileHandle(forWritingTo: target) else { return nil }
         defer { try? output.close() }
         let total = size(of: source)
-        let start = max(0, total - min(keep, stageTail))
-        var remaining = total - start
+        let bound = min(keep, stageTail)
+        // A game that floods the log would push the boot lines out of the tail, so an eighth of the bound keeps the start.
+        var head = total > bound ? min(bound / 8, chunk) : 0
+        var start = 0
+        var remaining = 0
         var pending = Data()
-        var cutting = start > 0
-        var omitted = start
+        var cutting = false
+        var omitted = 0
         func emit(_ data: Data) throws {
             try autoreleasepool {
                 try output.write(contentsOf: Data(Self.redact(String(decoding: data, as: UTF8.self), with: redaction).utf8))
             }
         }
         do {
+            if head > 0 {
+                let piece = try input.read(upToCount: head) ?? Data()
+                if let newline = piece.lastIndex(of: 0x0A) {
+                    try emit(piece[...newline])
+                    head = newline - piece.startIndex + 1
+                } else {
+                    head = 0
+                }
+            }
+            start = max(head, total - (bound - head))
+            remaining = total - start
+            cutting = start > head
+            omitted = start - head
             try input.seek(toOffset: UInt64(start))
             while remaining > 0, let piece = try input.read(upToCount: min(chunk, remaining)), !piece.isEmpty {
                 remaining -= piece.count
@@ -775,7 +793,7 @@ struct DiagnosticsStore {
         } catch {
             return nil
         }
-        return start > 0
+        return start > head
     }
 
     @discardableResult

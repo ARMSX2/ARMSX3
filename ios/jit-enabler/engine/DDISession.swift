@@ -43,19 +43,21 @@ final class DDISession {
         var installed: UnsafeMutablePointer<InstalledCryptexC>?
         let cryptexError = cryptexd_installed_ddi(tunnel.adapter, tunnel.handshake, &installed)
         defer { cryptexd_free_installed_cryptex(installed) }
-        if installed != nil {
-            if let cryptexError { idevice_error_free(cryptexError) }
+        let cryptexQuerySucceeded = cryptexError == nil
+        let queryError = cryptexError.map {
+            IdeviceFFI.consume($0, fallback: "failed to query installed DDI cryptex")
+        }
+        if cryptexQuerySucceeded, installed != nil {
             return true
         }
 
-        if (try? isLegacyDDIMounted(over: tunnel)) == true {
-            if let cryptexError { idevice_error_free(cryptexError) }
-            return true
+        do {
+            return try isLegacyDDIMounted(over: tunnel)
+        } catch {
+            if cryptexQuerySucceeded { return false }
+            if let queryError { throw queryError }
+            throw error
         }
-        if let cryptexError {
-            try IdeviceFFI.check("failed to query installed DDI cryptex") { cryptexError }
-        }
-        return false
     }
 
     private func isLegacyDDIMounted(over tunnel: Tunnel) throws -> Bool {
@@ -208,20 +210,31 @@ final class DDISession {
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)
         address.sin_port = configuration.rsdPort.bigEndian
-        _ = configuration.deviceAddress.withCString { inet_pton(AF_INET, $0, &address.sin_addr) }
+        guard configuration.deviceAddress.withCString({ inet_pton(AF_INET, $0, &address.sin_addr) }) == 1 else {
+            throw StikJITError.device(code: -1, subCode: 0, message: "Failed to parse device IP address")
+        }
 
         var tunnel = Tunnel()
-        try IdeviceFFI.check("failed to create RSD tunnel") {
-            "StikJIT".withCString { hostname in
-                withUnsafePointer(to: &address) { pointer in
-                    pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                        tunnel_create_rppairing(
-                            sa, socklen_t(MemoryLayout<sockaddr_in>.stride),
-                            hostname, pairing, nil, nil,
-                            &tunnel.adapter, &tunnel.handshake)
+        do {
+            try IdeviceFFI.check("failed to create RSD tunnel") {
+                "StikJIT".withCString { hostname in
+                    withUnsafePointer(to: &address) { pointer in
+                        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                            tunnel_create_rppairing(
+                                sa, socklen_t(MemoryLayout<sockaddr_in>.stride),
+                                hostname, pairing, nil, nil,
+                                &tunnel.adapter, &tunnel.handshake)
+                        }
                     }
                 }
             }
+        } catch {
+            tunnel.free()
+            throw error
+        }
+        guard tunnel.adapter != nil, tunnel.handshake != nil else {
+            tunnel.free()
+            throw StikJITError.device(code: -1, subCode: 0, message: "RSD tunnel was created without valid handles")
         }
         return tunnel
     }

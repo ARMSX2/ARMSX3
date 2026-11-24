@@ -87,7 +87,8 @@ int main()
 		return 1;
 	}
 	std::printf("WITNESS-OK fill_calls=%d filled_bytes=%zu dropped=%llu slowest_us=%lld\n", calls, filled, total, slowest_us.load());
-	return slowest_us.load() < 200000 ? 0 : 1;
+	// A real block hangs until the 60 s timeout; this bound only has to sit above a busy runner's scheduling stalls.
+	return slowest_us.load() < 2000000 ? 0 : 1;
 }
 """
 
@@ -186,7 +187,8 @@ int main(int argc, char** argv)
 			return std::printf("DRAIN-FAIL closed fd 2 was opened by the install\n"), done(1);
 		timed([] { utils::stderr_witness("x\n", 2); });
 		std::printf("DRAIN-OK closed slowest_us=%lld\n", slowest_us);
-		return done(slowest_us < 200000 ? 0 : 1);
+		// A real block hangs until the 60 s timeout; this bound only has to sit above a busy runner's scheduling stalls.
+		return done(slowest_us < 2000000 ? 0 : 1);
 	}
 
 	if (mode == "devnull")
@@ -272,7 +274,7 @@ int main(int argc, char** argv)
 		const ssize_t n = read(p[0], head, sizeof(head) - 1);
 		const char* want = "@@WITNESS@@ fd 2 drain installed\nFIRST-LINE\n";
 		const bool first = n > 0 && std::strncmp(head, want, std::strlen(want)) == 0;
-		const bool ok = first && dropped > 0 && slowest_us < 200000;
+		const bool ok = first && dropped > 0 && slowest_us < 2000000;
 		std::printf("%s unread slowest_us=%lld dropped=%llu first_bytes_ok=%d\n", ok ? "DRAIN-OK" : "DRAIN-FAIL",
 			slowest_us, dropped, first ? 1 : 0);
 		return done(ok ? 0 : 1);

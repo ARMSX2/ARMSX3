@@ -396,7 +396,13 @@ final class JITEnablerRequestHandler: NSObject, NSExtensionRequestHandling, Arms
                 }
             }
         }
-        return ok(tunnelError)
+        if ok(tunnelError) { return true }
+        // A failed call can still leave handles behind, and the retry would overwrite them.
+        if let handshake { rsd_handshake_free(handshake) }
+        if let adapter { adapter_free(adapter) }
+        handshake = nil
+        adapter = nil
+        return false
     }
 
     /// The disk image's state from two read-only answers: RSD's debug proxy listing, then the legacy mounter only if that failed.

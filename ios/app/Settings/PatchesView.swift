@@ -67,6 +67,12 @@ enum PatchDownload {
     }
 }
 
+// The picked file's text and what the first import said, held while the alert asks about replacing.
+private struct ReplaceOffer {
+    let text: String
+    let headline: String
+}
+
 struct PatchesView: View {
     let serial: String
     let title: String
@@ -77,6 +83,8 @@ struct PatchesView: View {
     @State private var busy = false
     @State private var importing = false
     @State private var message: String?
+    @State private var offer: ReplaceOffer?
+    @State private var removingImported = false
 
     // A name can carry a row per hash, one per game build.
     private var names: [String] {
@@ -121,6 +129,8 @@ struct PatchesView: View {
                         .disabled(busy)
                     Button("Import patch file…") { importing = true }
                         .disabled(busy)
+                    Button("Remove imported patches", role: .destructive) { removingImported = true }
+                        .disabled(busy)
                 } footer: {
                     Text("Changes apply the next time the game boots.")
                 }
@@ -139,6 +149,19 @@ struct PatchesView: View {
             }
             .alert(message ?? "", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
                 Button("OK", role: .cancel) {}
+            }
+            .alert(offer?.headline ?? "", isPresented: Binding(get: { offer != nil }, set: { if !$0 { offer = nil } }),
+                   presenting: offer) { held in
+                Button("Replace them") { runImport(held.text, replace: true) }
+                Button("Cancel", role: .cancel) {}
+            } message: { _ in
+                Text(PatchImportReport.replaceQuestion)
+            }
+            .alert("Remove the imported patches?", isPresented: $removingImported) {
+                Button("Remove", role: .destructive) { removeImported() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This deletes the patches you imported from files, for every game. Downloaded patches and which patches are switched on stay.")
             }
         }
         .task { await reload() }
@@ -189,11 +212,31 @@ struct PatchesView: View {
         let started = url.startAccessingSecurityScopedResource()
         let text = try? String(contentsOf: url, encoding: .utf8)
         if started { url.stopAccessingSecurityScopedResource() }
+        runImport(text ?? "", replace: false)
+    }
+
+    private func runImport(_ text: String, replace: Bool) {
         busy = true
         Task {
-            let status = await Rpcs3Bridge.importPatches(text ?? "")
-            message = status == 0 ? String(localized: "Patches imported.")
-                : String(localized: "That file isn't a patch file this version can read; nothing changed.")
+            let (status, imported, total) = await Rpcs3Bridge.importPatches(text, replace: replace)
+            let report = PatchImportReport.result(status: status, imported: imported, total: total)
+            // Reloaded before any alert, so the list is current underneath it.
+            await reload()
+            if report.canReplace {
+                offer = ReplaceOffer(text: text, headline: report.message)
+            } else {
+                message = report.message
+            }
+            busy = false
+        }
+    }
+
+    private func removeImported() {
+        busy = true
+        Task {
+            let status = await Rpcs3Bridge.removeImportedPatches()
+            message = status == 0 ? String(localized: "Imported patches removed.")
+                : String(localized: "The imported patches couldn't be removed.")
             await reload()
             busy = false
         }

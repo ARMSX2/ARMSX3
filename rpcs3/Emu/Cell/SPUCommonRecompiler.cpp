@@ -1257,7 +1257,7 @@ void spu_cache::add(const spu_program& func)
 	m_file.write_gather(gather, 3);
 }
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__APPLE__)
 // "<cache>/cache/<title>/" for an executable's cache folder "<cache>/cache/<title>/ppu-<hash>-EBOOT.BIN/",
 // or empty for any other shape. A game update installs a new executable, which gets a folder of its
 // own beside the old version's.
@@ -1275,6 +1275,14 @@ static std::string spu_title_cache_dir(std::string_view exec_cache)
 		return {};
 	}
 
+#ifdef __APPLE__
+	// Standalone executables, PS1 classics and VSH keep their folders in the cache root, which is no game's
+	if (const std::string& title = Emu.GetTitleID(); title.empty() || !exec_cache.substr(0, slash).ends_with("/" + title))
+	{
+		return {};
+	}
+
+#endif
 	return std::string(exec_cache.substr(0, slash + 1));
 }
 #endif
@@ -1301,7 +1309,7 @@ void spu_cache::initialize(bool build_existing_cache)
 	}
 
 	// SPU cache file (version + block size type)
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__APPLE__) && defined(ARCH_ARM64))
 	// ARMSX3: a list of its own with SPU Inline Interrupt Idioms on. With it the functions that run are
 	// not the ones a stock list holds (the code after a bid or bie no longer starts a function), and a
 	// list is rebuilt at every boot on a fake local store that holds one function at a time, so a shared
@@ -1324,7 +1332,7 @@ void spu_cache::initialize(bool build_existing_cache)
 		is_debug = true;
 	}
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__APPLE__)
 	// A game update installs a new executable, which gets its own cache folder and so an empty SPU
 	// list, though most of its SPU programs are the ones the old version ran. Start the list from the
 	// largest one another executable of the same game left, so those programs are built at boot
@@ -2098,7 +2106,7 @@ static u64 spu_obj_cache_settings()
 		static_cast<u64>(g_cfg.core.rsx_accurate_res_access.get()) << 34 |
 		static_cast<u64>(g_cfg.savestate.compatible_mode.get()) << 35 |
 		static_cast<u64>(g_cfg.core.spu_debug.get()) << 36
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__APPLE__) && defined(ARCH_ARM64))
 		| static_cast<u64>(g_cfg.core.spu_inline_interrupt_idioms.get()) << 37
 #endif
 		;
@@ -2125,7 +2133,7 @@ const std::string& spu_runtime::get_obj_cache_path() const
 #endif
 spu_runtime::spu_runtime()
 {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__APPLE__) && defined(ARCH_ARM64))
 	if (g_cfg.core.spu_inline_interrupt_idioms && g_cfg.core.spu_decoder == spu_decoder_type::llvm)
 	{
 		spu_log.notice("SPU Inline Interrupt Idioms: on, %s", g_cfg.core.spu_block_size == spu_block_size_type::mega ?
@@ -2287,6 +2295,13 @@ spu_runtime::spu_runtime()
 		const std::string park_sites = g_cfg.core.spu_poll_park_sites.to_string();
 		sha1_update(&ctx, reinterpret_cast<const u8*>(park_sites.data()), park_sites.size());
 
+		// Changes the code built for the same SPU program; folded only when on, so the key with it off stays as it was
+		if (g_cfg.core.spu_inline_interrupt_idioms)
+		{
+			const u32 inline_idioms = 1;
+			fold(inline_idioms);
+		}
+
 #endif
 		// Device-variable inputs. The HW bits reach the JIT through setMAttrs, and sha3 in
 		// particular auto-selects eor3/xar from plain XOR/rotate IR with no intrinsic gate, so
@@ -2363,6 +2378,11 @@ spu_runtime::spu_runtime()
 #ifdef __ANDROID__
 		const std::string obj_parent = spu_obj_cache_parent(m_cache_path);
 		m_obj_cache_path = obj_parent + fmt::format("spuobj-v%u-%s/", SPU_OBJ_CACHE_VERSION, fmt::base57(key, 16));
+#elif defined(__APPLE__)
+		// Kept per game, as on Android: a game update's new executable reuses the old version's objects
+		const std::string title_cache = spu_title_cache_dir(m_cache_path);
+		const std::string obj_parent = title_cache.empty() ? m_cache_path : title_cache;
+		m_obj_cache_path = obj_parent + fmt::format("spuobj-v%u-%s/", SPU_OBJ_CACHE_VERSION, fmt::base57(key, 16));
 #else
 		m_obj_cache_path = m_cache_path + fmt::format("spuobj-v%u-%s/", SPU_OBJ_CACHE_VERSION, fmt::base57(key, 16));
 #endif
@@ -2376,11 +2396,51 @@ spu_runtime::spu_runtime()
 #ifdef __APPLE__
 		// The two most recently used other directories stay, so toggling a setting back rebuilds nothing
 		constexpr usz SPU_OBJ_CACHE_KEEP_DIRS = 2;
+
+		// Objects in the executables' own folders, the old layout, move up; this executable's go first
+		if (obj_parent != m_cache_path)
+		{
+			std::vector<std::string> exec_dirs{m_cache_path};
+
+			for (auto&& entry : fs::dir(obj_parent))
+			{
+				if (entry.is_directory && entry.name.starts_with("ppu-") && obj_parent + entry.name + "/" != m_cache_path)
+				{
+					exec_dirs.push_back(obj_parent + entry.name + "/");
+				}
+			}
+
+			for (const std::string& dir : exec_dirs)
+			{
+				std::vector<std::string> old_caches;
+
+				for (auto&& entry : fs::dir(dir))
+				{
+					if (entry.is_directory && entry.name.starts_with("spuobj-"))
+					{
+						old_caches.push_back(entry.name);
+					}
+				}
+
+				for (const std::string& name : old_caches)
+				{
+					if (fs::rename(dir + name, obj_parent + name, false))
+					{
+						spu_log.notice("Moved SPU object cache to the game's folder: %s%s", dir, name);
+						continue;
+					}
+
+					spu_log.notice("Removing SPU object cache from an executable's folder: %s%s", dir, name);
+					fs::remove_all(dir + name + "/");
+				}
+			}
+		}
+
 		std::vector<std::pair<s64, std::string>> other_caches;
 
-		for (auto&& entry : fs::dir(m_cache_path))
+		for (auto&& entry : fs::dir(obj_parent))
 		{
-			if (entry.is_directory && entry.name.starts_with("spuobj-") && m_cache_path + entry.name + "/" != m_obj_cache_path)
+			if (entry.is_directory && entry.name.starts_with("spuobj-") && obj_parent + entry.name + "/" != m_obj_cache_path)
 			{
 				other_caches.emplace_back(entry.mtime, entry.name);
 			}
@@ -2399,7 +2459,7 @@ spu_runtime::spu_runtime()
 			}
 
 			spu_log.notice("Removing SPU object cache from another build: %s", name);
-			fs::remove_all(m_cache_path + name + "/");
+			fs::remove_all(obj_parent + name + "/");
 		}
 
 		// Picking a directory is a use of it; a new directory gets its mtime from create_path below.
@@ -4774,7 +4834,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 				spu_log.error("[0x%x] Invalid interrupt flags (DE)", pos);
 			}
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__APPLE__) && defined(ARCH_ARM64))
 			if (type == spu_itype::BI && (op.d || (op.e && g_cfg.core.spu_block_size == spu_block_size_type::mega)) && g_cfg.core.spu_inline_interrupt_idioms)
 			{
 				// ARMSX3: SPU Inline Interrupt Idioms. A block that starts inside the one holding this
@@ -4863,7 +4923,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 					break;
 				}
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__APPLE__) && defined(ARCH_ARM64))
 				if (type == spu_itype::BI && target == pos + 4 && op.e && !sync && g_cfg.core.spu_inline_interrupt_idioms && g_cfg.core.spu_block_size == spu_block_size_type::mega)
 				{
 					// ARMSX3: enable interrupts idiom, with SPU Inline Interrupt Idioms on. The function is

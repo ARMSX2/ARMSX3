@@ -2636,7 +2636,12 @@ const std::string& fs::get_config_dir([[maybe_unused]] bool get_config_subdirect
 
 #ifdef __APPLE__
 		if (const char* home = ::getenv("HOME"))
+#if TARGET_OS_IPHONE
+			// The Files app lists Documents, so the player can reach dev_hdd0 there.
+			dir = home + "/Documents"s;
+#else
 			dir = home + "/Library/Application Support"s;
+#endif
 #else
 		if (const char* conf = ::getenv("XDG_CONFIG_HOME"))
 			dir = conf;

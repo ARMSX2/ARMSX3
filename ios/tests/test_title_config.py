@@ -71,7 +71,10 @@ IOS_ONLY_REQUIRED = ("NPUB30558", "BLUS30837", "BLES01613", "BLUS30405", "BLES00
 GOD_OF_WAR_3 = ("BCUS98111", "BCES00510", "BCES00799", "BCAS25003", "BCKS15003", "BCJS37001", "NPUA70080")
 
 # The ios_only table may repeat these Android serials; its row wins over the ported one.
-SHARED_WITH_ANDROID = GOD_OF_WAR_3 + ("BCUS98174",)
+THE_LAST_OF_US = ("BCUS98174", "BCES01584", "BCES01585", "BCJS37010", "BCAS20270", "NPUA80960", "NPEA00435",
+                  "NPHA80243", "NPJA00096")
+
+SHARED_WITH_ANDROID = GOD_OF_WAR_3 + THE_LAST_OF_US
 
 IOS_ONLY_APPROXIMATE_XFLOAT = "Core:\\n  SPU XFloat Accuracy: Approximate\\n"
 
@@ -97,7 +100,7 @@ IOS_ONLY_ROWS = {
     "BLUS30405": IOS_ONLY_SPU_COMPILE_PAUSE,
     "BLES00713": IOS_ONLY_DANTE_EU_PARK,
     "BLES00714": IOS_ONLY_SPU_COMPILE_PAUSE,
-    "BCUS98174": IOS_ONLY_SPU_COMPILE_PAUSE,
+    **{serial: IOS_ONLY_SPU_COMPILE_PAUSE for serial in THE_LAST_OF_US},
     "BLES00158": IOS_ONLY_APPROXIMATE_ZCULL,
     "BLUS30089": IOS_ONLY_APPROXIMATE_ZCULL,
     "BLUS30065": IOS_ONLY_HIGH_PRECISION,
@@ -335,22 +338,11 @@ def ios_only_problems(header_text, kotlin_text, results):
     return problems
 
 
-# Keys Android's rows set that the iOS core does not have: they sit under `#ifdef __ANDROID__` in
-# system_config.h, so the iOS table leaves them out and the comparison ignores them.
-ANDROID_ONLY_KEYS = ("SPU Inline Interrupt Idioms",)
-
-
-def strip_android_only(config):
-    for key in ANDROID_ONLY_KEYS:
-        config = re.sub(r"\\n  " + re.escape(key) + r": [^\\]*", "", config)
-    return config
-
-
 def kotlin_table(kotlin_text):
     body = kotlin_text[kotlin_text.index("private val LOCAL_OVERRIDES"):]
     body = body[:body.index("\n    )\n")]
     rows = re.findall(r'^\s*"([A-Z]{4}[0-9]{5})" to "((?:[^"\\]|\\.)*)",$', body, re.M)
-    return [(serial, strip_android_only(config)) for serial, config in rows]
+    return rows
 
 
 def local_problems(header_text, kotlin_text, results):
@@ -369,7 +361,7 @@ def local_problems(header_text, kotlin_text, results):
         if known or added != leaves or got != text:
             problems.append("local: with no database {0} added={1} text={2!r}, not its own entry".format(serial, added, got))
     known, added, got = results.get("%" + KILLZONE, (0, 0, ""))
-    if not known or added != 4 or "  Write Color Buffers: false\n" not in (section(got, "Video") or "") or \
+    if not known or added != 5 or "  Write Color Buffers: false\n" not in (section(got, "Video") or "") or \
             "Write Color Buffers: true" in got or "  PPU Decoder: Interpreter (static)\n" not in (section(got, "Core") or "") or \
             "  Preferred SPU Threads: 0\n" not in (section(got, "Core") or ""):
         problems.append("local: {0} with the database did not keep ours over it and add its other key (added={1}): {2!r}".format(KILLZONE, added, got))

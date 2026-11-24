@@ -46,7 +46,7 @@ struct cfg_root : cfg::node
 #endif
 		cfg::_int<1, 6> max_spurs_threads{ this, "Max SPURS Threads", 6, true }; // HACK. If less then 6, max number of running SPURS threads in each thread group.
 		cfg::_enum<spu_block_size_type> spu_block_size{ this, "SPU Block Size", spu_block_size_type::safe };
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__APPLE__) && defined(ARCH_ARM64))
 		// ARMSX3: SPU LLVM compiles the interrupt toggle idioms (a bid or bie to the next instruction)
 		// in line instead of leaving the compiled function at each one; bie with SPU Block Size Mega
 		// only. Part of the SPU object cache key and of the SPU cache file name, so not dynamic. Off

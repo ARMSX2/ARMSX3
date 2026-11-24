@@ -6,10 +6,11 @@ enum IdeviceFFI {
     static func consume(_ pointer: UnsafeMutablePointer<IdeviceFfiError>?,
                         fallback: String) -> StikJITError {
         guard let pointer else { return .device(code: -1, subCode: 0, message: fallback) }
+        let detail = pointer.pointee.message.flatMap { String(validatingUTF8: $0) } ?? fallback
         let error = StikJITError.device(
             code: pointer.pointee.code,
             subCode: pointer.pointee.sub_code,
-            message: pointer.pointee.message.map { String(cString: $0) } ?? fallback)
+            message: detail == fallback ? fallback : "\(fallback): \(detail)")
         idevice_error_free(pointer)
         return error
     }

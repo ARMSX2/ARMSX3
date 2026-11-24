@@ -525,7 +525,7 @@ let files = FileManager.default
 let now = Date(timeIntervalSince1970: @@NOW@@)
 // The RPCN username is read from r1's rpcn.yml the way Redaction.live reads the app's.
 let rules = Redaction(home: @@HOME@@, bundle: @@BUNDLE@@, bundleID: @@BUNDLEID@@,
-                      rpcnName: Redaction.rpcnName(inSupport: tmp.appendingPathComponent("r1/Library/Application Support")))
+                      rpcnName: Redaction.rpcnName(inDocuments: tmp.appendingPathComponent("r1/Documents")))
 let form = ReportForm(whatHappened: "It froze on the title screen", whereInGame: "")
 let settings = ReportSettings(allGames: "Video:\n  Renderer: Vulkan\n", thisGame: "Core:\n  PPU Decoder: Interpreter\n")
 
@@ -574,6 +574,15 @@ do {
     line("R9 tty=\(r.files.contains("TTY.log") ? "staged" : "skipped")")
 } catch {
     line("R9 error")
+}
+
+// P1: the core's imported patches and patch switches are staged when they exist.
+do {
+    let (_, r) = try report("p1")
+    line("P1 imported=\(r.files.contains("patches/imported_patch.yml") ? "staged" : "skipped")"
+        + " config=\(r.files.contains("patch_config.yml") ? "staged" : "skipped")")
+} catch {
+    line("P1 error")
 }
 
 // ---- The cap, the summary, the pruning.
@@ -645,9 +654,11 @@ do {
     let r = try build(s)
     let source = s.sessionsDir.appendingPathComponent("@@REPORTED@@/RPCS3.log")
     let staged = text(capture.appendingPathComponent("RPCS3.log")).split(separator: "\n", omittingEmptySubsequences: false)
-    let boundary = staged.count > 1 && staged[1].hasPrefix("\u{00B7}")
+    let cut = staged.firstIndex(where: isMarker)
+    let boundary = cut.map { $0 + 1 < staged.count && staged[$0 + 1].hasPrefix("\u{00B7}") } ?? false
+    let head = cut != 0 && staged.first == text(source).split(separator: "\n").first
     line("R4 trimmed=\(r.trimmed ? 1 : 0) tail=\(lastLine(capture.appendingPathComponent("RPCS3.log")) == lastLine(source) ? 1 : 0)"
-        + " marker=\(staged.first.map(isMarker) == true ? 1 : 0) boundary=\(boundary ? 1 : 0) fits=\(r.bytes <= 200_000 ? 1 : 0)")
+        + " head=\(head ? 1 : 0) marker=\(cut != nil ? 1 : 0) boundary=\(boundary ? 1 : 0) fits=\(r.bytes <= 200_000 ? 1 : 0)")
 } catch {
     line("R4 error")
 }
@@ -667,10 +678,12 @@ do {
     let r = try build(s)
     let log = capture.appendingPathComponent("RPCS3.log")
     let size = (try? Data(contentsOf: log).count) ?? Int.max
-    let first = text(log).split(separator: "\n").first ?? ""
+    let source = s.sessionsDir.appendingPathComponent("@@REPORTED@@/RPCS3.log")
+    let lines = text(log).split(separator: "\n")
     line("R10 capped=\(r.trimmed && size <= 4096 + 64 ? 1 : 0)"
-        + " tail=\(lastLine(log) == lastLine(s.sessionsDir.appendingPathComponent("@@REPORTED@@/RPCS3.log")) ? 1 : 0)"
-        + " marker=\(isMarker(first) ? 1 : 0)")
+        + " tail=\(lastLine(log) == lastLine(source) ? 1 : 0)"
+        + " head=\(lines.first == text(source).split(separator: "\n").first ? 1 : 0)"
+        + " marker=\(lines.filter(isMarker).count == 1 ? 1 : 0)")
 } catch {
     line("R10 error")
 }
@@ -841,10 +854,11 @@ EXPECTED_REPORT = {
     "R1": "R1 built=1 staging=0 reports=1",
     "R8": "R8 built=1 log=none",
     "R9": "R9 tty=skipped",
+    "P1": "P1 imported=staged config=staged",
     "R3": "R3 older=0 trimmed=0 fits=1",
-    "R4": "R4 trimmed=1 tail=1 marker=1 boundary=1 fits=1",
+    "R4": "R4 trimmed=1 tail=1 head=1 marker=1 boundary=1 fits=1",
     "R5": "R5 trimmed=0 older=1",
-    "R10": "R10 capped=1 tail=1 marker=1",
+    "R10": "R10 capped=1 tail=1 head=1 marker=1",
     "R11": "R11 leaks=0",
     "R6": "R6 serial=1 device=1 jithelper=finished fps=29.8 error=1 settings=1 empty=1 cap=2000 redacted=1",
     "R6zip": "R6zip same=1",
@@ -912,7 +926,7 @@ let yml = @@YML@@
 let quoted = yml.replacingOccurrences(of: "NPID: " + name, with: "NPID: \"" + name + "\"")
 let fromYml = Redaction.rpcnName(fromRpcnYml: yml) == name && Redaction.rpcnName(fromRpcnYml: quoted) == name
     && Redaction.rpcnName(fromRpcnYml: "Version: 2\n").isEmpty
-    && Redaction.rpcnName(inSupport: URL(fileURLWithPath: @@SUPPORT@@)) == name
+    && Redaction.rpcnName(inDocuments: URL(fileURLWithPath: @@DOCUMENTS@@)) == name
 let home = @@HOME@@
 let log = "Path: " + home + "/Library/Application Support/rpcs3/\n" + @@LOG@@
 func marks(_ text: String, _ mark: String) -> Int { text.components(separatedBy: mark).count - 1 }
@@ -945,19 +959,28 @@ RPF_LINE = "RPF friends=18 left=0 tails=3 elsewhere=0"
 RPS_LINE = "RPS shapes=14 named=1 unshaped=1 own=1 ownpair=3 online=0"
 
 
+# Invented patches; the Notes line carries the container path so redaction has something to remove.
+PATCH_FILE = ("Version: 1.2\n\nPPU-0000000000000000000000000000000000000001:\n  \"Synthetic Patch\":\n"
+              "    Games:\n      \"Synthetic Game\":\n        BLUS00000: [ All ]\n    Author: Nobody\n"
+              "    Notes: " + HOME + "/Documents\n    Patch Version: 1.0\n    Patch:\n      - [ be32, 0x00010000, 0x60000000 ]\n")
+
+PATCH_CONFIG = ("Version: 1.2\n\nPPU-0000000000000000000000000000000000000001:\n  \"Synthetic Patch\":\n"
+                "    Games:\n      \"Synthetic Game\":\n        BLUS00000:\n          All:\n            Enabled: true\n")
+
+
 def fabricated(tmp, name):
     """A container laid out like the app's, with the decoys every report must leave behind."""
     base = Path(tmp) / name
     support = base / "Library" / "Application Support"
     dirs = {"base": base, "sessions": support / "armsx3-logs" / "sessions", "rpcs3": support / "rpcs3",
-            "record": base / "Documents" / "armsx3"}
-    for key in ("sessions", "rpcs3", "record"):
+            "config": base / "Documents" / "rpcs3", "record": base / "Documents" / "armsx3"}
+    for key in ("sessions", "rpcs3", "config", "record"):
         dirs[key].mkdir(parents=True)
     # The pairing file at both of its real relative locations (PairingImport.swift), synthetic content.
     for folder in (support / "StikJIT", base / "Documents" / "StikJIT"):
         folder.mkdir(parents=True)
         (folder / "pairingFile.plist").write_text("<plist><string>" + DECOY + "</string></plist>\n", encoding="utf-8")
-    save = dirs["rpcs3"] / "dev_hdd0" / "home" / "00000001" / "savedata" / "ABCD12345-SAVE"
+    save = dirs["config"] / "dev_hdd0" / "home" / "00000001" / "savedata" / "ABCD12345-SAVE"
     save.mkdir(parents=True)
     (save / "SAVE.DAT").write_bytes(DECOY.encode("utf-8") * 4)
     (base / "Documents" / "stray.txt").write_text(DECOY + "\n", encoding="utf-8")
@@ -977,7 +1000,7 @@ def write_report_fixtures(tmp):
     write_state(reported, "in-game", True, "ABCD12345")
     # The RPCN lines after the header, and the core's rpcn.yml where the driver's Redaction reads the username.
     (reported / "RPCS3.log").write_bytes(log.replace(b"\n", ("\n" + "\n".join(RPCN_LINES) + "\n").encode("utf-8"), 1))
-    (r1["rpcs3"] / "rpcn.yml").write_text(RPCN_YML, encoding="utf-8")
+    (r1["config"] / "rpcn.yml").write_text(RPCN_YML, encoding="utf-8")
     (reported / "launch.json").write_bytes(REPORT_LAUNCH)
     (reported / "notes.txt").write_text(DECOY + "\n", encoding="utf-8")
     (reported / "RPCS3.log.gz").write_bytes(b"\x1f\x8b unfinished")
@@ -1002,6 +1025,15 @@ def write_report_fixtures(tmp):
     (session / "RPCS3.log").write_bytes(log)
     os.symlink(r9["base"] / "Library" / "Application Support" / "StikJIT" / "pairingFile.plist", session / "TTY.log")
     (r9["rpcs3"] / "TTY.log").write_text("core console\n", encoding="utf-8")
+
+    p1 = fabricated(tmp, "p1")
+    session = p1["sessions"] / REPORTED
+    session.mkdir()
+    write_state(session, "in-game", True, "ABCD12345")
+    (session / "RPCS3.log").write_bytes(log)
+    (p1["rpcs3"] / "patches").mkdir()
+    for name, body in (("patches/imported_patch.yml", PATCH_FILE), ("patch_config.yml", PATCH_CONFIG)):
+        (p1["rpcs3"] / name).write_text(body, encoding="utf-8")
 
 
 def log_lines(count, text):
@@ -1626,6 +1658,7 @@ class TheReportBuilds(unittest.TestCase):
             out = compile_and_run([SFO, ZIP, SAVES, FACTS, STORE], driver, tmp)
             cls.r1 = zip_entries(Path(tmp) / "r1" / "Documents" / "Reports")
             cls.r9 = zip_entries(Path(tmp) / "r9" / "Documents" / "Reports")
+            cls.p1 = zip_entries(Path(tmp) / "p1" / "Documents" / "Reports")
         cls.lines = {line.split(" ", 1)[0]: line for line in out.splitlines() if line.strip()}
 
     def test_the_image_sample_is_the_shared_shape(self):
@@ -1684,6 +1717,15 @@ class TheReportBuilds(unittest.TestCase):
                 self.assertFalse(name.endswith("/TTY.log"))
                 self.assertNotIn(DECOY.encode("utf-8"), data)
 
+    def test_p1_the_patch_files_are_staged_and_redacted(self):
+        folder = "ARMSX3-report-" + STAMP + "/"
+        for name in ("patches/imported_patch.yml", "patch_config.yml"):
+            with self.subTest(name):
+                data = self.p1.get(folder + name)
+                self.assertIsNotNone(data, name + " is not in the report")
+                self.assertIn(b"Synthetic Patch", data)
+                self.assertNotIn(HOME.encode("utf-8"), data)
+
 
 class TheUsernameIsRedacted(unittest.TestCase):
     """The RPCN rules on the host, never device evidence."""
@@ -1693,13 +1735,13 @@ class TheUsernameIsRedacted(unittest.TestCase):
         for path in (SFO, ZIP, SAVES, STORE):
             read(path)
         with tempfile.TemporaryDirectory() as tmp:
-            support = Path(tmp) / "Library" / "Application Support"
-            (support / "rpcs3").mkdir(parents=True)
-            (support / "rpcs3" / "rpcn.yml").write_text(RPCN_YML, encoding="utf-8")
+            documents = Path(tmp) / "Documents"
+            (documents / "rpcs3").mkdir(parents=True)
+            (documents / "rpcs3" / "rpcn.yml").write_text(RPCN_YML, encoding="utf-8")
             tails = (before + "<rpcn-friend>" + after + (": NotFound" if "error" in after else "")
                      for before, after in FRIEND_SHAPES)
             driver = (RPCN_DRIVER.replace("@@NAME@@", json.dumps(RPCN_NAME)).replace("@@YML@@", json.dumps(RPCN_YML))
-                      .replace("@@SUPPORT@@", json.dumps(str(support))).replace("@@HOME@@", json.dumps(HOME))
+                      .replace("@@DOCUMENTS@@", json.dumps(str(documents))).replace("@@HOME@@", json.dumps(HOME))
                       .replace("@@LOG@@", json.dumps("\n".join(RPCN_LINES) + "\n", ensure_ascii=False))
                       .replace("@@DECOYS@@", ", ".join(json.dumps(d) for d in RPCN_DECOYS))
                       .replace("@@FRIEND@@", json.dumps(FRIEND_NAME))

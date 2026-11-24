@@ -139,6 +139,7 @@ targets:
       - sdk: UIKit.framework
       - sdk: AVFoundation.framework
       - sdk: GameController.framework   # gameplay input and menu navigation
+      - sdk: ExternalAccessory.framework # GameSir G8+ MFi rumble
       - sdk: MetricKit.framework        # crash diagnostics
       - sdk: CoreMotion.framework   # the phone's tilt for player 1
       - sdk: CoreMedia.framework    # camera frames
