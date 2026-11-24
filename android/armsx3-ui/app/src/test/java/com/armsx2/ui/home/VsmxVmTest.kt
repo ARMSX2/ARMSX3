@@ -191,6 +191,35 @@ class VsmxVmTest {
     }
 
     @Test
+    fun arraysJoinSpliceAndResize() {
+        // deck = [1, 2, 3, 4]; report(deck.toString()); report(deck.splice(1, 2)); report(deck.join("-"));
+        // report(deck.splice(-1)); deck.length = 3; report(deck.length); report(deck.toString());
+        // deck.splice(1, 0, 9); report(deck.toString()); report((7).toString())
+        val (vm, out) = run {
+            assign("deck") { int(1); int(2); int(3); int(4); array(4) }
+            callGlobal("report", { global("deck"); getKeep("toString"); callMethod(0) })
+            callGlobal("report", { global("deck"); getKeep("splice"); int(1); int(2); callMethod(2) })
+            callGlobal("report", { global("deck"); getKeep("join"); string("-"); callMethod(1) })
+            callGlobal("report", { global("deck"); getKeep("splice"); int(-1); callMethod(1) })
+            global("deck"); int(3); set("length"); pop()
+            callGlobal("report", { global("deck"); get("length") })
+            callGlobal("report", { global("deck"); getKeep("toString"); callMethod(0) })
+            global("deck"); getKeep("splice"); int(1); int(0); int(9); callMethod(3); pop()
+            callGlobal("report", { global("deck"); getKeep("toString"); callMethod(0) })
+            callGlobal("report", { int(7); getKeep("toString"); callMethod(0) })
+        }
+        assertNull(vm.failed)
+        assertEquals("1,2,3,4", out[0])
+        assertEquals(listOf(2.0, 3.0), items(out[1]))
+        assertEquals("1-4", out[2])
+        assertEquals(listOf(4.0), items(out[3]))
+        assertEquals(3.0, out[4])
+        assertEquals("1,,", out[5])
+        assertEquals("1,9,,", out[6])
+        assertEquals("7", out[7])
+    }
+
+    @Test
     fun runawayLoopsStop() {
         val (vm, _) = run { op(0x39, 0) }
         assertTrue(vm.failed!!, vm.failed!!.startsWith("step budget"))

@@ -237,6 +237,14 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
         var yfov = scene.camera.yfov
             private set
 
+        /**
+         * An orthographic camera's height, kept for the script to read back and nothing more: the
+         * themes' cameras are perspective ones. God of War: Ascension's script sets 25 for HD, and
+         * its pictures are framed edge to edge, at the start and end of every pan, for its
+         * perspective camera (yfov 1), not for a 25-high flat view.
+         */
+        private var ymag = 0.0
+
         override fun vector(name: String): FloatArray? = when (name) {
             "position" -> position
             "direction" -> direction
@@ -253,6 +261,7 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
 
         override fun get(name: String): Any? = when (name) {
             "yfov" -> yfov.toDouble()
+            "ymag" -> ymag
             // The picture's shape: the scene is always composed for 16:9, and cropped to fit.
             "aspect" -> FRAME_ASPECT.toDouble()
             else -> super.get(name)
@@ -262,6 +271,8 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
             if (name == "yfov") {
                 val v = VsmxVm.num(value).toFloat()
                 if (v > MIN_FOV && v < MAX_FOV) yfov = v
+            } else if (name == "ymag") {
+                ymag = VsmxVm.num(value)
             } else {
                 super.set(name, value)
             }
@@ -337,6 +348,9 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
             "interval" -> TICK
             // The PS3's output, which themes pick HD or SD pictures by: always HD here.
             "resolution" -> toArray(floatArrayOf(1920f, 1080f))
+            // A debugging print for theme makers, going by its name: God of War: Ascension's script
+            // calls it every 15 s. Nothing to print here.
+            "printPerf" -> VsmxVm.Native(name) { _, _ -> VsmxVm.Undefined }
             else -> VsmxVm.Undefined.also { report("System.$name") }
         }
         override fun set(name: String, value: Any?) = report("System.$name =")

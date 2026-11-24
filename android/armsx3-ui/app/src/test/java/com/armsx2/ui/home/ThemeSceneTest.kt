@@ -149,6 +149,29 @@ class ThemeSceneTest {
         assertTrue(p.scriptError!!.contains("no actor"))
     }
 
+    @Test
+    fun godOfWarAscensionsSetupRuns() {
+        // What its first timer does before it shows a picture: cam.ymag = 25; System.printPerf();
+        // writeln(deck.toString()); deck.splice(0, 1); and later deck.length = 7. Each of these
+        // stopped the script, leaving the screen black.
+        val p = play {
+            assign("cam") { global("Camera"); string("camera"); new(1) }
+            global("cam"); int(25); set("ymag"); pop()
+            global("System"); getKeep("printPerf"); callMethod(0); pop()
+            assign("deck") { int(1); int(2); array(2) }
+            callGlobal("writeln", { global("deck"); getKeep("toString"); callMethod(0) })
+            global("deck"); getKeep("splice"); int(0); int(1); callMethod(2); pop()
+            global("deck"); int(2); set("length"); pop()
+            global("Actor"); string("a"); new(1); op(0x25, 1); set("enable"); pop()
+        }
+        val asked = ArrayList<String>()
+        p.unsupported = { asked += it }
+        p.start()
+        assertNull(p.scriptError)
+        assertEquals(emptyList<String>(), asked)
+        assertTrue(p.actors[0].shown)
+    }
+
     // ---- moves ----
 
     @Test

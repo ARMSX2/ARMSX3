@@ -321,12 +321,26 @@ class VsmxVm(private val program: Program, private val host: Host) {
             name == "length" -> o.items.size.toDouble()
             name == "push" -> Native("push") { self, args -> (self as JsArray).items.addAll(args); self.items.size.toDouble() }
             o.props?.containsKey(name) == true -> o.props!![name]
+            // Sony's God of War: Ascension theme deals its pictures from a deck: it logs the deck
+            // (writeln(deck.toString())), then takes the one it showed out with splice.
+            name == "toString" -> Native(name) { _, _ -> join(o, ",") }
+            name == "join" -> Native(name) { _, args -> join(o, args.getOrNull(0)?.takeUnless { it === Undefined }?.let { str(it) } ?: ",") }
+            name == "splice" -> Native(name) { _, args -> splice(o, args) }
             else -> Undefined.also { host.unsupported("Array.$name") }
         }
         is JsObject -> lookup(o, name)
         is Function -> if (name == "prototype") o.prototype else if (o.props.containsKey(name)) o.props[name] else Undefined
         is HostObject -> o.get(name)
-        is String -> if (name == "length") o.length.toDouble() else Undefined.also { host.unsupported("String.$name") }
+        is String -> when (name) {
+            "length" -> o.length.toDouble()
+            "toString" -> Native(name) { _, _ -> o }
+            else -> Undefined.also { host.unsupported("String.$name") }
+        }
+        is Double, is Boolean -> if (name == "toString") {
+            Native(name) { _, _ -> str(o) }
+        } else {
+            Undefined.also { host.unsupported((if (o is Boolean) "Boolean." else "Number.") + name) }
+        }
         null, Undefined -> throw VsmxError("property $name of ${describe(o)}")
         else -> Undefined
     }
@@ -346,10 +360,40 @@ class VsmxVm(private val program: Program, private val host: Host) {
         when (o) {
             is JsObject -> o.props[name] = v
             is Function -> o.props[name] = v
-            is JsArray -> (o.props ?: HashMap<String, Any?>().also { o.props = it })[name] = v
+            // `deck.length = 7` makes the array that long, as JavaScript does: God of War: Ascension
+            // refills its deck that way once it has dealt every picture.
+            is JsArray -> if (name == "length") resize(o, v) else (o.props ?: HashMap<String, Any?>().also { o.props = it })[name] = v
             is HostObject -> o.set(name, v)
             else -> throw VsmxError("set $name on ${describe(o)}")
         }
+    }
+
+    /** `a.length = n`: cut to [n] items, or filled out to it with undefined. */
+    private fun resize(a: JsArray, n: Any?) {
+        val size = num(n)
+        if (size.isNaN() || size < 0 || size > MAX_ARRAY || size != Math.floor(size)) throw VsmxError("array length")
+        val wanted = size.toInt()
+        if (wanted < a.items.size) a.items.subList(wanted, a.items.size).clear()
+        while (a.items.size < wanted) a.items.add(Undefined)
+    }
+
+    /**
+     * `a.splice(start, count, items...)` as JavaScript has it: takes [count] items out from [start]
+     * (counted from the end when negative; all the rest when there is no count), puts the items given
+     * in their place, and returns what it took out.
+     */
+    private fun splice(a: JsArray, args: List<Any?>): JsArray {
+        val size = a.items.size
+        val from = num(args.getOrNull(0)).let { if (it.isNaN()) 0.0 else it.coerceIn(-size.toDouble(), size.toDouble()) }.toInt()
+        val start = if (from < 0) size + from else from
+        val count = if (args.size < 2) size - start else num(args[1]).let { if (it.isNaN()) 0.0 else it.coerceIn(0.0, (size - start).toDouble()) }.toInt()
+        val added = args.drop(2)
+        if (size - count + added.size > MAX_ARRAY) throw VsmxError("array size")
+        val taken = a.items.subList(start, start + count)
+        val removed = JsArray(ArrayList(taken))
+        taken.clear()
+        a.items.addAll(start, added)
+        return removed
     }
 
     private fun index(o: Any?, i: Any?): Any? = when (o) {
@@ -396,9 +440,13 @@ class VsmxVm(private val program: Program, private val host: Host) {
         fun str(v: Any?): String = when (v) {
             is Double -> if (v == Math.floor(v) && !v.isInfinite() && Math.abs(v) < 1e15) v.toLong().toString() else v.toString()
             null -> "null"
-            is JsArray -> v.items.joinToString(",") { str(it) }
+            is JsArray -> join(v, ",")
             else -> v.toString()
         }
+
+        /** An array as text, as JavaScript joins one: its items between [separator]s, undefined and null as nothing. */
+        private fun join(a: JsArray, separator: String): String =
+            a.items.joinToString(separator) { if (it == null || it === Undefined) "" else str(it) }
 
         private fun describe(v: Any?): String = when (v) {
             null -> "null"
