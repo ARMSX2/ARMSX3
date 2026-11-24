@@ -2339,7 +2339,7 @@ private fun MenuCycleRow(
 }
 
 @Composable
-private fun CompactAction(title: String, glyph: String, modifier: Modifier, onClick: () -> Unit) {
+internal fun CompactAction(title: String, glyph: String, modifier: Modifier, onClick: () -> Unit) {
     com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
         com.armsx2.ui.xmb.XmbCollected(c, com.armsx2.ui.xmb.XmbNode.Action("p${androidx.compose.runtime.currentCompositeKeyHash}", title, c.icon) { onClick() })
         return

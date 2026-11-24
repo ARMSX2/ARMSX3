@@ -375,6 +375,13 @@ open class MainActivityRuntime : ComponentActivity() {
         @JvmField
         val eState = mutableStateOf(EmuState.STOPPED)
 
+        /**
+         * Whether ZeroFG was switched on when the running game started. ZeroFG makes its own GPU
+         * device as the renderer starts, so switched on later it only starts after a restart, and
+         * the in-game menus say so (zeroFgNeedsRestart). Set by applyRendererPrefs at every boot.
+         */
+        val zeroFgAtBoot = mutableStateOf(false)
+
         // Active quick save/load slot (0-9), cycled by the "Cycle Save Slot"
         // hotkey. Quick Save/Load State hotkeys read this so users aren't pinned
         // to slot 0.
@@ -924,6 +931,7 @@ open class MainActivityRuntime : ComponentActivity() {
             // made it two hops, and for a title whose alias chains on, the renderer read another
             // key's settings: Sonic '06 resolved hwScaler 0 with 720 saved for it.
             var resolved = com.armsx2.config.ConfigStore.resolveForGame(currentGame.value?.settingsKey)
+            zeroFgAtBoot.value = resolved.ps3.zeroFg != 0
             // Build immutable input maps before the VM starts so the first ABXY
             // edge never pays SharedPreferences parsing on the UI thread.
             ControllerMappings.warmRuntimeCaches()
