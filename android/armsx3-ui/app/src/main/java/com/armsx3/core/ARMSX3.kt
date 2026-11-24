@@ -333,6 +333,9 @@ class ARMSX3 {
     external fun usbPassedThrough(): Int
     external fun takeGameError(): String
 
+    /** True once ZeroFG, switched on, cannot run this session (no device B, a failed open for good). */
+    external fun zeroFgUnavailable(): Boolean
+
     /** Coalesce the config file writes of every settingsSet until [settingsEndBatch]. */
     external fun settingsBeginBatch()
     external fun settingsEndBatch()

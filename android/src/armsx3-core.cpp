@@ -40,6 +40,7 @@
 #include "Emu/RSX/rsx_frame_dump.h"
 #include "Emu/RSX/GL/GLGSRender.h"
 #include "Emu/RSX/VK/VKGSRender.h"
+#include "Emu/RSX/VK/ZeroFG/VKZeroFG.h"
 #include "Emu/RSX/Core/RSXRendererFactory.h"
 #include "Emu/savestate_utils.hpp"
 // patch_engine, needed by the precompile path before ppu_load_exec.
@@ -3808,6 +3809,10 @@ extern "C" const char *_armsx3_takeGameError() {
   result = std::exchange(s_game_error, {});
   return result.c_str();
 }
+
+// True once ZeroFG, switched on, cannot run this session (VKZeroFG::Unavailable): the app then
+// stops asking the display for its highest refresh. Takes no lock.
+extern "C" bool _armsx3_zeroFgUnavailable() { return VKZeroFG::Unavailable(); }
 
 // Which real portals the game's USB scan took, as bits (1 Skylanders, 2 Infinity, 4 Dimensions): the
 // Portal panel shows the emulated one for any the app opened that the core could not take.

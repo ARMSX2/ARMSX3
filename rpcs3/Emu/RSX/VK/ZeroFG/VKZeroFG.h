@@ -73,6 +73,11 @@ namespace VKZeroFG
 	/// True while device B and the engine are up.
 	bool IsActive();
 
+	/// True once ZeroFG, switched on, is known not to run in this session: device B, the handoff or
+	/// the presenter could not be made, or it failed open for good. Takes no lock: the app reads it
+	/// to stop asking the display for its highest refresh.
+	bool Unavailable();
+
 	/// One line for the log and the overlay: what came up, or why ZeroFG is off.
 	std::string GetStatusText();
 

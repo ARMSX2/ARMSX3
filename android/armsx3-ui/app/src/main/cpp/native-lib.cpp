@@ -161,6 +161,7 @@ struct CoreApi {
   void (*usbSetPassthrough)(std::string_view fds);
   int32_t (*usbPassedThrough)();
   const char *(*takeGameError)();
+  bool (*zeroFgUnavailable)();
   void (*settingsBeginBatch)();
   void (*settingsEndBatch)();
   bool (*installSplitPkg)(JNIEnv *env, const int *fds, int count, long progressId);
@@ -346,6 +347,7 @@ struct CoreLibrary : CoreApi {
     result.usbSetPassthrough = reinterpret_cast<decltype(usbSetPassthrough)>(dlsym(handle, "_armsx3_usbSetPassthrough"));
     result.usbPassedThrough = reinterpret_cast<decltype(usbPassedThrough)>(dlsym(handle, "_armsx3_usbPassedThrough"));
     result.takeGameError = reinterpret_cast<decltype(takeGameError)>(dlsym(handle, "_armsx3_takeGameError"));
+    result.zeroFgUnavailable = reinterpret_cast<decltype(zeroFgUnavailable)>(dlsym(handle, "_armsx3_zeroFgUnavailable"));
     result.settingsSet = reinterpret_cast<decltype(settingsSet)>(dlsym(handle, "_armsx3_settingsSet"));
     result.xmbDecodeAudio = reinterpret_cast<decltype(xmbDecodeAudio)>(dlsym(handle, "_armsx3_xmbDecodeAudio"));
     result.xmbDecodePamAudio = reinterpret_cast<decltype(xmbDecodePamAudio)>(dlsym(handle, "_armsx3_xmbDecodePamAudio"));
@@ -2095,6 +2097,11 @@ Java_com_armsx3_core_ARMSX3_usbSetPassthrough(JNIEnv *env, jobject, jstring fds)
 extern "C" JNIEXPORT jint JNICALL
 Java_com_armsx3_core_ARMSX3_usbPassedThrough(JNIEnv *, jobject) {
   return coreLib.usbPassedThrough ? coreLib.usbPassedThrough() : 0;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_armsx3_core_ARMSX3_zeroFgUnavailable(JNIEnv *, jobject) {
+  return coreLib.zeroFgUnavailable && coreLib.zeroFgUnavailable() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jstring JNICALL

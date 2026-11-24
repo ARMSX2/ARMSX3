@@ -142,6 +142,9 @@ namespace VKZeroFG
 			vk::release_global_submit_lock();
 		}
 
+		// See Unavailable(). Set where ZeroFG gives up for the session, cleared when a device is made.
+		std::atomic<bool> s_unavailable{false};
+
 		// The size the engine is first sized for at startup, to prove it builds on this driver
 		// before any game frame: a PS2 frame, which the engine's 64-cell grid does not divide, so
 		// its padded path is proven too. Game frames resize it to the generation size.
@@ -3005,6 +3008,7 @@ namespace VKZeroFG
 		std::unique_lock lock(s_mutex);
 		// A recreated GS device brings device B up again from nothing.
 		DestroyLocked();
+		s_unavailable.store(false, std::memory_order_relaxed);
 
 		if (!ZEROFG_USER_ENABLED)
 		{
@@ -3022,6 +3026,7 @@ namespace VKZeroFG
 		{
 			DestroyLocked();
 			s_state.status = fmt::format("ZeroFG: unavailable, {}", why);
+			s_unavailable.store(true, std::memory_order_relaxed);
 			WARNING_LOG("{}", s_state.status);
 			return;
 		}
@@ -3035,6 +3040,7 @@ namespace VKZeroFG
 		if (!s_state.handoff_qualified)
 		{
 			s_state.status = fmt::format("ZeroFG: device B ready ({}), handoff unavailable: {}", backend, why);
+			s_unavailable.store(true, std::memory_order_relaxed);
 			WARNING_LOG("{}", s_state.status);
 			return;
 		}
@@ -3042,6 +3048,7 @@ namespace VKZeroFG
 		if (!CreatePresenterLocked(&why))
 		{
 			s_state.status = fmt::format("ZeroFG: device B ready ({}), presenter unavailable: {}", backend, why);
+			s_unavailable.store(true, std::memory_order_relaxed);
 			WARNING_LOG("{}", s_state.status);
 			return;
 		}
@@ -3049,6 +3056,7 @@ namespace VKZeroFG
 		INFO_LOG("ZeroFG: presenter created.");
 #else
 		s_state.status = fmt::format("ZeroFG: device B ready ({}), no presenter in this build", backend);
+		s_unavailable.store(true, std::memory_order_relaxed);
 #endif
 	}
 
@@ -3062,6 +3070,11 @@ namespace VKZeroFG
 	{
 		std::unique_lock lock(s_mutex);
 		return static_cast<bool>(s_state.engine);
+	}
+
+	bool Unavailable()
+	{
+		return ZEROFG_USER_ENABLED && s_unavailable.load(std::memory_order_relaxed);
 	}
 
 	std::string GetStatusText()
@@ -3092,6 +3105,7 @@ namespace VKZeroFG
 			{
 				s.presenter.reset();
 				s.status = fmt::format("ZeroFG: unavailable after the mode switch, {}", why);
+				s_unavailable.store(true, std::memory_order_relaxed);
 				WARNING_LOG("{}", s.status);
 				return;
 			}
@@ -3120,6 +3134,7 @@ namespace VKZeroFG
 			// The presenter's refusals last (its MSA session), so it is not offered the window again.
 			s.surface = VK_NULL_HANDLE;
 			s.failed_open = true;
+			s_unavailable.store(true, std::memory_order_relaxed);
 			s.status = "ZeroFG: the presenter refused the window, the GS presents alone";
 			WARNING_LOG("ZeroFG: the presenter refused the window; the GS presents alone.");
 			return;
@@ -3218,6 +3233,7 @@ namespace VKZeroFG
 		if ((!outdated && ++s.fail_opens > MAX_FAIL_OPENS) || !CreatePresenterLocked(&why))
 		{
 			s.failed_open = true;
+			s_unavailable.store(true, std::memory_order_relaxed);
 			s.status = "ZeroFG: failed open, the GS presents alone";
 			WARNING_LOG("ZeroFG: the presenter gave the window back (fail-open {}, limit {}{}); the GS device presents "
 						"for the rest of this session.",
@@ -3255,10 +3271,15 @@ namespace VKZeroFG
 		static float synthetic_fps = 0.0f;
 		static float present_rate = 0.0f;
 		const State& s = s_state;
-		if (!ZEROFG_USER_ENABLED || !s.presenter)
+		if (!ZEROFG_USER_ENABLED)
 			return {};
+		// Before the presenter check: a failed open ends with no presenter, and so does a device
+		// that cannot run ZeroFG at all. Both used to leave the line empty, so nothing on screen said
+		// why the frames were not generated.
 		if (s.failed_open)
 			return "ZeroFG: off (it failed; see the log)";
+		if (!s.presenter)
+			return s_unavailable.load(std::memory_order_relaxed) ? "ZeroFG: unavailable on this device (see the log)" : std::string();
 		if (!OwnsOutput())
 		{
 			last_ns = 0;
@@ -3648,6 +3669,7 @@ namespace VKZeroFG
 	void OnDeviceCreated(const SourceDevice&) {}
 	void Shutdown() {}
 	bool IsActive() { return false; }
+	bool Unavailable() { return false; }
 	std::string GetStatusText() { return {}; }
 	void ConnectSurface(const OutputSurface&) {}
 	void DisconnectSurface() {}

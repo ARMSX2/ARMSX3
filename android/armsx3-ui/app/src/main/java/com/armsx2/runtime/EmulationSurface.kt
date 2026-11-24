@@ -319,10 +319,17 @@ class EmulationSurface(context: Context) :
         clearFrameRatePreference()
     }
 
+    /**
+     * ZeroFG switched on for this game, and not known to be unable to run: on a device without what
+     * it needs (Vulkan 1.3, the handoff) or after it failed open for good, the panel goes back to
+     * the usual vote instead of being held at its highest refresh for nothing. Unknown counts as
+     * running, so the refresh is already up when the presenter first looks at it.
+     */
     private fun zeroFgEnabled(): Boolean = runCatching {
         val settingsKey = MainActivityRuntime.currentGame.value?.settingsKey
             ?: NativeApp.getGameSerial().takeIf { it.isNotBlank() }
-        ConfigStore.resolveForGame(settingsKey).ps3.zeroFg != 0
+        ConfigStore.resolveForGame(settingsKey).ps3.zeroFg != 0 &&
+            !runCatching { com.armsx3.core.ARMSX3.instance.zeroFgUnavailable() }.getOrDefault(false)
     }.getOrDefault(false)
 
     private fun lowLatencyEnabled(): Boolean = runCatching {
