@@ -74,6 +74,17 @@ enum PadPiece: String, Codable, CaseIterable, CodingKeyRepresentable {
     }
 }
 
+extension PadPiece {
+    // Where L3 or R3 sits until it is moved: on its stick's inner side, level with the stick's middle. Nil for any other piece.
+    func clickSpot(beside stick: CGRect, size: CGSize, gap: CGFloat) -> CGPoint? {
+        switch self {
+        case .l3: return CGPoint(x: stick.maxX + gap + size.width / 2, y: stick.midY)
+        case .r3: return CGPoint(x: stick.minX - gap - size.width / 2, y: stick.midY)
+        default: return nil
+        }
+    }
+}
+
 // How a piece differs from where the default pad puts it. A fresh value is the default pad.
 struct PadPlacement: Codable, Equatable {
     // Its centre as a share of the pad's width and height; nil keeps the default spot.
