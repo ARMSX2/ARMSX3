@@ -119,10 +119,29 @@ using ImDrawIdx = u16;
 #include "Emu/RSX/Program/GLSLTypes.h"
 #include "Emu/RSX/Program/SPIRVCommon.h"
 
+// Device A's queue is the renderer's, which the offloader and guest threads flushing the texture
+// cache submit to as well, under this lock (VKHelpers.h, not included here: this file builds against
+// the kit's Vulkan headers). Every submit to that queue and every vkDeviceWaitIdle on device A takes
+// it, as vk::frame_gen::wait_device_idle does for LSFG.
+namespace vk
+{
+	void acquire_global_submit_lock();
+	void release_global_submit_lock();
+}
+
 namespace VKZeroFG
 {
 	namespace
 	{
+		// [wait] waits for device A (vkDeviceWaitIdle) with the renderer's submit lock held.
+		template <typename F>
+		void WaitIdleA(F&& wait)
+		{
+			vk::acquire_global_submit_lock();
+			wait();
+			vk::release_global_submit_lock();
+		}
+
 		// The size the engine is first sized for at startup, to prove it builds on this driver
 		// before any game frame: a PS2 frame, which the engine's 64-cell grid does not divide, so
 		// its padded path is proven too. Game frames resize it to the generation size.
@@ -1023,7 +1042,7 @@ namespace VKZeroFG
 			s.handoff = std::make_unique<ZeroFGDeviceHandoff>(s.kit_device_a.get(), s.kit_device_b.get());
 			if (!s.handoff->SelfTest())
 			{
-				s.kit_device_a->vkDeviceWaitIdle()(source.device);
+				WaitIdleA([&] { s.kit_device_a->vkDeviceWaitIdle()(source.device); });
 				s.dfn.DeviceWaitIdle(s.device);
 				s.handoff->DestroyAfterIdle();
 				s.handoff.reset();
@@ -1039,7 +1058,7 @@ namespace VKZeroFG
 			s.hud_handoff = std::make_unique<ZeroFGDeviceHandoff>(s.kit_device_a.get(), s.kit_device_b.get());
 			if (!s.hud_handoff->SelfTest())
 			{
-				s.kit_device_a->vkDeviceWaitIdle()(source.device);
+				WaitIdleA([&] { s.kit_device_a->vkDeviceWaitIdle()(source.device); });
 				s.dfn.DeviceWaitIdle(s.device);
 				s.hud_handoff->DestroyAfterIdle();
 				s.hud_handoff.reset();
@@ -2864,7 +2883,7 @@ namespace VKZeroFG
 			if (s.hud_handoff)
 				s.hud_handoff->DisarmAndQuiesceSource();
 			s.presenter->BeginSurfaceDisconnect();
-			s.kit_device_a->vkDeviceWaitIdle()(s.kit_device_a->device());
+			WaitIdleA([&] { s.kit_device_a->vkDeviceWaitIdle()(s.kit_device_a->device()); });
 			s.presenter->DestroySurfaceResourcesAfterSourceIdle();
 			if (!s.kit_device_b->DrainZeroFGForTeardown())
 				WARNING_LOG("ZeroFG: device B did not drain before its contexts were destroyed");
@@ -2904,7 +2923,7 @@ namespace VKZeroFG
 			{
 				s.hud_handoff->DisarmAndQuiesceSource();
 				if (s.kit_device_a)
-					s.kit_device_a->vkDeviceWaitIdle()(s.kit_device_a->device());
+					WaitIdleA([&] { s.kit_device_a->vkDeviceWaitIdle()(s.kit_device_a->device()); });
 				s.hud_handoff->DestroyAfterIdle();
 				s.hud_handoff.reset();
 			}
@@ -2912,18 +2931,18 @@ namespace VKZeroFG
 			{
 				s.handoff->DisarmAndQuiesceSource();
 				if (s.kit_device_a)
-					s.kit_device_a->vkDeviceWaitIdle()(s.kit_device_a->device());
+					WaitIdleA([&] { s.kit_device_a->vkDeviceWaitIdle()(s.kit_device_a->device()); });
 				s.handoff->DestroyAfterIdle();
 				s.handoff.reset();
 			}
 			if (s.kit_device_a && s.source.staging.image != VK_NULL_HANDLE)
 			{
-				s.kit_device_a->vkDeviceWaitIdle()(s.kit_device_a->device());
+				WaitIdleA([&] { s.kit_device_a->vkDeviceWaitIdle()(s.kit_device_a->device()); });
 				s.source.staging.Destroy(s.kit_device_a.get());
 			}
 			if (s.kit_device_a && s.source.hud_staging.image != VK_NULL_HANDLE)
 			{
-				s.kit_device_a->vkDeviceWaitIdle()(s.kit_device_a->device());
+				WaitIdleA([&] { s.kit_device_a->vkDeviceWaitIdle()(s.kit_device_a->device()); });
 				s.source.hud_staging.Destroy(s.kit_device_a.get());
 			}
 			s.source = {};
@@ -3351,7 +3370,7 @@ namespace VKZeroFG
 			// A new picture size. The handoff may still be copying out of the old image.
 			if (source.staging.image != VK_NULL_HANDLE)
 			{
-				f.vkDeviceWaitIdle(device->device());
+				WaitIdleA([&] { f.vkDeviceWaitIdle(device->device()); });
 				source.staging.Destroy(device);
 			}
 			if (!source.staging.Create(device, extent, FRAME_FORMAT,
@@ -3415,7 +3434,7 @@ namespace VKZeroFG
 			{
 				if (source.hud_staging.image != VK_NULL_HANDLE)
 				{
-					f.vkDeviceWaitIdle(device->device());
+					WaitIdleA([&] { f.vkDeviceWaitIdle(device->device()); });
 					source.hud_staging.Destroy(device);
 				}
 				ready = source.hud_staging.Create(device, hud_extent, FRAME_FORMAT,
@@ -3515,7 +3534,9 @@ namespace VKZeroFG
 					const VulkanDevice::Queue::Acquisition queue =
 						s.kit_device_a->AcquireQueue(s.kit_device_a->queue_family_graphics_compute(), 0);
 					submit_begin_ns = NowNs();
+					vk::acquire_global_submit_lock();
 					result = s.kit_device_a->functions().vkQueueSubmit(queue.queue(), 1, hud_submit, VK_NULL_HANDLE);
+					vk::release_global_submit_lock();
 				}
 				s.hud_handoff->SourceSubmitted(result, submit_begin_ns - queue_begin_ns, NowNs() - submit_begin_ns);
 				hud_prepared = result == VK_SUCCESS;
@@ -3538,7 +3559,11 @@ namespace VKZeroFG
 				const VulkanDevice::Queue::Acquisition queue =
 					s.kit_device_a->AcquireQueue(s.kit_device_a->queue_family_graphics_compute(), 0);
 				submit_begin_ns = NowNs();
+				// The renderer's submit lock around the submit alone: PrepareSource above and Publish below
+				// can wait (for a free buffer, for B), and the offloader and guest threads would wait with them.
+				vk::acquire_global_submit_lock();
 				result = s.kit_device_a->functions().vkQueueSubmit(queue.queue(), 1, submit, VK_NULL_HANDLE);
+				vk::release_global_submit_lock();
 			}
 			s.handoff->SourceSubmitted(result, submit_begin_ns - queue_begin_ns, NowNs() - submit_begin_ns);
 		}

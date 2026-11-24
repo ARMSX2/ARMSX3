@@ -1178,14 +1178,13 @@ void VKGSRender::queue_swap_request()
 	{
 		// ZeroFG copies the frame out of the staging image with a submit of its own, on this queue,
 		// "after the frame". With multithreaded RSX this frame's submit may still sit with the offloader,
-		// so wait for it to reach the queue first (present() does the same before it presents), and take
-		// the lock the queue's other users take: ZeroFG submits through the same VkQueue. Publishing may
-		// wait for ZeroFG's buffers, which is its Source backpressure and holds this thread only.
+		// so wait for it to reach the queue first (present() does the same before it presents). ZeroFG
+		// takes the lock the queue's other users take around its submits only: publishing may wait for
+		// ZeroFG's buffers (its Source backpressure), which must hold this thread alone, not every
+		// thread that submits.
 		m_zerofg_captured = false;
 		m_current_frame->swap_command_buffer->flush();
-		vk::acquire_global_submit_lock();
 		VKZeroFG::PublishCapturedFrame();
-		vk::release_global_submit_lock();
 	}
 
 	if (framegen_frames && !m_framegen_pipelined)
