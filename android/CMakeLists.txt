@@ -106,6 +106,16 @@ add_custom_target(armsx3_spu_codegen_identity
         "${CMAKE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}" "${ARMSX3_SPU_IDENTITY_DIR}/spu_codegen_identity_android.h"
     BYPRODUCTS "${ARMSX3_SPU_IDENTITY_DIR}/spu_codegen_identity_android.h"
     VERBATIM)
+# The units it preprocesses include headers that LLVM's tablegen writes (IR/Attributes.inc, the
+# intrinsics headers, CodeGen/GenVT.inc, Analysis/TargetLibraryInfo.inc). Nothing else orders this
+# target after them, so in a fresh build directory (CI) it ran before they existed and the build
+# stopped. It waits for every header target LLVM declares public. LLVM (3rdparty) is processed
+# before this directory, so the targets already exist here when LLVM is built in-tree.
+foreach(_llvm_headers intrinsics_gen vt_gen analysis_gen target_parser_gen omp_gen acc_gen)
+    if(TARGET ${_llvm_headers})
+        add_dependencies(armsx3_spu_codegen_identity ${_llvm_headers})
+    endif()
+endforeach()
 add_dependencies(rpcs3_emu armsx3_spu_codegen_identity)
 # A per-source include directory, so no other translation unit's command line changes.
 set_property(SOURCE "${CMAKE_SOURCE_DIR}/rpcs3/Emu/Cell/SPUCommonRecompiler.cpp"
