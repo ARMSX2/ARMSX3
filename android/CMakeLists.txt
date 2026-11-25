@@ -164,9 +164,10 @@ if(ARMSX3_ENABLE_ZEROFG AND CMAKE_ANDROID_ARCH_ABI STREQUAL "arm64-v8a")
     else()
         FetchContent_Declare(zerofg
             GIT_REPOSITORY https://github.com/hy300leosquizz-ctrl/ZeroFG.git
-            # ZeroFG 1.2.0 (RZ+, x2 to x4), dual-licensed Apache-2.0 OR GPL-2.0-or-later. The commit
-            # the v1.2.0 tag names, not the tag: a tag can be moved to other code after review.
-            GIT_TAG 25047844c8d18954e65adf81d35dbbd24284513c)
+            # ZeroFG 1.2.1 (RZ+, x2 to x4, the Advanced VTF Filter), dual-licensed Apache-2.0 OR
+            # GPL-2.0-or-later. The commit the v1.2.1 tag names, not the tag: a tag can be moved to
+            # other code after review.
+            GIT_TAG c5e9b6497fc39a9f77129dd46977cdf2199aaf16)
         FetchContent_MakeAvailable(zerofg)
         set(_zerofg_root "${zerofg_SOURCE_DIR}")
     endif()
