@@ -425,6 +425,15 @@ namespace vk
 		// state so the provoking-vertex extension can be chained onto it, which is independent
 		// of the topology-class collapsing above.
 		VkPipelineRasterizationStateCreateInfo rs = create_info.state.rs;
+
+		// ARMSX3: no pipeline may turn on depth clamp when the device was made without it (Mali-G52,
+		// see render_device::create). Geometry past the near or far plane is clipped instead, also
+		// when the fragment shader emulates the depth range.
+		if (rs.depthClampEnable && !m_device->get_depth_clamp_support())
+		{
+			rs.depthClampEnable = VK_FALSE;
+		}
+
 		VkPipelineRasterizationProvokingVertexStateCreateInfoEXT provoking_vertex_state{};
 		if (flags & USE_LAST_PROVOKING_VERTEX)
 		{

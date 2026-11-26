@@ -315,6 +315,7 @@ namespace vk
 
 		bool get_shader_stencil_export_support() const { return pgpu->optional_features_support.shader_stencil_export; }
 		bool get_depth_bounds_support() const { return pgpu->features.depthBounds != VK_FALSE; }
+		bool get_depth_clamp_support() const { return pgpu->features.depthClamp != VK_FALSE; }
 		bool get_alpha_to_one_support() const { return pgpu->features.alphaToOne != VK_FALSE; }
 		bool get_anisotropic_filtering_support() const { return pgpu->features.samplerAnisotropy != VK_FALSE; }
 		bool get_wide_lines_support() const { return pgpu->features.wideLines != VK_FALSE; }

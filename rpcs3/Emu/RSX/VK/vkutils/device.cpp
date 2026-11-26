@@ -1135,6 +1135,15 @@ namespace vk
 			enabled_features.depthBounds = VK_FALSE;
 		}
 
+		if (!pgpu->features.depthClamp)
+		{
+			// ARMSX3: Mali-G52 (Arm's driver r32p1) has no depth clamp. Asking for it anyway made
+			// vkCreateDevice fail, so no game could start there. Pipelines leave it off on such a
+			// device (VKPipelineCompiler), and geometry past the near or far plane is clipped instead.
+			rsx_log.error("Your GPU does not support depth clamping. Graphics may not render correctly.");
+			enabled_features.depthClamp = VK_FALSE;
+		}
+
 		if (!pgpu->features.largePoints)
 		{
 			rsx_log.error("Your GPU does not support large points. Graphics may not render correctly.");
