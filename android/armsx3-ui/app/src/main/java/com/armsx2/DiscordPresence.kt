@@ -81,6 +81,15 @@ object DiscordPresence {
      *  stays well clear of it while still following the game within a few seconds. */
     private const val RA_REPUSH_SECONDS = 15
 
+    /** Polls (about a second each) connecting before the client is started again, and the most
+     *  that grows to while it keeps failing (a slow network still gets its chance). */
+    private const val STUCK_POLLS = 20
+    private const val STUCK_POLLS_MAX = 80
+
+    /** How long a sign-in (Connect, then the Discord app or the browser) has to land before the
+     *  client may be started again under it. */
+    private const val SIGN_IN_GRACE_MS = 5 * 60_000L
+
     /** Discord truncates a long state line; stay under it rather than being cut mid-word. */
     private const val RA_STATE_MAX = 126
 
@@ -110,8 +119,21 @@ object DiscordPresence {
     fun setForeground(fg: Boolean) {
         if (foreground.value == fg) return
         foreground.value = fg
+        // Back in sight: the poll below checks the connection straight away (see [backInSight]).
+        if (fg) backInSight = true
         sendIdle()
     }
+
+    /**
+     * Set when ARMSX3 comes back on screen. Out of sight, Android freezes the app and the helper
+     * and (Android 15 on the Odin 3) cuts their network a few seconds in, so Discord drops the
+     * connection and the status with it. The SDK then reconnects on its own schedule, or sits on a
+     * socket it has not noticed is dead, so the first poll back checks and repairs it at once.
+     */
+    @Volatile private var backInSight = false
+
+    /** Until when a sign-in started by [authorize] may still land (uptime ms); 0 when none is. */
+    private var signingInUntil = 0L
 
     private fun sendIdle() =
         send(DiscordIpc.MSG_IDLE, Bundle().apply { putBoolean(DiscordIpc.DATA_IDLE, !foreground.value) })
@@ -413,8 +435,19 @@ object DiscordPresence {
         if (!started) start()
         bindHelper()
         error.value = null
+        signingInUntil = android.os.SystemClock.uptimeMillis() + SIGN_IN_GRACE_MS
         Log.i(TAG, "authorize() requested (started=$started, enabled=$enabled)")
         send(DiscordIpc.MSG_AUTHORIZE)
+    }
+
+    /**
+     * A new Discord client with the saved sign-in. The bridge's start() does nothing while a client
+     * exists (it only creates one), so a client that dropped or stalled is stopped first. The poll
+     * sends the status again on the CONNECTED edge.
+     */
+    private fun restartClient() {
+        send(DiscordIpc.MSG_STOP)
+        send(DiscordIpc.MSG_START, Bundle().apply { putString(DiscordIpc.DATA_TOKEN, savedToken) })
     }
 
     fun signOut() {
@@ -422,6 +455,7 @@ object DiscordPresence {
         presenceJob?.cancel(); presenceJob = null
         started = false
         savedToken = ""
+        signingInUntil = 0L
         knownFriends = emptySet()
         seededFriends = false
         justOnline.value = null
@@ -447,6 +481,10 @@ object DiscordPresence {
         pollJob = scope.launch {
             var sinceRetry = 0
             var retryAfter = 5
+            // Polls spent connecting (or with a signed-in client that never started) without
+            // getting through, and how many to allow before building a fresh client.
+            var stuckFor = 0
+            var stuckLimit = STUCK_POLLS
             // RA rich presence changes AS YOU PLAY, unlike the game title -- so it cannot ride the
             // currentGame snapshotFlow alone. Re-checked here, but pushed only when the line really
             // changed and at most every RA_REPUSH_SECONDS: Discord rate-limits presence updates,
@@ -473,33 +511,65 @@ object DiscordPresence {
                 val s = snap.getInt(DiscordIpc.DATA_STATUS, DISABLED)
                 val wasConnected = status.value == CONNECTED
                 status.value = s
+                val back = backInSight
+                backInSight = false
 
                 // Publish presence on the CONNECTED edge, and whenever the running
                 // game changes. pushPresence() had no callers at all, so rich
                 // presence was never sent -- the client connected and then sat
                 // there advertising nothing.
+                //
+                // And on the first poll back on screen: Discord may have dropped the status
+                // while ARMSX3 was away, through a reconnect no poll saw, and a dead socket the
+                // SDK still trusts shows itself on this write (it then reconnects, and the edge
+                // sends the status again).
                 val nowGame = MainActivityRuntime.currentGame.value?.serial.orEmpty()
-                if (s == CONNECTED && (!wasConnected || nowGame != lastPresenceSerial)) {
+                if (s == CONNECTED && (back || !wasConnected || nowGame != lastPresenceSerial)) {
                     lastPresenceSerial = nowGame
                     pushPresence()
                 }
 
                 snap.getString(DiscordIpc.DATA_FRESH_TOKEN)?.takeIf { it.isNotBlank() }?.let { fresh ->
                     savedToken = fresh
+                    signingInUntil = 0L
                     Log.i(TAG, "authorization stored")
+                }
+
+                // A sign-in under way reads as disconnected here (the bridge has no status for
+                // it), and a new client would throw it away: nothing below restarts the client
+                // until it has landed or had its time.
+                val signingIn = android.os.SystemClock.uptimeMillis() < signingInUntil
+                val signedIn = enabled && savedToken.isNotBlank() && !signingIn
+
+                if (back && signedIn) {
+                    Log.i(TAG, "back in sight: status $s")
+                    // Reconnect now rather than after the usual wait.
+                    if (s == DISCONNECTED) { retryAfter = 5; sinceRetry = retryAfter - 1 }
+                }
+
+                // Connecting that never gets there (the SDK waiting out its own retry timer after
+                // the network came back), or a helper that never started its client: start over
+                // with a fresh client.
+                val stuck = signedIn && (s == CONNECTING || s == DISABLED && helperAvailable)
+                if (stuck && ++stuckFor >= stuckLimit) {
+                    stuckFor = 0
+                    stuckLimit = (stuckLimit * 2).coerceAtMost(STUCK_POLLS_MAX)
+                    Log.i(TAG, "stuck at status $s: starting the Discord client again")
+                    restartClient()
+                } else if (!stuck) {
+                    stuckFor = 0
+                    if (s == CONNECTED) stuckLimit = STUCK_POLLS
                 }
 
                 // Reconnect after a drop. The SDK does not retry, and its connection does not
                 // survive the app being backgrounded for long — swapping apps, or a device
-                // sleeping. MSG_START is idempotent in the helper, so it doubles as the retry.
-                if (s == DISCONNECTED && enabled && savedToken.isNotBlank()) {
+                // sleeping. With a new client: MSG_START alone never reconnected a dropped one.
+                if (s == DISCONNECTED && signedIn) {
                     if (++sinceRetry >= retryAfter) {
                         sinceRetry = 0
                         retryAfter = (retryAfter * 2).coerceAtMost(60)
                         Log.i(TAG, "connection dropped — reconnecting (next retry in $retryAfter s)")
-                        send(DiscordIpc.MSG_START, Bundle().apply {
-                            putString(DiscordIpc.DATA_TOKEN, savedToken)
-                        })
+                        restartClient()
                     }
                 } else if (s == CONNECTED) {
                     sinceRetry = 0
