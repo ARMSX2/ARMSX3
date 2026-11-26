@@ -242,13 +242,16 @@ namespace vk
 		{
 		default:
 		case 0:
-			// Already reported if the device was lost earlier
-			if (!ensure(g_render_device)->device_lost()) return true;
+			// Already reported if the device was lost earlier.
+			// ARMSX3: there is no device yet when vkCreateDevice itself fails (a GPU missing a feature
+			// we ask for). That error is reported as it is, instead of stopping on the missing device
+			// with a bare "Verification failed (object: 0x0)", and there is nothing to recover.
+			if (g_render_device && !g_render_device->device_lost()) return true;
 
 			print_debug_markers();
 			if (!message.empty()) message += "\n\n";
 
-			if (!can_device_recover())
+			if (!g_render_device || !can_device_recover())
 			{
 				// ARMSX3: a device loss that cannot be recovered (any on Android; elsewhere during
 				// bootup, or too soon after the last recovery) stops the game cleanly instead of
