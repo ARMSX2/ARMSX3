@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """PadLayout.swift, run alone on the Mac host: an untouched layout is the default pad, motion pieces start hidden,
 Default is never written, saving for one game or for all games lands where the editor said, presets and pins follow
-renames and deletes, and a .armsx3pad file survives a round trip and is clamped on the way in. It does not draw the
-pad."""
+renames and deletes, and a .armsx3pad file survives a round trip and is clamped on the way in. L3 and R3 sit beside
+their stick until moved, and saved layouts that carry them read as before. It does not draw the pad."""
 
 import re
 import tempfile
@@ -128,6 +128,30 @@ let again = skins.installSkinLayout("Retro", layout: skinLayout)
 check("skin-preset", again.id == fromSkin.id && skins.presets.count == 2
       && skins.presets.first { $0.id == players.id }?.layout == PadLayout())
 
+// L3 and R3 sit on their stick's inner side, level with its middle, and follow it.
+let leftStick = CGRect(x: 16, y: 600, width: 104, height: 104)
+let rightStick = CGRect(x: 270, y: 600, width: 104, height: 104)
+let button = CGSize(width: 40, height: 40)
+check("click-spot-left", PadPiece.l3.clickSpot(beside: leftStick, size: button, gap: 6) == CGPoint(x: 146, y: 652))
+check("click-spot-right", PadPiece.r3.clickSpot(beside: rightStick, size: button, gap: 6) == CGPoint(x: 244, y: 652))
+check("click-spot-none", PadPiece.cross.clickSpot(beside: leftStick, size: button, gap: 6) == nil
+      && PadPiece.lstick.clickSpot(beside: leftStick, size: button, gap: 6) == nil)
+let raised = leftStick.offsetBy(dx: 0, dy: -100)
+check("click-spot-follows", PadPiece.l3.clickSpot(beside: raised, size: button, gap: 6) == CGPoint(x: 146, y: 552))
+
+// Saved layouts that carry L3 or R3 read as before.
+func slot(_ json: String) -> PadSlotLayout { try! JSONDecoder().decode(PadSlotLayout.self, from: json.data(using: .utf8)!) }
+check("saved-l3-hidden", slot("{}")[.l3].hidden && slot(#"{"pieces":{"l3":{"hidden":true}}}"#)[.l3].hidden)
+check("saved-r3-shown", !slot(#"{"pieces":{"r3":{"hidden":false}}}"#)[.r3].hidden)
+var shownL3 = PadSlotLayout()
+shownL3[.l3] = PadPlacement(centre: CGPoint(x: 0.4, y: 0.7), hidden: false)
+let shownBack = try! JSONDecoder().decode(PadSlotLayout.self, from: JSONEncoder().encode(shownL3))
+check("saved-l3-roundtrip", shownBack == shownL3 && !shownBack[.l3].hidden && shownBack[.l3].centre == CGPoint(x: 0.4, y: 0.7))
+shownL3[.l3] = PadPlacement.standard(.l3)
+check("reset-l3-hidden-again", shownL3.pieces[.l3] == nil && shownL3[.l3].hidden)
+check("l3-r3-partners", PadPiece.l3.partner == .r3 && PadPiece.r3.partner == .l3 && PadSlotLayout().movable.contains(.l3)
+      && PadSlotLayout().movable.contains(.r3))
+
 // The library itself round-trips through JSON.
 let encoded = try! JSONEncoder().encode(library)
 let decoded = try! JSONDecoder().decode(PadLayoutLibrary.self, from: encoded)
@@ -139,7 +163,8 @@ EXPECTED = ["default-l3-hidden", "default-l1-shown", "default-motion-hidden", "m
             "pin-keeps-own", "pin-back-to-own", "pin-follows-shared", "all-games-keeps-own", "save-target",
             "unique-name", "delete-unpins", "rename-trims", "choices-order", "layouts-edit-keeps-shared", "file-name", "file-clamped",
             "file-refuses-foreign", "file-name-safe", "file-partial", "library-partial", "skin-preset",
-            "library-roundtrip"]
+            "library-roundtrip", "click-spot-left", "click-spot-right", "click-spot-none", "click-spot-follows", "saved-l3-hidden",
+            "saved-r3-shown", "saved-l3-roundtrip", "reset-l3-hidden-again", "l3-r3-partners"]
 
 
 class PadLayoutTest(unittest.TestCase):

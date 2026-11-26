@@ -92,6 +92,7 @@ struct VirtualControllerView: View {
     static let shoulder = CGSize(width: 80, height: 28)
     static let small = CGSize(width: 58, height: 26)
     static let home = CGSize(width: 40, height: 40)
+    static let clickGap: CGFloat = 6
     static let stick = CGSize(width: 104, height: 104)
     // The halt sentence keeps inside this in landscape, so it wraps instead of crossing L1 or R1.
     static let shoulderReach: CGFloat = 16 + shoulder.width * 2 + 10
@@ -165,6 +166,13 @@ struct VirtualControllerView: View {
             }
             .padding(.top, 8)
         }
+        .overlayPreferenceValue(PadPieceFrames.self) { frames in
+            ZStack(alignment: .topLeading) {
+                stickClick(.l3, .L3, beside: frames[.lstick])
+                stickClick(.r3, .R3, beside: frames[.rstick])
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
         .overlay { FloatingStickZones() }
         .environment(\.padSlot, layout)
         .environment(\.padArea, padSize)
@@ -211,11 +219,14 @@ struct VirtualControllerView: View {
 
     private func stick(_ piece: PadPiece, click: Rpcs3PadButton) -> some View {
         PadPieceView(piece: piece, base: Self.stick) { PadStick(left: piece == .lstick, click: click, size: $0.width) }
-            // L3 or R3, hidden at first, on the stick's inner side; an overlay, so it moves with the stick.
-            .overlay(alignment: piece == .lstick ? .trailing : .leading) {
-                button(piece == .lstick ? .l3 : .r3, click, Self.home)
-                    .offset(x: (piece == .lstick ? 1 : -1) * (Self.home.width + 6))
-            }
+    }
+
+    // L3 and R3 are laid out from their stick's measured frame, so they follow an unmoved stick and a drag never waits on a measure.
+    @ViewBuilder private func stickClick(_ piece: PadPiece, _ click: Rpcs3PadButton, beside stick: CGRect?) -> some View {
+        if let stick, let spot = piece.clickSpot(beside: stick, size: Self.home, gap: Self.clickGap) {
+            PadPieceView(piece: piece, base: Self.home, spot: spot) { PadButton(control: Self.control(click), size: $0) }
+                .position(spot)
+        }
     }
 
     private func diamond(_ cluster: PadPiece, top: Rpcs3PadButton, left: Rpcs3PadButton, right: Rpcs3PadButton,
@@ -306,6 +317,8 @@ extension EnvironmentValues {
 private struct PadPieceView<Content: View>: View {
     let piece: PadPiece
     let base: CGSize
+    // A caller that lays a piece out itself passes its default spot, so a move never waits on a measure.
+    var spot: CGPoint? = nil
     @ViewBuilder let content: (CGSize) -> Content
     @Environment(\.padSlot) private var slot
     @Environment(\.padArea) private var area
@@ -326,8 +339,10 @@ private struct PadPieceView<Content: View>: View {
         let drawn = CGSize(width: base.width * placement.size, height: base.height * placement.size)
         let editing = editor.map { !$0.trying } ?? false
         // Hidden until the default spot is known, so a moved piece never flashes there first.
-        let waiting = placement.centre != nil && home == .zero
+        let waiting = spot == nil && placement.centre != nil && home == .zero
         content(drawn)
+            // Faded here and not on the whole piece: a faded edit overlay takes no touch.
+            .opacity(placement.hidden ? (editing ? 0.3 : 0) : 1)
             .environment(\.padPieceOpacity, inheritedOpacity * placement.opacity)
             .environment(\.padTouchScale, inheritedTouch * placement.touch)
             // A cluster's split buttons are pieces of their own inside it, so they still need its touches.
@@ -342,7 +357,7 @@ private struct PadPieceView<Content: View>: View {
                 if editing { PadPieceEditOverlay(piece: piece, placement: placement) }
             }
             .frame(width: base.width, height: base.height)
-            .opacity(waiting ? 0 : placement.hidden ? (editing ? 0.3 : 0) : 1)
+            .opacity(waiting ? 0 : 1)
             .transformPreference(PadArtFrames.self) { if placement.hidden { $0 = [:] } }
             .transformPreference(PadStickFrames.self) { if placement.hidden { $0 = [:] } }
             .transformPreference(PadMotionFrames.self) { if placement.hidden { $0 = [:] } }
@@ -351,8 +366,10 @@ private struct PadPieceView<Content: View>: View {
     }
 
     private func offset(_ placement: PadPlacement) -> CGSize {
-        guard let centre = placement.centre, home != .zero else { return .zero }
-        return CGSize(width: centre.x * area.width - home.midX, height: centre.y * area.height - home.midY)
+        guard let centre = placement.centre else { return .zero }
+        let from = spot ?? (home == .zero ? nil : CGPoint(x: home.midX, y: home.midY))
+        guard let from else { return .zero }
+        return CGSize(width: centre.x * area.width - from.x, height: centre.y * area.height - from.y)
     }
 }
 
