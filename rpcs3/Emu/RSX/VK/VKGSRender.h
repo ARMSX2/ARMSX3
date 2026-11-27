@@ -370,6 +370,11 @@ private:
 	u64 m_current_renderpass_key = 0;
 	VkRenderPass m_cached_renderpass = VK_NULL_HANDLE;
 	std::vector<vk::image*> m_fbo_images;
+#ifdef __APPLE__
+	// Stand-ins for write-masked MRT slots that alias an earlier slot's surface
+	std::unordered_map<u64, std::unique_ptr<vk::viewable_image>> m_mrt_alias_dummies;
+	vk::image* get_mrt_alias_dummy(vk::image* surface);
+#endif
 
 	std::unique_ptr<vk::image> m_overlay_recording_img;
 

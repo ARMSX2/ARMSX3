@@ -1155,6 +1155,9 @@ VKGSRender::~VKGSRender()
 	// Queries
 	m_occlusion_query_manager.reset();
 	m_cond_render_buffer.reset();
+#ifdef __APPLE__
+	m_mrt_alias_dummies.clear();
+#endif
 
 	// Command buffer
 	m_primary_cb_list.destroy();
@@ -3425,6 +3428,26 @@ bool VKGSRender::is_framebuffer_bound() const
 #endif
 }
 
+#ifdef __APPLE__
+vk::image* VKGSRender::get_mrt_alias_dummy(vk::image* surface)
+{
+	const u64 key = (u64{static_cast<u32>(surface->format())} << 40) | (u64{surface->width()} << 24) | (u64{surface->height()} << 8) | surface->samples();
+	auto& dummy = m_mrt_alias_dummies[key];
+
+	if (!dummy)
+	{
+		dummy = std::make_unique<vk::viewable_image>(*m_device, m_device->get_memory_mapping().device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+			VK_IMAGE_TYPE_2D, surface->format(), surface->width(), surface->height(), 1, 1, 1, static_cast<VkSampleCountFlagBits>(surface->samples()),
+			VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_TILING_OPTIMAL,
+			VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+			0, VMM_ALLOCATION_POOL_SURFACE_CACHE, RSX_FORMAT_CLASS_COLOR);
+		dummy->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+	}
+
+	return dummy.get();
+}
+
+#endif
 bool VKGSRender::on_framebuffer_bound(const rsx::framebuffer_layout& layout)
 {
 #if defined(__APPLE__) || defined(__ANDROID__)
@@ -3504,7 +3527,20 @@ bool VKGSRender::on_framebuffer_bound(const rsx::framebuffer_layout& layout)
 	{
 		if (auto surface = std::get<1>(res()->surface_cache.m_bound_render_targets[index]))
 		{
+#ifdef __APPLE__
+			// One image attached twice lets the write-masked slot store stale tiles over the written one
+			if (!m_ctx->fb.layout.color_write_enabled[index] &&
+				std::find(m_fbo_images.begin(), m_fbo_images.end(), surface) != m_fbo_images.end())
+			{
+				m_fbo_images.push_back(get_mrt_alias_dummy(surface));
+			}
+			else
+			{
+				m_fbo_images.push_back(surface);
+			}
+#else
 			m_fbo_images.push_back(surface);
+#endif
 
 			m_ctx->fb.surface_info[index].address = m_ctx->fb.layout.color_addresses[index];
 			m_ctx->fb.surface_info[index].pitch = m_ctx->fb.layout.actual_color_pitch[index];
