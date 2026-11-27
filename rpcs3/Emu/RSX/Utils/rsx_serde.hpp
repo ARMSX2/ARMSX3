@@ -18,7 +18,13 @@ inline bool serialize<rsx::rsx_state>(utils::serial& ar, rsx::rsx_state& o)
 	// RSX capture and savestates both call this method.
 	// We do not want to grab transform constants if it is not savestate capture.
 	const bool is_savestate_capture = thread_ctrl::get_current() && thread_ctrl::get_name() == "Emu State Capture Thread";
+#ifdef __APPLE__
+	// A session booted from a savestate keeps its loaded version, so an RSX capture written there
+	// would carry the constants the replay does not read, and every register after them would shift
+	if (ar.is_writing() ? is_savestate_capture : (GET_SERIALIZATION_VERSION(global_version) || is_savestate_capture))
+#else
 	if (GET_SERIALIZATION_VERSION(global_version) || is_savestate_capture)
+#endif
 	{
 		ar(o.transform_constants);
 	}
