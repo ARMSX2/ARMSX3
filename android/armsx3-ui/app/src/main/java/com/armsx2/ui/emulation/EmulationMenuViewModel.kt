@@ -443,7 +443,11 @@ object EmulationMenuInputController {
         // Left by the pad inside a pane: back in it, on the control it had. The pane composes a frame after
         // this, so the control is picked as it registers (unless the pad has moved by then).
         val id = place?.controlId
-        if (place != null && place.inContent && id != null && place.tab == viewModel.state.value.tab) {
+        // Only while the pad is in use: after a touch the tab reopens at its own scroll, and selecting
+        // the control would scroll the page back to it.
+        if (place != null && place.inContent && id != null && place.tab == viewModel.state.value.tab &&
+            com.armsx2.ui.common.PadInput.active.value
+        ) {
             inContent.value = true
             nav.clearSelection()
             if (!nav.selectById(id)) nav.focusWhenRegistered(null, id)
@@ -497,6 +501,11 @@ object EmulationMenuInputController {
             xmb.move(dx, dy)
             return true
         }
+        // A row picked up in the first tab's arrange view: up and down carry it.
+        if (overlayDismiss == null && SessionOrder.lifted != null) {
+            if (dy != 0) SessionOrder.step(if (dy < 0) -1 else 1)
+            return true
+        }
         // A panel is over the menu: everything is registry nav, there is no tab column to walk.
         if (overlayDismiss != null) {
             when {
@@ -535,6 +544,7 @@ object EmulationMenuInputController {
         // you cannot see is worse than doing nothing.
         if (overlayDismiss != null) return true
         val viewModel = owner ?: return false
+        SessionOrder.finishArranging()
         if (inContent.value) exitContent()
         viewModel.cycleTab(delta)
         return true
@@ -560,6 +570,11 @@ object EmulationMenuInputController {
         }
         // Back closes the panel, not the menu behind it.
         overlayDismiss?.let { dismiss -> dismiss(); return true }
+        // In the arrange view, B puts a picked-up row back, and otherwise leaves the view.
+        if (SessionOrder.arranging) {
+            if (SessionOrder.lifted != null) SessionOrder.putBack() else SessionOrder.finishArranging()
+            return true
+        }
         if (inContent.value) { exitContent(); return true }
         owner?.resume() ?: return false
         return true
