@@ -66,7 +66,7 @@ KILLZONE = "BCUS98234"
 IOS_ONLY_REQUIRED = ("NPUB30558", "BLUS30837", "BLES01613", "BLUS30405", "BLES00713",
                      "BLES00714", "BLES00158", "BLUS30089", "BLUS30065", "BLES00142",
                      "BLES01717", "BCUS98111", "BCES00510", "BCES00799", "BCAS25003", "BCKS15003", "BCJS37001",
-                     "NPUA70080")
+                     "NPUA70080", "BLUS30687", "BLES01138")
 
 GOD_OF_WAR_3 = ("BCUS98111", "BCES00510", "BCES00799", "BCAS25003", "BCKS15003", "BCJS37001", "NPUA70080")
 
@@ -95,6 +95,7 @@ IOS_ONLY_TWO_SPU_THREADS = "Core:\\n  Preferred SPU Threads: 2\\n"
 IOS_ONLY_ROWS = {
     **{serial: IOS_ONLY_APPROXIMATE_XFLOAT for serial in GOD_OF_WAR_3},
     "NPUB30558": "Core:\\n  SPU loop detection: true\\n",
+    **{serial: "Core:\\n  MFC Commands Shuffling Limit: 1\\n" for serial in ("BLUS30687", "BLES01138")},
     "BLUS30837": IOS_ONLY_NO_INTERPRETER,
     "BLES01613": IOS_ONLY_NO_INTERPRETER,
     "BLUS30405": IOS_ONLY_SPU_COMPILE_PAUSE,

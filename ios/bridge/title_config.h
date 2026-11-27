@@ -718,6 +718,10 @@ namespace armsx3::bridge::title_config
 		{"BLUS30065", "Video:\n  Shader Precision: High\n"},
 		{"BLES00142", "Video:\n  Shader Precision: High\n"},
 
+		// Without MFC shuffling a texture's SPU transfer lands after the draw that samples it, so skin and terrain draw black.
+		{"BLUS30687", "Core:\n  MFC Commands Shuffling Limit: 1\n"},
+		{"BLES01138", "Core:\n  MFC Commands Shuffling Limit: 1\n"},
+
 		// At 0 a PPU trap stops the game; at 1 the trapping instruction is skipped.
 		{"BCES01176", "Core:\n  Stub PPU Traps: 1\n"},
 		{"BCJS37004", "Core:\n  Stub PPU Traps: 1\n"},
