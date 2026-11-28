@@ -38,6 +38,8 @@ PHONE_ENGINE = "CHHapticEngine()"
 PHONE_MAKER_CALL = re.compile(r"(?<!func )\bmakePhoneTarget\(")
 PHONE_CASE_LINE = re.compile(r"^[^\n]*\bcase\s+\.phone\s*:[^\n]*\bmakePhoneTarget\(", re.M)
 CAPABILITY = re.compile(r"\bphoneHasHaptics\s*=\s*CHHapticEngine\.capabilitiesForHardware\(\)\.supportsHaptics\b")
+# The GameSir accessory's one shared session.
+ACCESSORY_STOP = "GameSirG8MFiRumble.shared.stop()"
 NOT_PHONE = re.compile(r"\bfor\s+engine\s+in\s+\w+\.engines\s+where\s+engine\s*!==\s*phone\s*\{")
 # The linear motor expressions.
 LINEAR_LARGE = "Float(large) / 255 * strength"
@@ -93,6 +95,15 @@ print("R14 nonfinite=\(RumbleMath.gameSirPacket(left: .nan, right: .infinity))")
 print("R15 stop=\(RumbleMath.gameSirStopPacket)")
 let zeroStrength = RumbleMath.motors(large: 255, small: 255, strengthPercent: 0, enabled: true)
 print("R16 zero_strength=\(f(zeroStrength.large)),\(f(zeroStrength.small))")
+let viaAccessory = RumbleMath.target(slot: 1, hasController: true, controllerHasHaptics: false, controllerHasAccessory: true, phoneHasHaptics: false)
+let overHaptics = RumbleMath.target(slot: 0, hasController: true, controllerHasHaptics: true, controllerHasAccessory: true, phoneHasHaptics: true)
+let accessoryNoPad = RumbleMath.target(slot: 0, hasController: false, controllerHasHaptics: false, controllerHasAccessory: true, phoneHasHaptics: true)
+let accessoryOutside = RumbleMath.target(slot: 4, hasController: true, controllerHasHaptics: false, controllerHasAccessory: true, phoneHasHaptics: true)
+print("R17 slot2=\(viaAccessory) over_haptics=\(overHaptics) no_pad=\(accessoryNoPad) outside=\(accessoryOutside)")
+let spareSlot0 = RumbleMath.target(slot: 0, hasController: true, controllerHasHaptics: false, controllerIsSpareAccessory: true, phoneHasHaptics: true)
+let spareHaptics = RumbleMath.target(slot: 1, hasController: true, controllerHasHaptics: true, controllerIsSpareAccessory: true, phoneHasHaptics: false)
+let spareNoPad = RumbleMath.target(slot: 0, hasController: false, controllerHasHaptics: false, controllerIsSpareAccessory: true, phoneHasHaptics: true)
+print("R18 slot0=\(spareSlot0) haptics=\(spareHaptics) no_pad=\(spareNoPad)")
 '''
 
 
@@ -269,6 +280,12 @@ class TheRumbleHolds(unittest.TestCase):
     def test_r16_zero_strength_silences_both_motors(self):
         self.check("R16", "R16 zero_strength=0.00,0.00")
 
+    def test_r17_a_connected_accessory_takes_the_controller_route(self):
+        self.check("R17", "R17 slot2=accessory over_haptics=accessory no_pad=phone outside=none")
+
+    def test_r18_a_spare_accessory_controller_keeps_its_haptics_but_never_the_phone(self):
+        self.check("R18", "R18 slot0=none haptics=controller no_pad=phone")
+
 
 class RumbleStatic(unittest.TestCase):
     def test_real_files_have_no_problems(self):
@@ -280,33 +297,43 @@ class RumbleStatic(unittest.TestCase):
     def test_real_phone_stand_in_has_no_problems(self):
         self.assertEqual([], phone_problems(read(FEED), read(AUDIO)))
 
-    def test_gameSir_accessory_protocol_and_rumble_integration(self):
+    def test_gameSir_accessory_protocol_is_declared(self):
         with INFO.open("rb") as stream:
             info = plistlib.load(stream)
         self.assertIn("com.xiaoji.M2boot", info.get("UISupportedExternalAccessoryProtocols", []))
-        implementation = read(GAMESIR_RUMBLE)
-        for required in ("EASession(", "registerForLocalNotifications()", "0.167253",
-                         "hasSpaceAvailable", "stopAndClose()", "matchingAccessory"):
-            self.assertIn(required, implementation)
-        feed = read(FEED)
-        self.assertIn("GameSirG8MFiRumble.supports(controller)", feed)
-        self.assertIn("externalRumbler?.rumble(left:", feed)
-        self.assertIn("externalRumbler?.invalidate()", feed)
-        self.assertIn("accessoryRoutes[slot] != accessoryRoute", feed)
+        self.assertIn("com.xiaoji.M2boot", read(GAMESIR_RUMBLE))
 
-    def test_zero_strength_stops_accessory_without_haptics_players(self):
-        send = body(read(FEED), r"\bprivate func send\s*\([^{]*\{")
-        stop = send.find("if motors == .off")
-        empty_players = send.find("guard !target.players.isEmpty")
-        self.assertIn("target.externalRumbler?.stop()", send)
-        self.assertGreaterEqual(stop, 0)
-        self.assertLess(stop, empty_players)
+    def test_gameSir_pairs_only_one_accessory_with_one_controller(self):
+        # iOS does not link a GCController to its EAAccessory, so a pair is made only when it cannot cross devices.
+        rumble = without_comments(read(GAMESIR_RUMBLE))
+        pair = body(rumble, r"\bfunc\s+pairIfUnambiguous\s*\([^{]*\{")
+        self.assertRegex(pair, r"guard\s+accessories\.count\s*==\s*1\s*,\s*controllers\.count\s*==\s*1\s+else")
+        # Both halves are dropped together when either leaves.
+        refresh = body(rumble, r"\bfunc\s+refreshPair\s*\([^{]*\{")
+        self.assertRegex(refresh, r"self\.pinnedAccessory\s*=\s*nil\s*self\.pinnedController\s*=\s*nil")
+        # A reopen only ever reaches the paired accessory.
+        open_session = body(rumble, r"\bfunc\s+openSessionIfNeeded\s*\([^{]*\{")
+        self.assertIn("pinnedMatchingAccessory()", open_session)
+        for required in ("EASession(", "registerForLocalNotifications()", "0.167253", "hasSpaceAvailable",
+                         "pairSettle", "reopenDelay"):
+            self.assertIn(required, rumble)
+
+    def test_accessory_is_silenced_wherever_haptics_are(self):
+        feed = without_comments(read(FEED))
+        for name in ("silence", "drop", "endTest"):
+            self.assertIn(ACCESSORY_STOP, body(feed, r"\bfunc\s+" + name + r"\s*\([^{]*\{"), name)
+        send = body(feed, r"\bfunc\s+send\s*\([^{]*\{")
+        self.assertRegex(send, r"guard\s+motors\s*!=\s*\.off\s+else\s*\{\s*" + re.escape(ACCESSORY_STOP))
 
     def test_pause_leaves_the_test_rumble_playing(self):
-        # pauseAll() runs every frame under the menu; it must not stop the rumbler Test Rumble borrowed.
+        # pauseAll() runs every frame under the menu; it must not stop the accessory while Test Rumble plays on it.
         silence = body(without_comments(read(FEED)), r"\bfunc\s+silence\s*\([^{]*\{")
-        self.assertRegex(silence, r"if\s+testing\?\.externalRumbler\s*!==\s*target\.externalRumbler\s*\{\s*"
-                                  r"target\.externalRumbler\?\.stop\(\)\s*\}")
+        self.assertRegex(silence, r"if\s+routes\[slot\]\s*==\s*\.accessory\s*,\s*testingAccessory\s*!=\s*slot\s*\{\s*"
+                         + re.escape(ACCESSORY_STOP) + r"\s*\}")
+        # Without the guard the check fails.
+        unguarded = silence.replace(", testingAccessory != slot", "", 1)
+        self.assertNotEqual(silence, unguarded)
+        self.assertNotRegex(unguarded, r"testingAccessory\s*!=\s*slot")
 
     def test_edge_missing_and_empty_inputs_raise(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -4,7 +4,8 @@
 import Foundation
 
 enum RumbleTarget: Equatable {
-    case controller, phone, none
+    // `accessory`: a controller whose motors are reached over its External Accessory session, not CoreHaptics.
+    case controller, accessory, phone, none
 }
 
 enum RumbleMath {
@@ -46,9 +47,15 @@ enum RumbleMath {
         return UInt8((min(1, max(0, finite)) * 255).rounded())
     }
 
-    // Players 2-4 never get a phone stand-in; any slot outside 0-3 reaches nothing.
-    static func target(slot: Int, hasController: Bool, controllerHasHaptics: Bool, phoneHasHaptics: Bool) -> RumbleTarget {
+    // Players 2-4 never get a phone stand-in; any slot outside 0-3 reaches nothing. A controller with both an
+    // accessory channel and its own haptics rumbles on the accessory. A spare accessory controller (one not paired
+    // with the accessory) keeps its own haptics, which are its own device, but never gets the phone, which may be
+    // in another player's hands.
+    static func target(slot: Int, hasController: Bool, controllerHasHaptics: Bool, controllerHasAccessory: Bool = false,
+                       controllerIsSpareAccessory: Bool = false, phoneHasHaptics: Bool) -> RumbleTarget {
         guard (0..<4).contains(slot) else { return .none }
+        if hasController && controllerIsSpareAccessory { return controllerHasHaptics ? .controller : .none }
+        if hasController && controllerHasAccessory { return .accessory }
         if hasController && controllerHasHaptics { return .controller }
         return slot == 0 && phoneHasHaptics ? .phone : .none
     }
