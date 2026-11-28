@@ -4994,6 +4994,37 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 				return ok;
 			}
 
+#ifdef __APPLE__
+			// A store that changes one 16-byte chunk commits with a 16-byte compare-and-swap under the
+			// range lock, then rereads the line. Any other chunk changed since the comparison means a
+			// plain store raced it, so the swap is undone and the store fails as the full lock would.
+			if (diff16_pos != umax)
+			{
+				vm::range_lock<128>(range_lock, addr, 128);
+
+				u128 expected = *cast_as_const(rdata, diff16_pos);
+
+				if (!cmp_rdata(rdata, super_data) || !atomic_storage<u128>::compare_exchange(*cast_as(super_data, diff16_pos), expected, *cast_as_const(to_write, diff16_pos)))
+				{
+					range_lock->release(0);
+					return false;
+				}
+
+				if (cmp_rdata(to_write, super_data))
+				{
+					range_lock->release(0);
+					return true;
+				}
+
+				u128 committed = *cast_as_const(to_write, diff16_pos);
+				const bool undone = atomic_storage<u128>::compare_exchange(*cast_as(super_data, diff16_pos), committed, *cast_as_const(rdata, diff16_pos));
+				range_lock->release(0);
+
+				// Not undone means a later store already replaced the chunk, so the commit stood
+				return !undone;
+			}
+
+#endif
 			// Full lock (heavyweight)
 			// TODO: vm::check_addr
 			vm::writer_lock lock(addr, range_lock);
